@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            bundle_glob: "src-tauri/target/aarch64-apple-darwin/release/bundle/{dmg,macos}/*"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundle_glob: "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/{msi,nsis}/*"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2.0.0" --locked
+
+      # No signing/notarization configured yet (see README) — this produces
+      # an unsigned build, same as most early-stage OSS Tauri apps. Users see
+      # a Gatekeeper/SmartScreen warning on first launch.
+      - name: Build
+        working-directory: src-tauri
+        run: cargo tauri build --target ${{ matrix.target }}
+
+      - name: Upload to draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Samlu ${{ github.ref_name }}"
+          draft: true
+          files: ${{ matrix.bundle_glob }}

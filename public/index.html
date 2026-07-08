@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Samlu</title>
+    <link rel="stylesheet" href="./settings.css?v=1" />
+  </head>
+  <body>
+    <header class="app-header">
+      <img src="./icon.png" class="app-header-icon" alt="" aria-hidden="true" />
+      <div>
+        <h1>Samlu</h1>
+        <p class="subtitle">A companion that watches your AI coding agents</p>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab-btn active" data-tab="status" role="tab" aria-selected="true">Status</button>
+      <button class="tab-btn" data-tab="setup" role="tab" aria-selected="false">Setup</button>
+      <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">About</button>
+    </nav>
+
+    <main>
+      <!-- ───────────── Status tab ───────────── -->
+      <section id="tab-status" class="tab-panel active">
+        <div class="card">
+          <div class="row">
+            <span class="label">Hook listener</span>
+            <span id="server-status" class="pill pill-unknown">Checking…</span>
+          </div>
+          <div class="row">
+            <span class="label">Port</span>
+            <span id="server-port">—</span>
+          </div>
+          <div class="row">
+            <span class="label">Claude Code hook</span>
+            <span id="hook-status" class="pill pill-unknown">Checking…</span>
+          </div>
+          <div class="row">
+            <span class="label">Last event received</span>
+            <span id="last-event" class="muted">None yet</span>
+          </div>
+          <button id="recheck-btn" class="btn btn-secondary">Re-check</button>
+        </div>
+        <p class="hint">
+          Claude Code upgrades can sometimes rewrite <code>settings.json</code> —
+          if the hook ever stops showing as installed, head to the Setup tab
+          and re-apply it.
+        </p>
+      </section>
+
+      <!-- ───────────── Setup tab ───────────── -->
+      <section id="tab-setup" class="tab-panel">
+        <div class="card">
+          <p>Where should Samlu watch for Claude Code activity?</p>
+          <label class="radio-row">
+            <input type="radio" name="scope" value="global" checked />
+            <span><strong>All projects</strong> — installs into <code>~/.claude/settings.json</code></span>
+          </label>
+          <label class="radio-row">
+            <input type="radio" name="scope" value="project" />
+            <span><strong>Just this project</strong> — installs into <code>&lt;project&gt;/.claude/settings.json</code></span>
+          </label>
+          <div id="project-dir-row" class="row" hidden>
+            <input type="text" id="project-dir" placeholder="/path/to/your/project" class="text-input" />
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <button id="preview-btn" class="btn btn-secondary">Preview changes</button>
+            <button id="apply-btn" class="btn btn-primary">Apply automatically</button>
+          </div>
+          <pre id="diff-view" class="diff-view" hidden></pre>
+          <p id="setup-message" class="hint"></p>
+        </div>
+
+        <div class="card">
+          <p>Prefer not to let Samlu touch files outside its own folder?</p>
+          <button id="copy-snippet-btn" class="btn btn-secondary">Copy JSON snippet</button>
+          <p class="hint">
+            Paste this under <code>"hooks"</code> in your
+            <code>settings.json</code> yourself. Existing hooks you already
+            have configured are never touched by either path.
+          </p>
+        </div>
+      </section>
+
+      <!-- ───────────── About tab ───────────── -->
+      <section id="tab-about" class="tab-panel">
+        <div class="card">
+          <p>
+            Samlu reacts in real time when Claude Code finishes a task or
+            needs your input — a native notification, and a mascot that
+            actually notices. Built on the same mascot overlay from the
+            <a href="https://kettles.works" target="_blank" rel="noreferrer">Kettles</a>
+            project (same author).
+          </p>
+          <p>
+            Code is Apache-2.0 licensed. The mascot art is licensed
+            separately (CC BY-NC 4.0) — see <code>public/pet/assets/LICENSE</code>.
+          </p>
+          <p class="muted">v0.1.0 — Agent Watch (Claude Code only)</p>
+        </div>
+      </section>
+    </main>
+
+    <script src="./settings.js?v=1"></script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+Samlu
+Copyright 2026 Samlu contributors
+
+This product includes software developed as part of the Samlu project
+(https://github.com/<org>/samlu).
+
+Licensing note
+--------------
+This repository uses TWO licenses:
+  - All source code (Rust, JS, HTML, CSS, build scripts, configuration)
+    is licensed under the Apache License, Version 2.0 — see LICENSE.
+  - The mascot spritesheet and character art under public/pet/assets/ is
+    licensed separately under CC BY-NC 4.0 — see
+    public/pet/assets/LICENSE. The art is NOT covered by the Apache-2.0
+    grant above.
+
+Attribution
+-----------
+The mascot character and its animation window/overlay mechanism
+(pet.rs / pet.html / pet.css / pet.js window-lifecycle pattern) are adapted
+from the Kettles project (https://kettles.works), by the same original
+author, and reused here with permission (same maintainer).
