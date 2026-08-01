@@ -1,8 +1,26 @@
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/samlu-mark-dark.svg">
+  <img src=".github/assets/samlu-mark-light.svg" alt="Samlu" width="104" height="104">
+</picture>
+
 # Samlu
 
-Samlu is a macOS AI development kit. The current build combines global voice
-dictation, a compact developer launcher, and completion notifications from
-Claude Code and Codex.
+**Speak an instruction. Find any tool. Leave an agent running.**
+
+A macOS development kit for people working with Claude Code and Codex —
+global voice dictation, a keyboard-driven developer launcher, and agent
+completion signals that reach you without watching a terminal.
+
+[![Download](https://img.shields.io/github/v/release/samreshan/samlu?style=for-the-badge&label=Download&color=efd01d&labelColor=44390c)](https://github.com/samreshan/samlu/releases/latest)
+
+[![macOS 11+](https://img.shields.io/badge/macOS-11%2B-44390c?style=flat-square)](https://github.com/samreshan/samlu/releases/latest)
+[![Universal](https://img.shields.io/badge/Apple%20Silicon%20%2B%20Intel-universal-44390c?style=flat-square)](https://github.com/samreshan/samlu/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/samreshan/samlu/total?style=flat-square&color=44390c)](https://github.com/samreshan/samlu/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-44390c?style=flat-square)](LICENSE)
+
+</div>
 
 This release intentionally targets macOS only. Windows and iOS are outside the
 current build boundary.
@@ -12,23 +30,33 @@ current build boundary.
 Grab the latest `.dmg` from the
 [Releases page](https://github.com/samreshan/samlu/releases/latest). Builds are
 universal — one download covers both Apple Silicon and Intel Macs running
-macOS 11 or later.
+macOS 11 or later. A `.zip` of the raw `.app` is published alongside it.
 
-Open the disk image, drag **Samlu** into Applications, and launch it. Samlu
-lives in the menu bar rather than the Dock.
+1. Open the disk image and drag **Samlu** into Applications.
+2. Clear the quarantine flag (see below).
+3. Launch it. Samlu lives in the menu bar rather than the Dock.
 
-Released builds are not signed with an Apple Developer ID yet, so macOS
-quarantines them on download. Clear the flag once, after moving the app into
-Applications:
+> [!IMPORTANT]
+> Released builds are not signed with an Apple Developer ID yet, so macOS
+> quarantines them on download and refuses to open them. Clear the flag once,
+> after moving the app into Applications:
+>
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/Samlu.app
+> ```
+>
+> On macOS 15 and later this step is required — right-clicking and choosing
+> *Open* no longer bypasses Gatekeeper. Because each unsigned build carries a
+> different ad-hoc signature, macOS treats an upgrade as a new app, so
+> Microphone and Accessibility access have to be granted again after updating.
 
-```bash
-xattr -dr com.apple.quarantine /Applications/Samlu.app
-```
+Samlu asks for two permissions, both on first use and both revocable in
+System Settings → Privacy & Security:
 
-On macOS 15 and later this step is required; right-clicking and choosing
-*Open* no longer bypasses Gatekeeper. Because each unsigned build carries a
-different ad-hoc signature, macOS treats an upgrade as a new app, so Microphone
-and Accessibility access have to be granted again after updating.
+| Permission | Why |
+| --- | --- |
+| Microphone | Recording dictation. Audio goes only to the speech provider you configure. |
+| Accessibility | Returning the result to the field you were typing in. |
 
 ## What works
 

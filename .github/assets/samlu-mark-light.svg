@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240" role="img" aria-label="Samlu">
+  <rect fill="#efd01d" x="48" y="96" width="96" height="96"/>
+  <path fill="#44390c" d="M144,0h0v96H48C48,43.02,91.02,0,144,0Z"/>
+  <path fill="#44390c" d="M143,96h96c0,52.98-43.02,96-96,96h0v-96h0Z"/>
+  <rect fill="#efd01d" x="143.5" y=".5" width="96" height="96"/>
+  <rect fill="#efd01d" y="192.5" width="48.5" height="47.5"/>
+</svg>
