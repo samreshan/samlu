@@ -41,6 +41,18 @@ struct StopPayload {
     agent_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct TaskCompletedPayload {
+    session_id: String,
+    #[serde(default)]
+    cwd: String,
+    task_subject: String,
+    #[serde(default)]
+    task_description: Option<String>,
+    #[serde(default)]
+    teammate_name: Option<String>,
+}
+
 impl AgentAdapter for ClaudeCodeAdapter {
     fn name(&self) -> &'static str {
         "claude-code"
@@ -50,9 +62,43 @@ impl AgentAdapter for ClaudeCodeAdapter {
         match event_route {
             "notification" => parse_notification(body),
             "stop" => parse_stop(body),
+            "task-completed" => parse_task_completed(body),
             other => Err(AdapterError::UnknownRoute(other.to_string())),
         }
     }
+}
+
+fn parse_task_completed(body: &[u8]) -> Result<AgentEvent, AdapterError> {
+    let payload: TaskCompletedPayload =
+        serde_json::from_slice(body).map_err(|e| AdapterError::InvalidJson(e.to_string()))?;
+    let mut summary = payload.task_subject;
+    if let Some(description) = payload
+        .task_description
+        .as_deref()
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+    {
+        summary.push_str(": ");
+        summary.push_str(description);
+    }
+    if let Some(teammate) = payload
+        .teammate_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|teammate| !teammate.is_empty())
+    {
+        summary.push_str(" (");
+        summary.push_str(teammate);
+        summary.push(')');
+    }
+    Ok(AgentEvent {
+        agent: "claude-code".to_string(),
+        kind: AgentEventKind::Completed,
+        project_path: payload.cwd,
+        summary: Some(summary),
+        session_id: payload.session_id,
+        timestamp: Utc::now(),
+    })
 }
 
 fn parse_notification(body: &[u8]) -> Result<AgentEvent, AdapterError> {

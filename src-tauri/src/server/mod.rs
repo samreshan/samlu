@@ -29,6 +29,8 @@ use std::thread;
 use tauri::AppHandle;
 use tiny_http::{Method, Request, Response, Server};
 
+const MAX_REQUEST_BODY_BYTES: u64 = 1_048_576;
+
 /// Starts the listener on a background thread. Returns the bound port on
 /// success (always `port::DEFAULT_PORT` — see module doc comment).
 pub fn start(
@@ -76,9 +78,24 @@ fn handle_request(
         return Response::from_string("unauthorized").with_status_code(401);
     }
 
+    if request
+        .body_length()
+        .is_some_and(|length| length as u64 > MAX_REQUEST_BODY_BYTES)
+    {
+        return Response::from_string("payload too large").with_status_code(413);
+    }
+
     let mut body = Vec::new();
-    if request.as_reader().read_to_end(&mut body).is_err() {
+    if request
+        .as_reader()
+        .take(MAX_REQUEST_BODY_BYTES + 1)
+        .read_to_end(&mut body)
+        .is_err()
+    {
         return Response::from_string("bad request").with_status_code(400);
+    }
+    if body.len() as u64 > MAX_REQUEST_BODY_BYTES {
+        return Response::from_string("payload too large").with_status_code(413);
     }
 
     match adapters.parse(adapter_name, event_route, &body) {
@@ -87,8 +104,15 @@ fn handle_request(
             Response::from_string("").with_status_code(204)
         }
         Err(AdapterError::Ignored) => Response::from_string("").with_status_code(204),
-        Err(AdapterError::InvalidJson(_)) | Err(AdapterError::UnknownRoute(_)) => {
+        Err(AdapterError::InvalidJson(detail)) => {
+            log::warn!(
+                "hook payload for {adapter_name}/{event_route} was not valid JSON: {detail}"
+            );
             Response::from_string("bad request").with_status_code(400)
+        }
+        Err(AdapterError::UnknownRoute(detail)) => {
+            log::warn!("no adapter/route matched: {detail}");
+            Response::from_string("not found").with_status_code(404)
         }
     }
 }

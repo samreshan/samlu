@@ -1,23 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "pet",
-  "description": "Permissions for the mascot pet overlay window and the windows that talk to it.",
-  "windows": ["main", "pet"],
-  "permissions": [
-    "core:default",
-    "core:event:default",
-    "core:event:allow-emit",
-    "core:event:allow-listen",
-    "core:window:allow-create",
-    "core:window:allow-show",
-    "core:window:allow-hide",
-    "core:window:allow-close",
-    "core:window:allow-start-dragging",
-    "core:window:allow-set-position",
-    "core:window:allow-set-always-on-top",
-    "core:window:allow-set-ignore-cursor-events",
-    "core:webview:allow-create-webview-window",
-    "notification:default",
-    "notification:allow-notify"
-  ]
+  "description": "Permissions for the pet overlay that delivers agent events and carries dictation results.",
+  "windows": ["pet"],
+  "permissions": ["core:default", "core:event:allow-listen"]
 }

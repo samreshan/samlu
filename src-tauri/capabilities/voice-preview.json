@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "voice-preview",
+  "description": "Permissions for the compact voice review window.",
+  "windows": ["voice-preview"],
+  "permissions": ["core:default", "core:event:allow-listen"]
+}

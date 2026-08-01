@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "agent-island",
+  "description": "Permissions for the non-activating Samlu agent notification island.",
+  "windows": ["agent-island"],
+  "permissions": ["core:default", "core:event:allow-listen"]
+}

@@ -1,10 +1,11 @@
 //! Compile-time adapter registry. Not a dynamic plugin loader — v1 ships one
 //! real adapter (Claude Code); a future Codex/Cursor/etc. adapter is added by
 //! implementing `AgentAdapter` in a new module here and registering it in
-//! `AdapterRegistry::new()`. `server/mod.rs`, `notify.rs`, and `pet.rs` never
+//! `AdapterRegistry::new()`. The server and notification policy never
 //! need to change when a new adapter is added — normalization happens here.
 
 mod claude_code;
+pub mod codex;
 
 use crate::events::{AdapterError, AgentAdapter, AgentEvent};
 use std::collections::HashMap;

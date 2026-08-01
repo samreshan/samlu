@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 const NOTIFICATION_ROUTE: &str = "notification";
 const STOP_ROUTE: &str = "stop";
+const TASK_COMPLETED_ROUTE: &str = "task-completed";
 
 pub fn global_settings_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".claude").join("settings.json"))
@@ -35,12 +36,15 @@ pub fn read_settings(path: &Path) -> Result<Value, String> {
         .map_err(|e| format!("existing settings.json is not valid JSON: {e}"))
 }
 
-/// Is our hook already installed in this settings value? Matched by URL
-/// prefix (not exact token match) so a regenerated token doesn't produce a
-/// false "not installed" reading and a duplicate entry.
-pub fn is_installed(value: &Value, port: u16) -> bool {
-    let prefix = format!("http://127.0.0.1:{port}/hooks/claude-code/");
-    for event in ["Notification", "Stop"] {
+/// Returns true only when all Samlu hooks point at this installation's exact
+/// token. Prefix-only checks can report a stale, unauthorized hook as healthy.
+pub fn is_installed(value: &Value, port: u16, token: &str) -> bool {
+    for (event, route) in [
+        ("Notification", NOTIFICATION_ROUTE),
+        ("Stop", STOP_ROUTE),
+        ("TaskCompleted", TASK_COMPLETED_ROUTE),
+    ] {
+        let expected = hook_url(port, token, route);
         let entries = value
             .get("hooks")
             .and_then(|h| h.get(event))
@@ -54,9 +58,7 @@ pub fn is_installed(value: &Value, port: u16) -> bool {
                 .and_then(|h| h.as_array())
                 .is_some_and(|hooks| {
                     hooks.iter().any(|hook| {
-                        hook.get("url")
-                            .and_then(|u| u.as_str())
-                            .is_some_and(|u| u.starts_with(&prefix))
+                        hook.get("url").and_then(|u| u.as_str()) == Some(expected.as_str())
                     })
                 })
         });
@@ -67,55 +69,67 @@ pub fn is_installed(value: &Value, port: u16) -> bool {
     true
 }
 
-/// Returns a NEW value with our hook entries appended under
-/// `hooks.Notification` / `hooks.Stop` — any other existing hook events or
-/// entries in `existing` are left completely untouched. Idempotent: calling
-/// this again with the same port/token doesn't add a duplicate entry.
-pub fn merge_hooks(existing: &Value, port: u16, token: &str) -> Value {
+/// Returns a new value with exactly one current Samlu handler under each
+/// supported event. Stale Samlu URLs are replaced while unrelated handlers,
+/// including handlers sharing the same matcher entry, are preserved.
+pub fn merge_hooks(existing: &Value, port: u16, token: &str) -> Result<Value, String> {
     let mut root = existing.clone();
     if !root.is_object() {
-        root = json!({});
+        return Err("settings.json must contain an object at the top level".to_string());
     }
     let root_obj = root.as_object_mut().expect("just ensured object above");
 
-    let hooks_obj = root_obj
+    let hooks = root_obj
         .entry("hooks")
-        .or_insert_with(|| Value::Object(Map::new()))
-        .as_object_mut()
-        .expect("hooks must be an object");
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(hooks_obj) = hooks.as_object_mut() else {
+        return Err("the existing \"hooks\" value must be an object".to_string());
+    };
 
-    for (event, route) in [("Notification", NOTIFICATION_ROUTE), ("Stop", STOP_ROUTE)] {
-        let arr = hooks_obj
+    let prefix = format!("http://127.0.0.1:{port}/hooks/claude-code/");
+    for (event, route) in [
+        ("Notification", NOTIFICATION_ROUTE),
+        ("Stop", STOP_ROUTE),
+        ("TaskCompleted", TASK_COMPLETED_ROUTE),
+    ] {
+        let event_value = hooks_obj
             .entry(event)
-            .or_insert_with(|| Value::Array(Vec::new()))
-            .as_array_mut()
-            .expect("hook event value must be an array");
+            .or_insert_with(|| Value::Array(Vec::new()));
+        let Some(arr) = event_value.as_array_mut() else {
+            return Err(format!("the existing hooks.{event} value must be an array"));
+        };
 
-        let url = hook_url(port, token, route);
-        let already_present = arr.iter().any(|entry| {
+        for entry in arr.iter_mut() {
+            if let Some(handlers) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
+                handlers.retain(|handler| {
+                    !handler
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .is_some_and(|url| url.starts_with(&prefix))
+                });
+            }
+        }
+        arr.retain(|entry| {
             entry
                 .get("hooks")
-                .and_then(|h| h.as_array())
-                .is_some_and(|hs| {
-                    hs.iter()
-                        .any(|h| h.get("url").and_then(|u| u.as_str()) == Some(url.as_str()))
-                })
+                .and_then(Value::as_array)
+                .map_or(true, |handlers| !handlers.is_empty())
         });
-        if !already_present {
-            arr.push(json!({
-                "hooks": [
-                    { "type": "http", "url": url, "timeout": 5 }
-                ]
-            }));
-        }
+
+        let url = hook_url(port, token, route);
+        arr.push(json!({
+            "hooks": [
+                { "type": "http", "url": url, "timeout": 5 }
+            ]
+        }));
     }
 
-    root
+    Ok(root)
 }
 
 /// Just the hooks snippet (not merged with any existing file) — for the
 /// "copy this JSON yourself" fallback path.
-pub fn snippet(port: u16, token: &str) -> Value {
+pub fn snippet(port: u16, token: &str) -> Result<Value, String> {
     merge_hooks(&json!({}), port, token)
 }
 
@@ -147,11 +161,36 @@ pub fn apply(path: &Path, app_data_dir: &Path, port: u16, token: &str) -> Result
         fs::copy(path, &backup).map_err(|e| e.to_string())?;
     }
 
-    let merged = merge_hooks(&existing, port, token);
+    let merged = merge_hooks(&existing, port, token)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let pretty = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
     fs::write(path, pretty).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_installed, merge_hooks};
+    use serde_json::json;
+
+    #[test]
+    fn replaces_stale_urls_and_preserves_other_handlers() {
+        let existing = json!({
+            "hooks": {
+                "Notification": [{
+                    "hooks": [
+                        {"type": "http", "url": "http://127.0.0.1:47823/hooks/claude-code/notification/old"},
+                        {"type": "command", "command": "echo keep"}
+                    ]
+                }]
+            }
+        });
+        let merged = merge_hooks(&existing, 47823, "new").unwrap();
+        let text = merged.to_string();
+        assert!(!text.contains("/old"));
+        assert!(text.contains("echo keep"));
+        assert!(is_installed(&merged, 47823, "new"));
+    }
 }

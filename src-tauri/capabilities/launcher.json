@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "launcher",
+  "description": "Permissions for the Spotlight-style launcher overlay window. All window/shortcut control goes through Samlu's own commands (launcher_toggle/launcher_hide), not raw core:window/global-shortcut APIs, so this stays minimal.",
+  "windows": ["launcher"],
+  "permissions": ["core:default", "core:event:allow-listen"]
+}

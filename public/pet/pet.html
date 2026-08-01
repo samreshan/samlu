@@ -3,43 +3,44 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>Samlu</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="./pet.css?v=1" />
+    <link rel="stylesheet" href="../presence.css" />
+    <link rel="stylesheet" href="./pet.css" />
   </head>
   <body>
-    <main id="shell" class="shell" data-phase="idle" data-collapsed="false">
-      <!-- Thought bubble = the mascot "thinking" about your agents. -->
-      <section id="bubble" class="bubble">
-        <header class="bubble-head">
-          <span id="dot" class="dot" aria-hidden="true"></span>
-          <span id="label" class="label">Watching</span>
-          <button type="button" id="collapse" class="collapse" aria-label="Collapse">
-            <span class="chev" aria-hidden="true"></span>
-          </button>
-        </header>
-        <p id="task" class="task">No agent activity yet</p>
-        <p id="timer" class="timer detail-line" aria-live="polite"></p>
-      </section>
-
-      <!-- Thought trail (shrinking dots) linking the bubble to the mascot's head. -->
-      <div id="trail" class="trail" aria-hidden="true">
-        <span></span><span></span><span></span>
+    <div class="anchor" id="anchor">
+      <div class="card" id="card" data-motion="surface" hidden>
+        <div class="card-meta">
+          <strong id="title">Task completed</strong>
+          <span class="mono" id="agent">codex</span>
+          <span class="grow"></span>
+          <span class="mono" id="project">samlu</span>
+        </div>
+        <p id="summary">The agent finished its task.</p>
+        <div class="card-actions">
+          <button class="text-button" id="dismiss" type="button">Not now</button>
+          <button class="primary-button" id="open" type="button">View</button>
+        </div>
+        <div class="card-timeout" id="card-timeout" aria-hidden="true"></div>
       </div>
 
-      <!-- Animated mascot sprite. Click to open Samlu's settings window. -->
-      <div id="mascot" class="mascot" aria-hidden="true"></div>
-
-      <!-- Reopen handle, shown only while collapsed. -->
-      <button type="button" id="reopen" class="reopen" aria-label="Show status">
-        <span class="chev down" aria-hidden="true"></span>
-      </button>
-    </main>
-    <script src="./pet.js?v=1"></script>
+      <div class="bee" id="bee" hidden>
+        <span class="pollen a"></span>
+        <span class="pollen b"></span>
+        <svg viewBox="0 0 240 240" aria-hidden="true">
+          <g class="samlu-mark-brand">
+            <rect x="48" y="96" width="96" height="96" />
+            <rect x="143.5" y=".5" width="96" height="96" />
+            <rect y="192.5" width="48.5" height="47.5" />
+          </g>
+          <g class="samlu-mark-ink">
+            <path d="M144,0h0v96H48C48,43.02,91.02,0,144,0Z" />
+            <path d="M143,96h96c0,52.98-43.02,96-96,96h0v-96h0Z" />
+          </g>
+        </svg>
+      </div>
+    </div>
+    <script src="./pet.js"></script>
   </body>
 </html>

@@ -3,109 +3,446 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>Samlu</title>
-    <link rel="stylesheet" href="./settings.css?v=1" />
+    <link rel="stylesheet" href="./presence.css" />
+    <link rel="stylesheet" href="./settings.css" />
   </head>
   <body>
-    <header class="app-header">
-      <img src="./icon.png" class="app-header-icon" alt="" aria-hidden="true" />
-      <div>
-        <h1>Samlu</h1>
-        <p class="subtitle">A companion that watches your AI coding agents</p>
-      </div>
-    </header>
-
-    <nav class="tabs" role="tablist">
-      <button class="tab-btn active" data-tab="status" role="tab" aria-selected="true">Status</button>
-      <button class="tab-btn" data-tab="setup" role="tab" aria-selected="false">Setup</button>
-      <button class="tab-btn" data-tab="about" role="tab" aria-selected="false">About</button>
-    </nav>
-
-    <main>
-      <!-- ───────────── Status tab ───────────── -->
-      <section id="tab-status" class="tab-panel active">
-        <div class="card">
-          <div class="row">
-            <span class="label">Hook listener</span>
-            <span id="server-status" class="pill pill-unknown">Checking…</span>
-          </div>
-          <div class="row">
-            <span class="label">Port</span>
-            <span id="server-port">—</span>
-          </div>
-          <div class="row">
-            <span class="label">Claude Code hook</span>
-            <span id="hook-status" class="pill pill-unknown">Checking…</span>
-          </div>
-          <div class="row">
-            <span class="label">Last event received</span>
-            <span id="last-event" class="muted">None yet</span>
-          </div>
-          <button id="recheck-btn" class="btn btn-secondary">Re-check</button>
-        </div>
-        <p class="hint">
-          Claude Code upgrades can sometimes rewrite <code>settings.json</code> —
-          if the hook ever stops showing as installed, head to the Setup tab
-          and re-apply it.
-        </p>
-      </section>
-
-      <!-- ───────────── Setup tab ───────────── -->
-      <section id="tab-setup" class="tab-panel">
-        <div class="card">
-          <p>Where should Samlu watch for Claude Code activity?</p>
-          <label class="radio-row">
-            <input type="radio" name="scope" value="global" checked />
-            <span><strong>All projects</strong> — installs into <code>~/.claude/settings.json</code></span>
-          </label>
-          <label class="radio-row">
-            <input type="radio" name="scope" value="project" />
-            <span><strong>Just this project</strong> — installs into <code>&lt;project&gt;/.claude/settings.json</code></span>
-          </label>
-          <div id="project-dir-row" class="row" hidden>
-            <input type="text" id="project-dir" placeholder="/path/to/your/project" class="text-input" />
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Settings navigation">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 240 240">
+              <g class="samlu-mark-brand"><rect x="48" y="96" width="96" height="96"/><rect x="143.5" y=".5" width="96" height="96"/><rect y="192.5" width="48.5" height="47.5"/></g>
+              <g class="samlu-mark-ink"><path d="M144,0h0v96H48C48,43.02,91.02,0,144,0Z"/><path d="M143,96h96c0,52.98-43.02,96-96,96h0v-96h0Z"/></g>
+            </svg>
+          </span>
+          <div>
+            <strong>Samlu</strong>
+            <span>Developer kit</span>
           </div>
         </div>
 
-        <div class="card">
-          <div class="row">
-            <button id="preview-btn" class="btn btn-secondary">Preview changes</button>
-            <button id="apply-btn" class="btn btn-primary">Apply automatically</button>
+        <nav class="nav-list">
+          <button class="nav-item active" data-tab="overview" type="button">
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="6.25"/><circle cx="9" cy="9" r="1.5" class="fill"/></svg></span>Overview
+          </button>
+          <button class="nav-item" data-tab="agents" type="button">
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 18 18"><circle cx="5" cy="5" r="1.8"/><circle cx="13" cy="9" r="1.8"/><circle cx="5" cy="13" r="1.8"/><path d="M6.8 5.7 11.2 8M6.8 12.3 11.2 10"/></svg></span>Agents
+          </button>
+          <button class="nav-item" data-tab="voice" type="button">
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 18 18"><path d="M3.5 10.5v-3M6.25 13V5M9 15V3M11.75 12.5v-7M14.5 10V8"/></svg></span>Voice
+          </button>
+          <button class="nav-item" data-tab="launcher" type="button">
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 18 18"><path d="M6.2 9H4.8A2.8 2.8 0 1 1 7.6 6.2V12a2.8 2.8 0 1 1-2.8-2.8h8.4a2.8 2.8 0 1 1-2.8 2.8V6.2a2.8 2.8 0 1 1 2.8 2.8H6.2Z"/></svg></span>Launcher
+          </button>
+          <button class="nav-item" data-tab="about" type="button">
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 18 18"><circle cx="9" cy="9" r="6.25"/><path d="M9 8v4M9 5.3h.01"/></svg></span>About
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <span class="status-dot" id="sidebar-status-dot"></span>
+          <span id="sidebar-status">Checking listener</span>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="tab-view active" id="tab-overview" aria-labelledby="overview-title">
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">macOS build</p>
+              <h1 id="overview-title">Development command center</h1>
+              <p>Voice, agent completion signals, and fast developer utilities in one menu bar app.</p>
+            </div>
+            <button class="icon-button" id="refresh-overview" type="button" aria-label="Refresh status">↻</button>
+          </header>
+
+          <div class="health-strip">
+            <div>
+              <span class="status-dot" id="listener-dot"></span>
+              <div><strong>Local listener</strong><span id="listener-detail">Checking</span></div>
+            </div>
+            <div>
+              <span class="status-dot" id="claude-dot"></span>
+              <div><strong>Claude Code</strong><span id="claude-detail">Checking</span></div>
+            </div>
+            <div>
+              <span class="status-dot" id="codex-dot"></span>
+              <div><strong>Codex</strong><span id="codex-detail">Checking</span></div>
+            </div>
           </div>
-          <pre id="diff-view" class="diff-view" hidden></pre>
-          <p id="setup-message" class="hint"></p>
-        </div>
 
-        <div class="card">
-          <p>Prefer not to let Samlu touch files outside its own folder?</p>
-          <button id="copy-snippet-btn" class="btn btn-secondary">Copy JSON snippet</button>
-          <p class="hint">
-            Paste this under <code>"hooks"</code> in your
-            <code>settings.json</code> yourself. Existing hooks you already
-            have configured are never touched by either path.
-          </p>
-        </div>
-      </section>
+          <section class="settings-section">
+            <div class="section-heading">
+              <div>
+                <h2>Presence</h2>
+                <p>Choose how Samlu looks while it works quietly in the background.</p>
+              </div>
+              <span class="save-state" id="presence-save-state" aria-live="polite"></span>
+            </div>
+            <div class="setting-rows">
+              <label class="setting-row">
+                <span><strong>Appearance</strong><small>Follow macOS or keep Samlu in a specific theme.</small></span>
+                <select id="appearance">
+                  <option value="system">System</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </label>
+            </div>
+          </section>
 
-      <!-- ───────────── About tab ───────────── -->
-      <section id="tab-about" class="tab-panel">
-        <div class="card">
-          <p>
-            Samlu reacts in real time when Claude Code finishes a task or
-            needs your input — a native notification, and a mascot that
-            actually notices. Built on the same mascot overlay from the
-            <a href="https://kettles.works" target="_blank" rel="noreferrer">Kettles</a>
-            project (same author).
-          </p>
-          <p>
-            Code is Apache-2.0 licensed. The mascot art is licensed
-            separately (CC BY-NC 4.0) — see <code>public/pet/assets/LICENSE</code>.
-          </p>
-          <p class="muted">v0.1.0 — Agent Watch (Claude Code only)</p>
-        </div>
-      </section>
-    </main>
+          <section class="settings-section">
+            <div class="section-heading">
+              <div>
+                <h2>macOS notifications</h2>
+                <p>Choose which agent moments should interrupt you.</p>
+              </div>
+              <div class="section-actions">
+                <span class="save-state" id="notification-save-state" aria-live="polite"></span>
+                <button class="secondary-button" id="test-agent-notification" type="button">Send test</button>
+              </div>
+            </div>
+            <div class="setting-rows">
+              <label class="setting-row">
+                <span><strong>Needs input</strong><small>Permissions, questions, or blocked agents</small></span>
+                <input id="notify-needs-input" type="checkbox" />
+              </label>
+              <label class="setting-row">
+                <span><strong>Task completed</strong><small>Explicit Claude or Codex completion events</small></span>
+                <input id="notify-task-completed" type="checkbox" />
+              </label>
+              <label class="setting-row">
+                <span><strong>Every finished turn</strong><small>Noisier fallback for tools without task completion</small></span>
+                <input id="notify-turn-finished" type="checkbox" />
+              </label>
+              <label class="setting-row">
+                <span><strong>Include agent summary</strong><small>Show a compact result summary in the notification</small></span>
+                <input id="include-agent-summary" type="checkbox" />
+              </label>
+              <label class="setting-row">
+                <span><strong>Delivery style</strong><small>Where an event shows up first: beside your pointer, under the notch, or as a standard banner. Notification Center always keeps the record.</small></span>
+                <select id="agent-delivery">
+                  <option value="pet">Samlu brings it — card by your pointer</option>
+                  <option value="island">Samlu Island — under the notch</option>
+                  <option value="system">System only — macOS banner</option>
+                </select>
+              </label>
+              <label class="setting-row">
+                <span><strong>Turn debounce</strong><small>Suppress repeated finished-turn alerts from one session</small></span>
+                <span class="inline-field"><input id="notification-debounce" type="number" min="3" max="300" inputmode="numeric" /><em>seconds</em></span>
+              </label>
+            </div>
+          </section>
 
-    <script src="./settings.js?v=1"></script>
+          <section class="settings-section">
+            <div class="section-heading">
+              <div>
+                <h2>Recent agent activity</h2>
+                <p>Stored locally on this Mac.</p>
+              </div>
+              <button class="secondary-button danger-text" id="clear-activity" type="button">Clear</button>
+            </div>
+            <div class="activity-list" id="activity-list">
+              <div class="empty-state">No agent events received yet.</div>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-view" id="tab-agents" aria-labelledby="agents-title" hidden>
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Agent adapters</p>
+              <h1 id="agents-title">Connect coding agents</h1>
+              <p>Samlu preserves existing configuration and saves a backup before writing.</p>
+            </div>
+          </header>
+
+          <section class="integration">
+            <div class="integration-head">
+              <div class="integration-logo claude-logo" aria-hidden="true">C</div>
+              <div><h2>Claude Code</h2><p id="claude-path">~/.claude/settings.json</p></div>
+              <span class="status-pill" id="claude-pill">Checking</span>
+            </div>
+            <p>Installs HTTP hooks for permission prompts, stopped turns, and completed tasks. The local authentication token remains stable across app restarts.</p>
+            <div class="button-row">
+              <button class="primary-button" id="install-claude" type="button">Install hooks</button>
+              <button class="secondary-button" id="preview-claude" type="button">Preview changes</button>
+              <button class="secondary-button" id="copy-claude" type="button">Copy snippet</button>
+            </div>
+          </section>
+
+          <section class="integration">
+            <div class="integration-head">
+              <div class="integration-logo codex-logo" aria-hidden="true">X</div>
+              <div><h2>Codex CLI</h2><p id="codex-path">~/.codex/config.toml</p></div>
+              <span class="status-pill" id="codex-pill">Checking</span>
+            </div>
+            <p>Configures Codex's external notify command for completed agent turns while preserving your model, profile, sandbox, and project settings.</p>
+            <div class="button-row">
+              <button class="primary-button" id="install-codex" type="button">Install notifier</button>
+              <button class="secondary-button" id="preview-codex" type="button">Preview changes</button>
+            </div>
+          </section>
+
+          <section class="code-preview" id="agent-preview" hidden>
+            <div class="section-heading">
+              <h2 id="agent-preview-title">Configuration preview</h2>
+              <button class="icon-button" id="close-agent-preview" type="button" aria-label="Close preview">×</button>
+            </div>
+            <pre id="agent-preview-code"></pre>
+          </section>
+        </section>
+
+        <section class="tab-view" id="tab-voice" aria-labelledby="voice-title" hidden>
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Speech to text</p>
+              <h1 id="voice-title">Voice that understands the task</h1>
+              <p>Tap once to toggle recording, or hold the shortcut and release to send.</p>
+            </div>
+          </header>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <div><h2>Cloud providers</h2><p>Use one endpoint by default, or split speech and prompt transformation.</p></div>
+              <span class="save-state" id="voice-provider-save-state" aria-live="polite"></span>
+            </div>
+            <div class="setting-rows provider-mode">
+              <label class="setting-row">
+                <span><strong>Separate transformation provider</strong><small>Useful when one service handles speech and another handles prompt generation.</small></span>
+                <input id="voice-separate-providers" type="checkbox" />
+              </label>
+            </div>
+
+            <div class="provider-block">
+              <div class="provider-heading">
+                <div><h3>Speech transcription</h3><p id="voice-stt-provider-note">Also used for summaries and prompt transformation.</p></div>
+                <span class="status-pill" id="voice-stt-key-status">Checking</span>
+              </div>
+              <div class="form-grid">
+                <label class="field"><span>Provider</span>
+                  <select id="voice-stt-provider">
+                    <option value="groq">Groq</option>
+                    <option value="custom">OpenAI-compatible</option>
+                  </select>
+                </label>
+                <label class="field full" id="voice-stt-base-url-row" hidden><span>API base URL</span>
+                  <input id="voice-stt-base-url" type="url" spellcheck="false" placeholder="https://api.provider.com/v1" />
+                </label>
+                <label class="field full"><span>API key</span>
+                  <div class="compound-field">
+                    <input id="voice-stt-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a key to replace the saved key" />
+                    <button class="secondary-button" id="save-voice-stt-key" type="button">Save to Keychain</button>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div class="provider-block" id="voice-transform-provider-block" hidden>
+              <div class="provider-heading">
+                <div><h3>Prompt transformation</h3><p>Used for summary and detailed prompt modes.</p></div>
+                <span class="status-pill" id="voice-transform-key-status">Checking</span>
+              </div>
+              <div class="form-grid">
+                <label class="field"><span>Provider</span>
+                  <select id="voice-transform-provider">
+                    <option value="groq">Groq</option>
+                    <option value="custom">OpenAI-compatible</option>
+                  </select>
+                </label>
+                <label class="field full" id="voice-transform-base-url-row" hidden><span>API base URL</span>
+                  <input id="voice-transform-base-url" type="url" spellcheck="false" placeholder="https://api.provider.com/v1" />
+                </label>
+                <label class="field full"><span>API key</span>
+                  <div class="compound-field">
+                    <input id="voice-transform-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a key to replace the saved key" />
+                    <button class="secondary-button" id="save-voice-transform-key" type="button">Save to Keychain</button>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-grid voice-models">
+              <label class="field"><span>Speech model</span>
+                <input id="voice-stt-model" type="text" spellcheck="false" />
+              </label>
+              <label class="field"><span>Transform model</span>
+                <input id="voice-transform-model" type="text" spellcheck="false" />
+              </label>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <div><h2>Interaction</h2><p>Three modes share one base shortcut.</p></div>
+              <span class="save-state" id="voice-interaction-save-state" aria-live="polite"></span>
+            </div>
+            <div class="setting-rows">
+              <div class="setting-row">
+                <span><strong>Microphone access</strong><small id="voice-microphone-help">Samlu needs microphone access to record dictation.</small></span>
+                <span class="permission-control">
+                  <span class="status-pill" id="voice-microphone-status" aria-live="polite">Checking</span>
+                  <button class="secondary-button" id="open-voice-microphone" type="button">Grant permission</button>
+                </span>
+              </div>
+              <div class="setting-row">
+                <span><strong>Automatic insertion</strong><small id="voice-accessibility-help">Accessibility lets Samlu return text to the field where recording began.</small></span>
+                <span class="permission-control">
+                  <span class="status-pill" id="voice-accessibility-status">Checking</span>
+                  <button class="secondary-button" id="open-voice-accessibility" type="button">Enable access</button>
+                </span>
+              </div>
+              <div class="setting-row">
+                <span><strong>Base shortcut</strong><small>Normal dictation. Add Shift for summary or Command for prompt mode.</small></span>
+                <button class="shortcut-input" id="voice-hotkey" type="button" aria-label="Base voice shortcut" aria-live="polite" aria-pressed="false">Not set</button>
+              </div>
+              <label class="setting-row">
+                <span><strong>Dictation delivery</strong><small>Fast everyday speech-to-text.</small></span>
+                <select id="voice-dictation-delivery">
+                  <option value="instant_insert">Instant insert</option>
+                  <option value="editable_preview">Editable preview</option>
+                  <option value="copy_only">Copy only</option>
+                </select>
+              </label>
+              <label class="setting-row">
+                <span><strong>Summary delivery</strong><small>Where compact notes should go after transformation.</small></span>
+                <select id="voice-summary-delivery">
+                  <option value="instant_insert">Instant insert</option>
+                  <option value="editable_preview">Editable preview</option>
+                  <option value="copy_only">Copy only</option>
+                </select>
+              </label>
+              <label class="setting-row">
+                <span><strong>Prompt delivery</strong><small>Review detailed agent instructions before inserting by default.</small></span>
+                <select id="voice-prompt-delivery">
+                  <option value="instant_insert">Instant insert</option>
+                  <option value="editable_preview">Editable preview</option>
+                  <option value="copy_only">Copy only</option>
+                </select>
+              </label>
+              <label class="setting-row">
+                <span><strong>Samlu appears while recording</strong><small>Samlu replaces the waveform, reacts to your voice, and carries the result over.</small></span>
+                <input id="voice-pet-capsule" type="checkbox" />
+              </label>
+              <label class="setting-row">
+                <span><strong>Interface sounds</strong><small>Quiet cues for recording, delivery, and failure.</small></span>
+                <input id="voice-interface-sounds" type="checkbox" />
+              </label>
+            </div>
+            <div class="mode-guide">
+              <div><kbd id="voice-normal-key">⌥V</kbd><strong>Dictate</strong><span>Clean transcript</span></div>
+              <div><kbd id="voice-summary-key">⌥⇧V</kbd><strong>Summarize</strong><span>Compact notes</span></div>
+              <div><kbd id="voice-prompt-key">⌥⌘V</kbd><strong>Prompt</strong><span>Detailed agent brief</span></div>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-view" id="tab-launcher" aria-labelledby="launcher-title" hidden>
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">Developer launcher</p>
+              <h1 id="launcher-title">Fast tools, one shortcut</h1>
+              <p>A focused launcher today, with room to grow into a Spotlight replacement later.</p>
+            </div>
+            <button class="secondary-button" id="open-launcher" type="button">Open launcher</button>
+          </header>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <div><h2>Shortcut and clipboard</h2><p>How the launcher opens, and what it keeps on this Mac.</p></div>
+              <span class="save-state" id="launcher-save-state" aria-live="polite"></span>
+            </div>
+            <div class="setting-rows">
+              <div class="setting-row">
+                <span><strong>Launcher shortcut</strong><small>Opens project, command, application, and file search.</small></span>
+                <button class="shortcut-input" id="launcher-hotkey" type="button" aria-label="Launcher shortcut" aria-live="polite" aria-pressed="false">Not set</button>
+              </div>
+              <label class="setting-row">
+                <span><strong>Clipboard history</strong><small>Opt in to a local history of up to 40 text clips.</small></span>
+                <input id="clipboard-history-enabled" type="checkbox" />
+              </label>
+              <div class="setting-row">
+                <span><strong>Stored clipboard data</strong><small>Clearing is immediate and cannot be undone.</small></span>
+                <button class="secondary-button danger-text" id="clear-clipboard" type="button">Clear history</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="tool-index" aria-label="Launcher query prefixes">
+            <div><kbd>=</kbd><strong>Calculator</strong><span>= 12 * (8 + 2)</span></div>
+            <div><kbd>;</kbd><strong>Snippets</strong><span>; fetch</span></div>
+            <div><kbd>@</kbd><strong>Clipboard</strong><span>@ token</span></div>
+            <div><kbd>&gt;</kbd><strong>Commands</strong><span>&gt; color</span></div>
+            <div><kbd>⌘K</kbd><strong>Projects and files</strong><span>Search by name</span></div>
+          </section>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <div><h2>Project folders</h2><p>Index Git repositories up to two folders deep. Reindex when your projects change.</p></div>
+              <span class="status-pill" id="project-count">Checking</span>
+            </div>
+            <div class="button-row project-actions">
+              <button class="primary-button" id="add-project-root" type="button">Add folder</button>
+              <button class="secondary-button" id="add-project-exclusion" type="button">Exclude folder</button>
+              <button class="secondary-button" id="reindex-projects" type="button">Reindex</button>
+            </div>
+            <div class="project-path-grid">
+              <div class="path-group">
+                <h3>Indexed roots</h3>
+                <div class="path-list" id="project-root-list"><div class="empty-state">No project folders configured.</div></div>
+              </div>
+              <div class="path-group">
+                <h3>Excluded paths</h3>
+                <div class="path-list" id="project-exclusion-list"><div class="empty-state">No excluded folders.</div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <div class="section-heading">
+              <div><h2>Snippets</h2><p>Reusable text copied directly from the launcher.</p></div>
+              <button class="secondary-button" id="new-snippet" type="button">New snippet</button>
+            </div>
+            <div class="snippet-layout">
+              <div class="snippet-list" id="snippet-list"><div class="empty-state">No snippets yet.</div></div>
+              <form class="snippet-editor" id="snippet-form" hidden>
+                <input id="snippet-id" type="hidden" />
+                <label class="field"><span>Title</span><input id="snippet-title" required type="text" /></label>
+                <label class="field"><span>Keyword</span><input id="snippet-keyword" type="text" placeholder="deploy" /></label>
+                <label class="field"><span>Content</span><textarea id="snippet-content" required rows="7"></textarea></label>
+                <div class="button-row">
+                  <button class="primary-button" type="submit">Save snippet</button>
+                  <button class="secondary-button danger-text" id="delete-snippet" type="button">Delete</button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </section>
+
+        <section class="tab-view" id="tab-about" aria-labelledby="about-title" hidden>
+          <header class="page-header">
+            <div>
+              <p class="eyebrow">About</p>
+              <h1 id="about-title">Samlu for macOS</h1>
+              <p>A focused AI development kit for speaking instructions, finding developer tools, and knowing when agents finish.</p>
+            </div>
+          </header>
+          <section class="about-copy">
+            <h2>Current release boundary</h2>
+            <p>This build is macOS only. It supports Claude Code and Codex, Groq or another OpenAI-compatible cloud provider, native macOS notifications, and a developer-focused launcher.</p>
+            <h2>Planned companion</h2>
+            <p>The iPhone companion and hosted APNs relay come after the Mac build is stable. The planned protocol uses end-to-end encrypted notification content, configurable summaries, and one paired Mac per iPhone.</p>
+            <h2>Privacy</h2>
+            <p>Agent history, snippets, and optional clipboard history remain local. Voice audio is sent only to the cloud provider you configure. API keys are stored in macOS Keychain.</p>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./settings.js"></script>
   </body>
 </html>

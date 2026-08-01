@@ -1,0 +1,287 @@
+/* Samlu launcher - Spotlight-style global search overlay, inside a
+ * transparent, frameless, always-on-top window (see LAUNCHER_W/H in
+ * src-tauri/src/launcher/mod.rs). Same glass-surface token values as the
+ * other Samlu utility windows for visual consistency - windows
+ * can't share a stylesheet, so the values are duplicated intentionally.
+ */
+
+:root {
+  --font: var(--samlu-font);
+  --border-glass: var(--line);
+  --surface-glass: var(--surface);
+  --row-hover: var(--brand-soft);
+  --text-highlight: var(--ink);
+  --text-muted: var(--ink-secondary);
+  --radius: var(--radius-float);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+body { font-family: var(--font); }
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at 12% 0%, var(--brand-faint), transparent 38%),
+    var(--surface-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float);
+  backdrop-filter: blur(28px) saturate(1.18);
+  -webkit-backdrop-filter: blur(28px) saturate(1.18);
+  overflow: hidden;
+  /* Arrives as a material rather than a hard cut: the blur builds while the
+   * panel settles, and it leaves the same way it came. */
+  transform-origin: 50% 12%;
+  animation: summon var(--duration-state) var(--ease-out) both;
+}
+
+.shell[data-leaving="true"] {
+  animation: dismiss var(--duration-exit) var(--ease-in) both;
+}
+
+@keyframes summon {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.972);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dismiss {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-5px) scale(0.978);
+  }
+}
+
+.query-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+/* Samlu breathing in the search bar. Anchored at its feet so the squash reads
+ * as weight rather than a scale-in-place pulse. */
+.brand-bee {
+  display: block;
+  flex: none;
+  width: 19px;
+  height: 19px;
+  transform-origin: 50% 100%;
+  animation: breathe 1.25s var(--ease-standard) infinite;
+}
+
+.brand-bee svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1, 1); }
+  42% { transform: scale(1.07, 0.93); }
+  70% { transform: scale(0.96, 1.05); }
+}
+
+.query {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-highlight);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.query-hint {
+  flex: none;
+  font: 11px/1 var(--samlu-mono);
+  color: var(--ink-muted);
+}
+
+.query:focus { outline: none; }
+/* The whole bar reads as the field, so the shared focus ring would draw a box
+ * around something that is already obviously focused. */
+.query:focus-visible { box-shadow: none; }
+.query::placeholder { color: var(--text-muted); }
+
+.results {
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.query-help {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 34px;
+  padding: 0 16px;
+  color: var(--ink-muted);
+  font-size: 11px;
+  background: var(--surface-muted);
+  border-top: 1px solid var(--line);
+}
+
+.query-help span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.query-help kbd {
+  display: inline-grid;
+  min-width: 17px;
+  height: 17px;
+  place-items: center;
+  color: var(--ink-muted);
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.result {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 40px;
+  padding: 0 11px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    transform var(--duration-instant) var(--ease-out);
+}
+
+.result[aria-selected="true"] {
+  background: var(--row-hover);
+}
+
+.result:active {
+  transform: scale(0.992);
+}
+
+/* Mono glyph standing in for the result type. Apps swap it for their real
+ * icon once that has been extracted, at the same size so nothing shifts. */
+.result-kind {
+  flex: none;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: var(--radius-xs);
+  background: var(--surface-muted);
+  color: var(--brand-ink);
+  font: 11px/1 var(--samlu-mono);
+}
+
+.result-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.result-main {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.result-title {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-highlight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-subtitle {
+  flex: none;
+  max-width: 45%;
+  font: 11px/1 var(--samlu-mono);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An empty result set is a place the user has arrived at, not a dead end —
+ * it says what happened and what to try next. */
+.results-empty {
+  padding: 16px 11px 18px;
+  color: var(--text-highlight);
+  font-size: 12.5px;
+}
+
+.results-empty p {
+  margin: 0;
+}
+
+.results-empty .suggestion {
+  display: block;
+  margin-top: 7px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.results-empty code {
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-muted);
+  font: 11px/1 var(--samlu-mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; }
+  .brand-bee { animation: none; }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .result:hover {
+    background: var(--row-hover);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .shell {
+    background: var(--surface-solid);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}

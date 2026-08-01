@@ -1,50 +1,239 @@
 name: Release
 
+# Publishes a downloadable macOS build. Signing is optional: with no secrets
+# configured this produces an ad-hoc signed universal build that anyone can
+# download and run after clearing quarantine (see the generated release notes).
+# Adding the APPLE_* secrets upgrades the same workflow to a Developer ID
+# signed, notarized, stapled build with no other changes.
+
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (defaults to the version in tauri.conf.json)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
   release:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            target: aarch64-apple-darwin
-            bundle_glob: "src-tauri/target/aarch64-apple-darwin/release/bundle/{dmg,macos}/*"
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            bundle_glob: "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/{msi,nsis}/*"
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-14
+    env:
+      TARGET: universal-apple-darwin
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: meta
+        # The dispatch input arrives as an env var rather than being expanded
+        # into the script body, so it cannot terminate the shell command.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [ -n "${INPUT_TAG:-}" ]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="v$(jq -r .version src-tauri/tauri.conf.json)"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Publishing $tag"
+
+      # Secrets cannot be tested directly in a job-level `if`, so capability is
+      # resolved once here and every signing step keys off it.
+      - name: Detect signing capability
+        id: signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${APPLE_CERTIFICATE}" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No APPLE_CERTIFICATE secret set - building an ad-hoc signed release."
+          fi
+          if [ -n "${APPLE_CERTIFICATE}" ] && [ -n "${APPLE_ID}" ]; then
+            echo "notarize=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notarize=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
-      - name: Install tauri-cli
+      - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0.0" --locked
 
-      # No signing/notarization configured yet (see README) — this produces
-      # an unsigned build, same as most early-stage OSS Tauri apps. Users see
-      # a Gatekeeper/SmartScreen warning on first launch.
-      - name: Build
-        working-directory: src-tauri
-        run: cargo tauri build --target ${{ matrix.target }}
+      - name: Import Developer ID certificate
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$KEYCHAIN_PASSWORD"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            build.keychain
+          rm certificate.p12
+          security find-identity -v -p codesigning build.keychain
 
-      - name: Upload to draft release
+      # Only the .app is bundled here; the disk image is assembled below with
+      # hdiutil so it never depends on a GUI session the runner does not have.
+      - name: Build universal app bundle
+        working-directory: src-tauri
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.signing.outputs.signed == 'true' && secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_ID: ${{ steps.signing.outputs.notarize == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ steps.signing.outputs.notarize == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ steps.signing.outputs.notarize == 'true' && secrets.APPLE_TEAM_ID || '' }}
+        run: cargo tauri build --target "$TARGET" --bundles app
+
+      - name: Package disk image and archive
+        id: package
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          app="src-tauri/target/${TARGET}/release/bundle/macos/Samlu.app"
+          test -d "$app"
+
+          # The bundle is Samlu.app but its executable carries the crate name.
+          # Fail loudly rather than shipping a release that only runs on one
+          # architecture while claiming to be universal.
+          binary="$(find "$app/Contents/MacOS" -maxdepth 1 -type f -perm -u+x | head -1)"
+          test -n "$binary"
+          archs="$(lipo -archs "$binary")"
+          echo "Architectures: $archs"
+          for arch in arm64 x86_64; do
+            case " $archs " in
+              *" $arch "*) ;;
+              *) echo "::error::$binary is missing $arch (got: $archs)"; exit 1 ;;
+            esac
+          done
+
+          mkdir -p dist
+          dmg="dist/Samlu-${VERSION}-macos-universal.dmg"
+          zip="dist/Samlu-${VERSION}-macos-universal.zip"
+
+          staging="$(mktemp -d "${TMPDIR:-/tmp}/samlu-dmg.XXXXXX")"
+          cp -R "$app" "$staging/Samlu.app"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -volname Samlu -srcfolder "$staging" -ov -format UDZO "$dmg"
+          hdiutil verify "$dmg"
+          rm -rf "$staging"
+
+          # ditto, not zip: it preserves the bundle's symlinks and metadata.
+          ditto -c -k --keepParent "$app" "$zip"
+
+          echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+
+      - name: Notarize and staple
+        if: steps.signing.outputs.notarize == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DMG: ${{ steps.package.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
+      - name: Write release notes
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          SIGNED: ${{ steps.signing.outputs.notarize }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Samlu ${VERSION} for macOS - a universal build for Apple Silicon and Intel."
+            echo
+            echo "## Install"
+            echo
+            echo "1. Download the \`.dmg\` below and open it."
+            echo "2. Drag **Samlu** into your Applications folder."
+            echo "3. Launch it. Samlu lives in the menu bar, not the Dock."
+            echo
+            if [ "$SIGNED" != "true" ]; then
+              echo "> [!IMPORTANT]"
+              echo "> This build is **not signed with an Apple Developer ID**, so macOS"
+              echo "> quarantines it on download and will refuse to open it. Clear the"
+              echo "> quarantine flag once, after moving the app to Applications:"
+              echo
+              echo '> ```bash'
+              echo '> xattr -dr com.apple.quarantine /Applications/Samlu.app'
+              echo '> ```'
+              echo
+              echo "> On macOS 15 and later this is required - the old right-click"
+              echo "> \"Open\" workaround no longer bypasses Gatekeeper."
+              echo
+              echo "> Because each unsigned build carries a different ad-hoc signature,"
+              echo "> macOS treats an update as a new app: you will need to re-grant"
+              echo "> Microphone and Accessibility access after upgrading."
+              echo
+            fi
+            echo "## Permissions Samlu asks for"
+            echo
+            echo "| Permission | Why |"
+            echo "| --- | --- |"
+            echo "| Microphone | Recording dictation. Audio goes only to the speech provider you configure. |"
+            echo "| Accessibility | Inserting the result back into the field you were typing in. |"
+            echo
+            echo "Both are requested on first use and can be revoked in System Settings -> Privacy & Security."
+            echo
+            echo "## Requirements"
+            echo
+            echo "- macOS 11 Big Sur or later"
+            echo "- A Groq or other OpenAI-compatible API key for voice features (stored in your Keychain)"
+          } > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: "Samlu ${{ github.ref_name }}"
-          draft: true
-          files: ${{ matrix.bundle_glob }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Samlu ${{ steps.meta.outputs.version }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.package.outputs.dmg }}
+            ${{ steps.package.outputs.zip }}

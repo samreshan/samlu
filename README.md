@@ -1,104 +1,139 @@
 # Samlu
 
-A desktop companion that reacts in real time when your AI coding agents
-finish a task or need your input — starting with
-[Claude Code](https://code.claude.com). A native notification, and a mascot
-that actually notices, instead of a silent terminal you have to keep
-tabbing back to check.
+Samlu is a macOS AI development kit. The current build combines global voice
+dictation, a compact developer launcher, and completion notifications from
+Claude Code and Codex.
 
-Built on Tauri v2 (macOS + Windows), spun out of the
-[Kettles](https://kettles.works) project's mascot overlay (same author).
+This release intentionally targets macOS only. Windows and iOS are outside the
+current build boundary.
 
-## Why
+## Download
 
-Long-running agent CLIs leave you babysitting a terminal tab, wondering if
-it's still working, stuck waiting for a permission prompt, or done ten
-minutes ago. Samlu watches for exactly that and tells you — no polling, no
-guessing.
+Grab the latest `.dmg` from the
+[Releases page](https://github.com/samreshan/samlu/releases/latest). Builds are
+universal — one download covers both Apple Silicon and Intel Macs running
+macOS 11 or later.
 
-## v1 scope: "Agent Watch"
+Open the disk image, drag **Samlu** into Applications, and launch it. Samlu
+lives in the menu bar rather than the Dock.
 
-- **Claude Code only** for now. Other agent CLIs (Codex, Cursor, Windsurf,
-  Copilot CLI, Aider, opencode — all of which have their own native hook or
-  notification systems) are a clean extension of the same adapter interface,
-  not a rewrite — see [Adding a new agent](#adding-a-new-agent) below.
-- No AI Q&A overlay yet ("Ask the Kettle" is a planned later phase).
-- Click-to-jump to the source terminal is intentionally out of scope for v1
-  — focusing the right terminal/IDE window by working directory is
-  genuinely OS-specific and nontrivial on both platforms.
-
-## How it works
-
-Claude Code supports an `http` hook type that POSTs a JSON payload to a
-local URL on `Notification` and `Stop` events (task needs input / task
-finished / an ordinary turn ended). Samlu runs a tiny local HTTP server
-(bound to `127.0.0.1` only, on port `47823`, behind a random per-install
-token) that receives those POSTs, normalizes them into a generic
-`AgentEvent`, and reacts: the mascot animates, and a native notification
-fires (debounced for the noisier "ordinary turn ended" signal so you're not
-pinged on every back-and-forth).
-
-## Quick start
+Released builds are not signed with an Apple Developer ID yet, so macOS
+quarantines them on download. Clear the flag once, after moving the app into
+Applications:
 
 ```bash
-# Install Rust if you don't have it: https://rustup.rs
-cargo install tauri-cli --version "^2.0.0" --locked
-
-git clone https://github.com/<org>/samlu.git
-cd samlu/src-tauri
-cargo tauri dev
+xattr -dr com.apple.quarantine /Applications/Samlu.app
 ```
 
-No Node/npm involved anywhere in this repo — the settings window is plain
-HTML/CSS/JS, served straight from `public/`.
+On macOS 15 and later this step is required; right-clicking and choosing
+*Open* no longer bypasses Gatekeeper. Because each unsigned build carries a
+different ad-hoc signature, macOS treats an upgrade as a new app, so Microphone
+and Accessibility access have to be granted again after updating.
 
-On first launch, open the **Setup** tab and either let Samlu install the
-Claude Code hook automatically (into `~/.claude/settings.json` for all
-projects, or a single project's `.claude/settings.json`) or copy the JSON
-snippet and add it yourself. Samlu backs up your existing `settings.json`
-before writing to it, and only ever appends its own hook entries — any
-other hooks you already have configured are left untouched.
+## What works
 
-## Building a release locally
+### Voice
+
+- Tap `Option+V` to start or stop dictation.
+- Hold `Option+V`, speak, and release to process.
+- Add `Shift` for a concise summary.
+- Add `Command` for a detailed coding-agent prompt.
+- Review the result in an optional compact editable preview before pasting.
+- Use Groq or another OpenAI-compatible cloud endpoint.
+- Use one shared endpoint by default, or configure separate speech and text
+  transformation providers.
+- Store endpoint-specific API keys in macOS Keychain.
+
+The shortcut, models, provider layout, and preview behavior are configurable
+in the Voice settings tab.
+
+### Developer launcher
+
+The default launcher shortcut is `Option+H`. It avoids taking over macOS
+Spotlight's `Command+Space` binding and can be changed in Launcher settings.
+
+- Search installed applications, projects, and source files.
+- Type `=` for calculator expressions.
+- Type `;` for snippets.
+- Type `@` for opt-in local clipboard history.
+- Type `>` for commands, including the macOS screen color picker.
+- Open Terminal and Samlu settings from the launcher.
+
+Project discovery starts with common existing development folders. Launcher
+settings can add or remove indexed roots, exclude folders, and trigger a manual
+reindex without running a permanent file-system watcher.
+
+### Agent notifications
+
+- Claude Code HTTP hooks cover permission/input requests, stopped turns, and
+  completed tasks.
+- Codex uses its external `notify` command for completed turns.
+- Hook authentication persists across Samlu restarts.
+- Native macOS notification triggers, summary content, and turn debounce are
+  configurable.
+- Recent normalized agent events are stored locally for the status view.
+- Existing Claude and Codex configuration is preserved and backed up before
+  Samlu writes a merged configuration.
+
+## Development
+
+Requirements:
+
+- macOS 11 or later
+- Rust stable
+- Xcode Command Line Tools
+- Tauri CLI v2 for bundled builds
+
+Run a development build:
 
 ```bash
-./scripts/build-mac.sh          # macOS, Apple Silicon
-./scripts/build-windows.ps1     # Windows
+cd src-tauri
+cargo run
 ```
 
-Both produce an **unsigned** build (no code-signing/notarization budget
-spent yet) — you'll see a Gatekeeper or SmartScreen warning on first launch.
-Right-click → Open (macOS) or "Run anyway" (Windows), or `xattr -cr` the
-`.app` on macOS.
+Run checks:
 
-## Adding a new agent
-
-Every agent integration implements one trait in `src-tauri/src/events.rs`:
-
-```rust
-pub trait AgentAdapter: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn parse(&self, event_route: &str, body: &[u8]) -> Result<AgentEvent, AdapterError>;
-}
+```bash
+cd src-tauri
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-Add a new module under `src-tauri/src/adapters/`, implement the trait
-(see `adapters/claude_code.rs` for a complete example), and register it in
-`adapters/mod.rs`'s `AdapterRegistry::new()`. Nothing else in the codebase
-(`notify.rs`, `pet.rs`, the tray) needs to change — normalization into the
-shared `AgentEvent` type is the whole point of the adapter boundary.
+Create an Apple Silicon app and DMG:
+
+```bash
+./scripts/build-mac.sh
+```
+
+Artifacts are written under
+`src-tauri/target/aarch64-apple-darwin/release/bundle/`.
+
+Without `APPLE_SIGNING_IDENTITY`, the local script uses an ad-hoc signature, so
+Gatekeeper may warn on first launch and macOS privacy grants can need to be
+re-added after rebuilding. For a stable production identity, export a
+Developer ID Application identity as `APPLE_SIGNING_IDENTITY` and provide
+Apple notarization credentials to Tauri.
+
+## Security and data
+
+- The agent hook server binds to `127.0.0.1`.
+- Claude hook requests use an installation-specific bearer token in the local
+  callback URL.
+- Cloud provider API keys are stored in macOS Keychain, not Samlu JSON files.
+- Snippets, launcher history, event history, and optional clipboard history are
+  local to the Mac.
+- Voice audio is sent only to the cloud endpoint configured by the user.
+
+The source Icon Composer package is preserved at
+`src-tauri/icons/samlu.icon`. The unsigned Tauri beta uses an `.icns` generated
+from the same artwork.
+
+The proposed iPhone notification relay is not implemented in this release.
+Its pairing, encryption, and hosted APNs boundary are documented in
+[`docs/APNS_RELAY.md`](docs/APNS_RELAY.md).
 
 ## License
 
-Source code is Apache-2.0 — see [`LICENSE`](LICENSE).
-
-The mascot spritesheet art (`public/pet/assets/`) is licensed separately
-under CC BY-NC 4.0 — see [`public/pet/assets/LICENSE`](public/pet/assets/LICENSE)
-and [`NOTICE`](NOTICE). It is **not** covered by the Apache-2.0 grant above.
-
-## Roadmap
-
-- More agent adapters (Codex, Cursor, Windsurf, Copilot CLI, Aider, opencode).
-- "Ask the Kettle" — a global-hotkey BYOK AI Q&A overlay (Claude/Gemini/OpenAI).
-- Click-to-jump to the source terminal/IDE window.
-- Code-signing and notarization once there's a budget for it.
+Source code is Apache-2.0 licensed. The previous mascot implementation and art
+have been removed from this build.

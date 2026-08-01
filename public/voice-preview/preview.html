@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Samlu Voice</title>
+    <link rel="stylesheet" href="../presence.css" />
+    <link rel="stylesheet" href="./preview.css" />
+  </head>
+  <body data-state="listening">
+    <!-- One surface for every state. The sections below are content layers
+         that cross-fade inside it while it resizes around them. -->
+    <main class="presence" id="presence" data-motion="surface" aria-live="polite">
+      <!-- Pet presentation: Samlu waggles while you speak and scales with your
+           voice. Stands in for the waveform capsule when the pet is enabled. -->
+      <section class="layer pet-capsule" id="pet-capsule" data-active="false">
+        <span class="pet-run" id="pet-run">
+          <span class="pet-shake" id="pet-shake">
+            <span class="pet-level" id="pet-level">
+              <svg viewBox="0 0 240 240" aria-hidden="true">
+                <g class="samlu-mark-brand">
+                  <rect x="48" y="96" width="96" height="96" />
+                  <rect x="143.5" y=".5" width="96" height="96" />
+                  <rect y="192.5" width="48.5" height="47.5" />
+                </g>
+                <g class="samlu-mark-ink">
+                  <path d="M144,0h0v96H48C48,43.02,91.02,0,144,0Z" />
+                  <path d="M143,96h96c0,52.98-43.02,96-96,96h0v-96h0Z" />
+                </g>
+              </svg>
+            </span>
+          </span>
+        </span>
+        <span class="pet-status" id="pet-status">Listening</span>
+      </section>
+
+      <section class="layer capsule" id="capsule" data-active="true">
+        <div class="brand-signal" aria-hidden="true">
+          <i></i><i></i><i></i><i></i>
+        </div>
+
+        <div class="voice-copy">
+          <div class="voice-heading">
+            <strong id="title">Dictation</strong>
+            <span id="elapsed">0:00</span>
+          </div>
+          <span id="detail">Listening</span>
+        </div>
+
+        <div class="waveform" id="waveform" aria-label="Microphone level">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </div>
+
+        <div class="state-symbol" aria-hidden="true">
+          <span class="success-mark">✓</span>
+          <span class="error-mark">!</span>
+        </div>
+
+        <div class="capsule-actions">
+          <button class="circle-button cancel-button" id="cancel-recording" type="button" aria-label="Cancel">
+            <span aria-hidden="true">×</span>
+          </button>
+          <button class="circle-button stop-button" id="stop-recording" type="button" aria-label="Finish recording">
+            <span aria-hidden="true"></span>
+          </button>
+        </div>
+      </section>
+
+      <section class="layer recovery" id="recovery" data-active="false">
+        <div class="recovery-copy">
+          <span class="recovery-symbol" aria-hidden="true">↗</span>
+          <div>
+            <strong id="recovery-title">Result is safe</strong>
+            <p id="recovery-detail">Samlu could not insert into the original field.</p>
+          </div>
+        </div>
+        <div class="recovery-actions">
+          <button class="text-button" id="recovery-copy" type="button">Copy</button>
+          <button class="text-button" id="recovery-preview" type="button">Preview</button>
+          <button class="primary-button" id="recovery-retry" type="button">Try again</button>
+        </div>
+      </section>
+
+      <section class="layer editor" id="editor" data-active="false">
+        <header class="editor-header">
+          <div>
+            <span class="editor-kicker" id="editor-kicker">Prompt</span>
+            <strong id="editor-title">Detailed prompt</strong>
+          </div>
+          <span class="editor-status">Ready to insert</span>
+        </header>
+        <textarea
+          id="text"
+          class="text"
+          aria-label="Voice result"
+          spellcheck="true"
+        ></textarea>
+        <footer class="editor-actions">
+          <span class="hint"><kbd>⌘</kbd><kbd>↵</kbd> insert</span>
+          <div class="buttons">
+            <button class="text-button" id="cancel-preview" type="button">Copy &amp; close</button>
+            <button class="primary-button" id="insert-preview" type="button">Insert</button>
+          </div>
+        </footer>
+      </section>
+    </main>
+    <script src="./preview.js"></script>
+  </body>
+</html>

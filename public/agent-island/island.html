@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Samlu Agent Update</title>
+    <link rel="stylesheet" href="../presence.css" />
+    <link rel="stylesheet" href="./island.css" />
+  </head>
+  <body>
+    <!-- The stage owns the arrive/leave animation; the island itself owns the
+         drag offset, so a gesture never fights an animation for `transform`. -->
+    <div class="island-stage" id="stage" data-motion="surface">
+      <main class="island" id="island" data-kind="completed" data-notch="false" aria-live="polite">
+        <div class="camera-bridge" aria-hidden="true">
+          <span class="camera-dot"></span>
+        </div>
+        <section class="notification" id="notification">
+          <div class="agent-mark" aria-hidden="true">
+            <span class="completed-symbol">✓</span>
+            <span class="input-symbol">···</span>
+            <span class="turn-symbol">↗</span>
+          </div>
+          <div class="notification-copy">
+            <div class="meta">
+              <strong id="title">Task completed</strong>
+              <span id="agent">Codex</span>
+              <span class="separator" aria-hidden="true">·</span>
+              <span id="project">samlu</span>
+            </div>
+            <p id="summary">The agent finished its task.</p>
+          </div>
+          <div class="notification-actions">
+            <button id="dismiss" class="icon-button" type="button" aria-label="Dismiss">×</button>
+            <button id="open" class="open-button" type="button">View</button>
+          </div>
+        </section>
+        <div class="timeout-track" id="timeout-track" aria-hidden="true"></div>
+        <div class="grabber" aria-hidden="true"></div>
+      </main>
+    </div>
+    <script src="./island.js"></script>
+  </body>
+</html>

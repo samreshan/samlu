@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Samlu Launcher</title>
+    <link rel="stylesheet" href="../presence.css" />
+    <link rel="stylesheet" href="./launcher.css?v=2" />
+  </head>
+  <body>
+    <div id="shell" class="shell" data-motion="surface">
+      <div class="query-bar">
+        <span class="brand-bee" aria-hidden="true">
+          <svg viewBox="0 0 240 240">
+            <g class="samlu-mark-brand">
+              <rect x="48" y="96" width="96" height="96" />
+              <rect x="143.5" y=".5" width="96" height="96" />
+              <rect y="192.5" width="48.5" height="47.5" />
+            </g>
+            <g class="samlu-mark-ink">
+              <path d="M144,0h0v96H48C48,43.02,91.02,0,144,0Z" />
+              <path d="M143,96h96c0,52.98-43.02,96-96,96h0v-96h0Z" />
+            </g>
+          </svg>
+        </span>
+        <input
+          id="query"
+          class="query"
+          type="text"
+          placeholder="Search projects, apps, files, or commands"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls="results"
+          aria-expanded="true"
+        />
+        <kbd class="query-hint" id="query-hint">⌥H</kbd>
+      </div>
+      <ul id="results" class="results" role="listbox" aria-label="Launcher results"></ul>
+      <footer class="query-help" aria-label="Search prefixes">
+        <span><kbd>=</kbd> calculate</span>
+        <span><kbd>;</kbd> snippets</span>
+        <span><kbd>@</kbd> clipboard</span>
+        <span><kbd>&gt;</kbd> commands</span>
+      </footer>
+    </div>
+    <script src="./launcher.js?v=2"></script>
+  </body>
+</html>

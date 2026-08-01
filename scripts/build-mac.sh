@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Local macOS (Apple Silicon) build. Produces an unsigned .app/.dmg under
-# src-tauri/target/aarch64-apple-darwin/release/bundle/.
+# Local macOS (Apple Silicon) build. Uses APPLE_SIGNING_IDENTITY when supplied
+# and falls back to an ad-hoc signature for local testing.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,16 +21,43 @@ if ! cargo tauri --version >/dev/null 2>&1; then
   cargo install tauri-cli --version "^2.0.0" --locked
 fi
 
-echo "Checking Rust project..."
-(cd src-tauri && cargo check)
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+  signing_label="identity: $APPLE_SIGNING_IDENTITY"
+else
+  export APPLE_SIGNING_IDENTITY="-"
+  signing_label="ad-hoc local signature"
+  echo "Warning: no Apple signing identity supplied." >&2
+  echo "Accessibility and microphone grants may need to be re-added after this build changes." >&2
+fi
 
-echo "Building (unsigned)..."
-(cd src-tauri && cargo tauri build --target aarch64-apple-darwin)
+echo "Building ($signing_label)..."
+(cd src-tauri && cargo tauri build --target aarch64-apple-darwin --bundles app)
+
+app_path="$root/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Samlu.app"
+app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
+dmg_path="$root/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Samlu_${app_version}_aarch64.dmg"
+staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/samlu-dmg.XXXXXX")"
+
+cleanup() {
+  if [[ "$staging_dir" == */samlu-dmg.* && -d "$staging_dir" ]]; then
+    rm -rf "$staging_dir"
+  fi
+}
+trap cleanup EXIT
+
+mkdir -p "$(dirname "$dmg_path")"
+cp -R "$app_path" "$staging_dir/Samlu.app"
+ln -s /Applications "$staging_dir/Applications"
+hdiutil create -volname Samlu -srcfolder "$staging_dir" -ov -format UDZO "$dmg_path"
+hdiutil verify "$dmg_path"
 
 echo ""
-echo "Done. Unsigned build in:"
+echo "Done. Build in:"
 echo "src-tauri/target/aarch64-apple-darwin/release/bundle/"
 echo ""
-echo "Gatekeeper will warn on first launch (unsigned build). To run it:"
-echo "  right-click the .app -> Open -> Open, or"
-echo "  xattr -cr \"/path/to/Samlu.app\""
+if [[ "$APPLE_SIGNING_IDENTITY" == "-" ]]; then
+  echo "This local build is ad-hoc signed and not notarized."
+  echo "Gatekeeper may warn on first launch; right-click the app and choose Open."
+else
+  echo "Signed with: $APPLE_SIGNING_IDENTITY"
+fi

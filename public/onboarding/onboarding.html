@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Welcome to Samlu</title>
+    <link rel="stylesheet" href="../presence.css" />
+    <link rel="stylesheet" href="./onboarding.css" />
+  </head>
+  <body>
+    <main class="wizard">
+      <ol class="steps" id="steps" aria-label="Setup progress"></ol>
+
+      <div class="stage">
+        <!-- 0 · Welcome -->
+        <section class="step active" data-step="0">
+          <div class="hero">
+            <div class="hero-mark">
+              <span class="fly">
+                <span class="tilt">
+                  <svg class="mark" viewBox="0 0 240 240" aria-hidden="true">
+                    <g class="samlu-mark-brand"><rect x="48" y="96" width="96" height="96"/><rect x="143.5" y=".5" width="96" height="96"/><rect y="192.5" width="48.5" height="47.5"/></g>
+                    <g class="samlu-mark-ink"><path d="M144,0h0v96H48C48,43.02,91.02,0,144,0Z"/><path d="M143,96h96c0,52.98-43.02,96-96,96h0v-96h0Z"/></g>
+                  </svg>
+                </span>
+              </span>
+            </div>
+            <div>
+              <p class="eyebrow">Samlu for macOS</p>
+              <h1 class="display">Just say it out loud.</h1>
+              <p class="lede">
+                Samlu lives in your menu bar. Talk to any text field, find anything with one
+                keystroke, and get told the second an agent needs you.
+              </p>
+              <div class="capability-list">
+                <div><kbd data-voice-hotkey>⌥V</kbd>Speak into any text field</div>
+                <div><kbd data-launcher-hotkey>⌥H</kbd>Find projects, files, snippets, maths</div>
+                <div><kbd>—</kbd>Get told when an agent needs you</div>
+              </div>
+              <p class="note">Two permissions, one test sentence. Under a minute.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 1 · Microphone -->
+        <section class="step" data-step="1">
+          <p class="eyebrow">Permission 1 of 2</p>
+          <h1>Let Samlu hear you.</h1>
+          <p class="lede narrow">
+            Recording only happens while you hold the shortcut. Audio goes to the provider you
+            configure — nowhere else.
+          </p>
+          <div class="permission-card">
+            <span class="permission-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19v3"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><rect x="9" y="2" width="6" height="13" rx="3"/></svg>
+            </span>
+            <span class="permission-copy">
+              <strong>Microphone</strong>
+              <small>Records globally, even while another app is focused.</small>
+            </span>
+            <span class="pill good" id="mic-granted" hidden>Allowed</span>
+            <button class="primary-button" id="grant-mic" type="button">Allow microphone</button>
+          </div>
+          <p class="note" id="mic-note">
+            macOS will show its own dialog. Samlu never records outside the shortcut.
+          </p>
+        </section>
+
+        <!-- 2 · Accessibility -->
+        <section class="step" data-step="2">
+          <p class="eyebrow">Permission 2 of 2</p>
+          <h1>Let Samlu put text back.</h1>
+          <p class="lede narrow">
+            Accessibility lets Samlu return text to the exact field where recording began. Without
+            it, results are copied instead.
+          </p>
+          <div class="permission-card">
+            <span class="permission-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+            </span>
+            <span class="permission-copy">
+              <strong>Accessibility</strong>
+              <small>Automatic insertion into the app you were already using.</small>
+            </span>
+            <span class="pill good" id="acc-granted" hidden>Allowed</span>
+            <button class="primary-button" id="grant-acc" type="button">Open Settings</button>
+          </div>
+          <p class="note">
+            You can skip this. Samlu will copy results to the clipboard until it's granted.
+          </p>
+        </section>
+
+        <!-- 3 · Try it -->
+        <section class="step" data-step="3">
+          <p class="eyebrow">One test</p>
+          <h1>Hold <kbd class="inline" data-voice-hotkey>⌥V</kbd> and say anything.</h1>
+          <p class="lede narrow">
+            Samlu appears at the bottom of the screen, listens while you hold, and drops the text
+            into whatever field you were in.
+          </p>
+
+          <div class="key-setup" id="key-setup" hidden>
+            <div class="eyebrow small">Transcription key</div>
+            <p class="note flush">
+              Dictation needs a Groq API key (or any OpenAI-compatible endpoint, configurable later
+              in Settings). It is stored in the macOS Keychain.
+            </p>
+            <div class="compound-field">
+              <input id="voice-key" type="password" autocomplete="off" spellcheck="false" placeholder="gsk_…" />
+              <button class="secondary-button" id="save-voice-key" type="button">Save key</button>
+            </div>
+          </div>
+
+          <div class="try-box" id="try-box">
+            <div class="eyebrow small">Try it here</div>
+            <div class="try-field" id="try-field"><span class="caret"></span></div>
+            <div class="try-foot">
+              <span class="note flush" id="try-hint">Hold the shortcut, then let go.</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4 · Alerts -->
+        <section class="step" data-step="4">
+          <p class="eyebrow">Interruption</p>
+          <h1>Go do something else. We'll fetch you.</h1>
+          <p class="lede">
+            When Claude Code or Codex needs you, Samlu says so. Pick how. Tap a card to see it
+            happen.
+          </p>
+          <div class="delivery-grid">
+            <button class="delivery-card" id="pick-pet" type="button" aria-pressed="false">
+              <span class="delivery-art" aria-hidden="true">
+                <span class="glide-bee">
+                  <svg viewBox="0 0 240 240">
+                    <g class="samlu-mark-brand"><rect x="48" y="96" width="96" height="96"/><rect x="143.5" y=".5" width="96" height="96"/><rect y="192.5" width="48.5" height="47.5"/></g>
+                    <g class="samlu-mark-ink"><path d="M144,0h0v96H48C48,43.02,91.02,0,144,0Z"/><path d="M143,96h96c0,52.98-43.02,96-96,96h0v-96h0Z"/></g>
+                  </svg>
+                </span>
+              </span>
+              <strong>Samlu brings it</strong>
+              <small>Darts in from the edge, drops the card by your pointer, leaves.</small>
+            </button>
+            <button class="delivery-card" id="pick-island" type="button" aria-pressed="false">
+              <span class="delivery-art" aria-hidden="true">
+                <span class="screen"><span class="notch"></span><span class="island"></span></span>
+              </span>
+              <strong>Samlu Island</strong>
+              <small>A dark island drops from under the notch, top-center.</small>
+            </button>
+            <button class="delivery-card" id="pick-system" type="button" aria-pressed="false">
+              <span class="delivery-art" aria-hidden="true">
+                <span class="screen"><span class="banner"></span></span>
+              </span>
+              <strong>System notification</strong>
+              <small>Standard macOS banner, kept in Notification Center.</small>
+            </button>
+          </div>
+          <p class="note">
+            Every event is written to Notification Center regardless. Change this any time in
+            Settings.
+          </p>
+        </section>
+
+        <!-- 5 · Done -->
+        <section class="step" data-step="5">
+          <p class="eyebrow">Done</p>
+          <h1>Samlu is in your menu bar now.</h1>
+          <p class="lede narrow">
+            Everything else — providers, agents, indexed folders — is waiting in Settings when you
+            need it.
+          </p>
+          <div class="summary-grid">
+            <div class="summary-row">
+              <kbd data-voice-hotkey>⌥V</kbd>
+              <span><strong>Dictate</strong><small>Add ⇧ to summarize, ⌘ for a prompt</small></span>
+            </div>
+            <div class="summary-row">
+              <kbd data-launcher-hotkey>⌥H</kbd>
+              <span><strong>Launcher</strong><small>Apps, projects, snippets, maths</small></span>
+            </div>
+          </div>
+          <div class="agents-callout">
+            <span>
+              Connect Claude Code and Codex whenever you're ready — Samlu backs up your existing
+              config before writing.
+            </span>
+            <button class="secondary-button" id="connect-agents" type="button">Connect agents</button>
+          </div>
+        </section>
+      </div>
+
+      <footer class="wizard-foot">
+        <button class="ghost-button" id="back" type="button">Back</button>
+        <span class="spacer"></span>
+        <button class="ghost-button muted" id="skip" type="button">Later</button>
+        <button class="primary-button next" id="next" type="button">
+          <span id="next-label">Get started</span><span class="return-key" aria-hidden="true">↵</span>
+        </button>
+      </footer>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./onboarding.js"></script>
+  </body>
+</html>

@@ -1,7 +1,7 @@
 [package]
 name = "samlu"
 version = "0.1.0"
-description = "Samlu – a desktop companion that reacts when your AI coding agents finish or need you"
+description = "Samlu - a macOS AI development kit for voice, agent notifications, and developer commands"
 authors = ["Samlu contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/samreshan/samlu"
@@ -14,6 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cc = "1"
 
 [dependencies]
 serde_json = "1"
@@ -23,7 +24,16 @@ tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-log = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-global-shortcut = "2"
 tiny_http = "0.12"
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 dirs = "5"
+base64 = "0.22"
+plist = "1"
+nucleo-matcher = "0.3"
+cpal = "0.15"
+hound = "3.5"
+tauri-plugin-clipboard-manager = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+toml_edit = "0.22"

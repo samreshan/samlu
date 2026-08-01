@@ -1,0 +1,345 @@
+:root,
+:root[data-theme="light"],
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --island: rgba(16, 16, 14, 0.97);
+  --island-raised: rgba(255, 255, 255, 0.075);
+  --island-line: rgba(255, 248, 219, 0.1);
+  --island-ink: #fbf7e9;
+  --island-secondary: #b9b39f;
+  --island-muted: #777363;
+  --island-brand: #f1d326;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  font-family: var(--samlu-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  padding: 0 8px 8px;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+/* Arrives out of the top edge and leaves the same way (never sideways, never
+ * a plain fade) so the notch stays the place updates come from. */
+.island-stage {
+  transform-origin: 50% 0;
+  animation: descend 180ms var(--ease-out) both;
+}
+
+.island-stage[data-leaving="true"] {
+  animation: ascend var(--duration-exit) var(--ease-in) both;
+}
+
+.island {
+  position: relative;
+  width: 100%;
+  max-width: 404px;
+  height: 130px;
+  margin: 0 auto;
+  color: var(--island-ink);
+  background:
+    radial-gradient(circle at 18% 10%, rgba(241, 211, 38, 0.08), transparent 34%),
+    var(--island);
+  border: 1px solid var(--island-line);
+  border-top: 0;
+  border-radius: 0 0 23px 23px;
+  box-shadow:
+    0 22px 58px rgba(0, 0, 0, 0.38),
+    0 4px 14px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(28px) saturate(1.18);
+  -webkit-backdrop-filter: blur(28px) saturate(1.18);
+  cursor: grab;
+  /* Owned by the drag gesture only — the stage above owns animation, so the
+   * two never contend for this property. */
+  transform: translateY(var(--drag-y, 0px));
+}
+
+.island[data-dragging="true"] {
+  cursor: grabbing;
+}
+
+/* Faint handle at the lower edge: the only affordance saying "this can be
+ * thrown back up". Fades in with the actions on hover. */
+.grabber {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  width: 34px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity var(--duration-fast) ease;
+}
+
+.island:hover .grabber,
+.island[data-dragging="true"] .grabber {
+  opacity: 1;
+}
+
+/* Only drawn on displays that actually have a camera housing to hang from.
+ * Centered on an external monitor it would just be an unexplained black tab. */
+.camera-bridge {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  display: none;
+  width: 154px;
+  height: 12px;
+  border-radius: 0 0 9px 9px;
+  background: #050505;
+  transform: translateX(-50%);
+}
+
+.island[data-notch="true"] .camera-bridge {
+  display: block;
+}
+
+.camera-dot {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #0f1414;
+  box-shadow: 0 0 0 1px #121919, 0 0 4px rgba(33, 61, 61, 0.55) inset;
+  transform: translateX(-50%);
+}
+
+.notification {
+  height: 126px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 15px;
+  transition:
+    opacity 110ms ease,
+    transform 110ms var(--ease-in);
+}
+
+/* Only the camera bridge needs the extra top clearance. */
+.island[data-notch="true"] .notification {
+  padding-top: 21px;
+}
+
+/* A second update arriving while the island is still on screen swaps its
+ * contents in place. Replaying the descend would mean re-entering something
+ * that never left. */
+.notification[data-swapping="true"] {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.agent-mark {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(241, 211, 38, 0.12);
+  border-radius: 13px;
+  color: var(--island-brand);
+  background: rgba(241, 211, 38, 0.11);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.input-symbol,
+.turn-symbol {
+  display: none;
+}
+
+.island[data-kind="needs_input"] .completed-symbol,
+.island[data-kind="turn_finished"] .completed-symbol {
+  display: none;
+}
+
+.island[data-kind="needs_input"] .input-symbol,
+.island[data-kind="turn_finished"] .turn-symbol {
+  display: inline;
+}
+
+.island[data-kind="needs_input"] .agent-mark {
+  color: #f0b66e;
+  background: rgba(240, 182, 110, 0.12);
+  border-color: rgba(240, 182, 110, 0.14);
+}
+
+.notification-copy {
+  min-width: 0;
+}
+
+.meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.meta strong {
+  margin-right: 2px;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  white-space: nowrap;
+}
+
+.meta span {
+  overflow: hidden;
+  color: var(--island-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta .separator {
+  flex: 0 0 auto;
+  color: var(--island-muted);
+}
+
+.notification-copy p {
+  display: -webkit-box;
+  max-width: 265px;
+  margin: 5px 0 0;
+  overflow: hidden;
+  color: var(--island-secondary);
+  font-size: 11.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.notification-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  opacity: 0;
+  transform: translateX(3px);
+  transition:
+    opacity var(--duration-fast) ease,
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.island:hover .notification-actions,
+.island:focus-within .notification-actions,
+.island[data-kind="needs_input"] .notification-actions {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.icon-button,
+.open-button {
+  height: 28px;
+  border-radius: 9px;
+  color: var(--island-secondary);
+  background: var(--island-raised);
+  font-size: 11.5px;
+  font-weight: 600;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    transform var(--duration-instant) ease;
+}
+
+.icon-button {
+  width: 28px;
+  font-size: 18px;
+  font-weight: 300;
+}
+
+.open-button {
+  padding: 0 10px;
+  color: #2b2505;
+  background: var(--island-brand);
+}
+
+.icon-button:active,
+.open-button:active {
+  transform: scale(0.96);
+}
+
+.timeout-track {
+  position: absolute;
+  right: 22px;
+  bottom: 7px;
+  left: 22px;
+  height: 1px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.timeout-track::after {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: rgba(241, 211, 38, 0.42);
+  transform-origin: left;
+  animation: timeout var(--timeout, 7s) linear both;
+  animation-play-state: var(--timeout-play-state, running);
+}
+
+.island[data-persistent="true"] .timeout-track {
+  display: none;
+}
+
+@keyframes descend {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Retraces descend rather than fading out where it stands. */
+@keyframes ascend {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.985);
+  }
+}
+
+@keyframes timeout {
+  to { transform: scaleX(0); }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .island {
+    background: #10100e;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .icon-button:hover {
+    color: var(--island-ink);
+    background: rgba(255, 255, 255, 0.11);
+  }
+
+  .open-button:hover {
+    background: #f7db37;
+  }
+}

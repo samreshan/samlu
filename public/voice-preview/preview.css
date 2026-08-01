@@ -1,0 +1,630 @@
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  background: transparent;
+  font-family: var(--samlu-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The window is sized to the largest bound a state needs and the surface is
+ * anchored to its bottom edge, so growing from capsule to editor lifts the
+ * top of the panel while its base stays exactly where it was. */
+body {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 8px;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------ the surface
+ * One piece of glass for every state. Previously each state carried its own
+ * translucent panel, so a transition meant one surface disappearing and
+ * another appearing — and, mid-crossfade, two stacked translucent layers.
+ */
+
+.presence {
+  position: relative;
+  width: 244px;
+  height: 56px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 19px;
+  background-color: var(--surface);
+  background-image: radial-gradient(circle at 16% 0%, var(--brand-faint), transparent 42%);
+  box-shadow: var(--shadow-float);
+  backdrop-filter: blur(28px) saturate(1.25);
+  -webkit-backdrop-filter: blur(28px) saturate(1.25);
+  cursor: grab;
+  animation: arrive var(--duration-fast) var(--ease-out) both;
+  transition:
+    width var(--duration-state) var(--ease-standard),
+    height var(--duration-state) var(--ease-standard),
+    border-radius var(--duration-state) var(--ease-standard),
+    background-color var(--duration-state) ease,
+    border-color var(--duration-state) ease,
+    box-shadow var(--duration-state) ease,
+    backdrop-filter var(--duration-state) ease,
+    -webkit-backdrop-filter var(--duration-state) ease;
+}
+
+.presence[data-dragging="true"] {
+  cursor: grabbing;
+}
+
+/* An arrival adopts its size outright. Only a change made while the surface is
+ * already on screen is a morph worth animating — otherwise a session opening
+ * after one that ended in the editor would animate down from that old size. */
+.presence[data-instant="true"] {
+  transition: none;
+}
+
+/* Retraces the entrance: it rose from below, so it sinks back down. */
+.presence[data-leaving="true"] {
+  animation: depart var(--duration-exit) var(--ease-in) both;
+}
+
+body[data-state="recovery"] .presence {
+  border-radius: 20px;
+}
+
+body[data-state="preview"] .presence {
+  border-radius: 22px;
+}
+
+/* Samlu floats free while dictating — no panel behind the bee. */
+/* The glass dissolves as Samlu takes over rather than switching off, so the
+ * handover between waveform and bee is one continuous surface change. */
+body[data-pet="true"] .presence {
+  overflow: visible;
+  border-color: transparent;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  backdrop-filter: blur(0px) saturate(1);
+  -webkit-backdrop-filter: blur(0px) saturate(1);
+}
+
+/* Each state is a content layer inside the one surface. They cross-fade in
+ * place while the surface itself resizes around them. */
+.layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.layer[data-active="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.capsule {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+}
+
+.brand-signal {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  background: var(--brand-soft);
+}
+
+.brand-signal i {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--brand);
+  transition:
+    transform var(--duration-state) var(--ease-out),
+    border-radius var(--duration-state) var(--ease-out);
+}
+
+.brand-signal i:nth-child(1) { left: 6px; top: 6px; border-radius: 7px 2px 2px; }
+.brand-signal i:nth-child(2) { right: 6px; top: 6px; }
+.brand-signal i:nth-child(3) { left: 6px; bottom: 6px; }
+.brand-signal i:nth-child(4) { right: 6px; bottom: 6px; border-radius: 2px 2px 7px; }
+
+.voice-copy {
+  min-width: 64px;
+  flex: 1;
+}
+
+.voice-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.voice-heading strong {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#elapsed {
+  color: var(--ink-muted);
+  font: 11px/1 var(--samlu-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.voice-copy > span {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--ink-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waveform {
+  width: 44px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+/* Level drives scaleY rather than height: this runs every frame while you
+ * speak, and transform stays on the compositor where height would relayout
+ * the row eleven times a frame. */
+.waveform i {
+  width: 2px;
+  height: 25px;
+  border-radius: 999px;
+  background: var(--brand);
+  opacity: 0.62;
+  transform: scaleY(calc(var(--bar-scale, 0.5) * (0.2 + var(--voice-level, 0.08) * 0.8)));
+  transition: opacity var(--duration-fast) ease;
+  will-change: transform;
+}
+
+.waveform i:nth-child(1),
+.waveform i:nth-child(11) { --bar-scale: 0.36; }
+.waveform i:nth-child(2),
+.waveform i:nth-child(10) { --bar-scale: 0.54; }
+.waveform i:nth-child(3),
+.waveform i:nth-child(9) { --bar-scale: 0.72; }
+.waveform i:nth-child(4),
+.waveform i:nth-child(8) { --bar-scale: 0.88; }
+.waveform i:nth-child(5),
+.waveform i:nth-child(7) { --bar-scale: 1; }
+.waveform i:nth-child(6) { --bar-scale: 1.08; }
+
+.capsule-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.circle-button {
+  position: relative;
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--ink-secondary);
+  background: transparent;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    transform var(--duration-instant) ease;
+}
+
+/* The visible control stays small enough for a 56px capsule; the target it
+ * answers to does not. Horizontal growth is limited so the two buttons never
+ * claim each other's area. */
+.circle-button::before {
+  content: "";
+  position: absolute;
+  inset: -8px -3px;
+}
+
+.circle-button:active,
+.text-button:active,
+.primary-button:active {
+  transform: scale(0.96);
+}
+
+.cancel-button span {
+  font-size: 20px;
+  font-weight: 300;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+.stop-button {
+  background: var(--brand-soft);
+}
+
+.stop-button span {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--brand-ink);
+}
+
+.state-symbol {
+  display: none;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 11px;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.success-mark,
+.error-mark {
+  display: none;
+}
+
+body[data-state="processing"] .waveform i {
+  animation: travel 820ms var(--ease-standard) infinite alternate;
+}
+
+body[data-state="processing"] .waveform i:nth-child(2) { animation-delay: 55ms; }
+body[data-state="processing"] .waveform i:nth-child(3) { animation-delay: 110ms; }
+body[data-state="processing"] .waveform i:nth-child(4) { animation-delay: 165ms; }
+body[data-state="processing"] .waveform i:nth-child(5) { animation-delay: 220ms; }
+body[data-state="processing"] .waveform i:nth-child(6) { animation-delay: 275ms; }
+body[data-state="processing"] .waveform i:nth-child(7) { animation-delay: 330ms; }
+body[data-state="processing"] .waveform i:nth-child(8) { animation-delay: 385ms; }
+body[data-state="processing"] .waveform i:nth-child(9) { animation-delay: 440ms; }
+body[data-state="processing"] .waveform i:nth-child(10) { animation-delay: 495ms; }
+body[data-state="processing"] .waveform i:nth-child(11) { animation-delay: 550ms; }
+
+body[data-state="processing"] .capsule-actions {
+  display: none;
+}
+
+body[data-state="success"] .waveform,
+body[data-state="success"] .capsule-actions,
+body[data-state="error"] .waveform,
+body[data-state="error"] .capsule-actions {
+  display: none;
+}
+
+body[data-state="success"] .state-symbol,
+body[data-state="error"] .state-symbol {
+  display: grid;
+}
+
+body[data-state="success"] .state-symbol {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+body[data-state="success"] .success-mark {
+  display: inline;
+}
+
+body[data-state="error"] .state-symbol {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+body[data-state="error"] .error-mark {
+  display: inline;
+}
+
+.recovery {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 17px 18px 14px;
+}
+
+.recovery-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+.recovery-symbol {
+  width: 31px;
+  height: 31px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.recovery-copy strong {
+  display: block;
+  font-size: 12.5px;
+}
+
+.recovery-copy p {
+  max-width: 340px;
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--ink-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recovery-actions,
+.editor-actions,
+.buttons {
+  display: flex;
+  align-items: center;
+}
+
+.recovery-actions {
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.text-button,
+.primary-button {
+  min-height: 30px;
+  padding: 0 11px;
+  border-radius: 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  transition:
+    background var(--duration-fast) ease,
+    transform var(--duration-instant) ease;
+}
+
+.text-button {
+  color: var(--ink-secondary);
+  background: transparent;
+}
+
+.primary-button {
+  color: var(--ink-on-accent);
+  background: var(--brand);
+}
+
+.editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 17px;
+}
+
+.editor-header,
+.editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.editor-header strong,
+.editor-kicker {
+  display: block;
+}
+
+.editor-kicker {
+  margin-bottom: 3px;
+  color: var(--brand-ink);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+}
+
+.editor-header strong {
+  font-size: 13px;
+  letter-spacing: -0.012em;
+}
+
+.editor-status,
+.hint {
+  color: var(--ink-secondary);
+  font-size: 11px;
+}
+
+.text {
+  width: 100%;
+  min-height: 0;
+  resize: none;
+  padding: 12px 13px;
+  outline: none;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font: 12px/1.5 var(--samlu-font);
+  box-shadow: 0 1px 0 var(--line-highlight) inset;
+  cursor: auto;
+}
+
+.text:focus {
+  border-color: rgba(239, 208, 29, 0.64);
+  box-shadow: var(--focus-ring);
+}
+
+.buttons {
+  gap: 5px;
+}
+
+kbd {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  margin-right: 3px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  font: 10px var(--samlu-font);
+}
+
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes depart {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+}
+
+@keyframes travel {
+  0% { opacity: 0.28; transform: scaleY(0.35); }
+  100% { opacity: 0.92; transform: scaleY(1); }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .presence {
+    background: var(--surface-solid);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  body[data-pet="true"] .presence {
+    background: transparent;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .circle-button:hover,
+  .text-button:hover {
+    color: var(--ink);
+    background: var(--surface-muted);
+  }
+
+  .primary-button:hover {
+    background: var(--brand-hover);
+  }
+}
+
+/* ---------------------------------------------------------------- pet layer
+ * Samlu standing in for the waveform while you dictate. The surface behind is
+ * turned off in this mode, so the pet floats free.
+ */
+
+.pet-capsule {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 6px;
+  background: transparent;
+}
+
+.pet-run,
+.pet-shake,
+.pet-level {
+  display: block;
+  width: 42px;
+  height: 42px;
+}
+
+.pet-shake,
+.pet-level {
+  width: 100%;
+  height: 100%;
+}
+
+.pet-level svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Voice level swells the mark. Damped hard — this runs every frame while you
+ * speak, and a large excursion reads as jitter rather than responsiveness. */
+.pet-level {
+  transform: scale(calc(1 + var(--voice-level, 0) * 0.18));
+  transform-origin: 50% 58%;
+  will-change: transform;
+}
+
+/* The waggle: a tight figure-of-eight run with a lateral shake on top, which is
+ * the actual dance a honeybee performs. Only while recording. */
+body[data-state="listening"] .pet-run {
+  animation: waggle-run 1.9s linear infinite;
+}
+
+body[data-state="listening"] .pet-shake {
+  animation: waggle-shake 1.9s linear infinite;
+}
+
+/* Anything other than recording: a slow idle drift. */
+body[data-state="processing"] .pet-shake,
+body[data-state="delivering"] .pet-shake {
+  animation: glide 2.4s ease-in-out infinite;
+}
+
+.pet-status {
+  max-width: 164px;
+  padding: 3px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: #fffdf7;
+  background: rgba(29, 27, 19, 0.72);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+  font: 11px/1.25 var(--samlu-mono);
+  text-align: center;
+  white-space: pre-line;
+}
+
+@keyframes waggle-run {
+  0% { transform: translate(-9px, 6px); }
+  45%, 46% { transform: translate(9px, -6px); }
+  70% { transform: translate(0, -9px); }
+  100% { transform: translate(-9px, 6px); }
+}
+
+@keyframes waggle-shake {
+  0%, 44%, 100% { transform: translateX(0); }
+  5% { transform: translateX(-2.4px); }
+  15% { transform: translateX(2.4px); }
+  25% { transform: translateX(-2.4px); }
+  35% { transform: translateX(2.4px); }
+}
+
+@keyframes glide {
+  0%, 100% { transform: translate(-7px, 4px); }
+  50% { transform: translate(7px, -4px); }
+}

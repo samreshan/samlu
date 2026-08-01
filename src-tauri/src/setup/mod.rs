@@ -2,6 +2,7 @@
 //! calls to detect, preview, and apply the Claude Code hook config.
 
 pub mod claude_hooks;
+pub mod codex_notify;
 
 use crate::state::AppState;
 use serde::Serialize;
@@ -15,7 +16,6 @@ pub struct HookStatus {
     pub installed: bool,
     pub server_running: bool,
     pub port: u16,
-    pub last_event: Option<String>,
 }
 
 fn resolve_path(global: bool, project_dir: Option<String>) -> Result<PathBuf, String> {
@@ -38,14 +38,13 @@ pub fn get_hook_status(
     let path = resolve_path(global, project_dir)?;
     let exists = path.exists();
     let value = claude_hooks::read_settings(&path)?;
-    let installed = claude_hooks::is_installed(&value, state.port);
+    let installed = claude_hooks::is_installed(&value, state.port, &state.token);
     Ok(HookStatus {
         path: path.to_string_lossy().to_string(),
         exists,
         installed,
         server_running: state.is_server_running(),
         port: state.port,
-        last_event: state.last_event_summary(),
     })
 }
 
@@ -60,11 +59,9 @@ pub fn preview_hook_merge(
     let path = resolve_path(global, project_dir)?;
     let existing = claude_hooks::read_settings(&path)?;
     if !existing.is_object() {
-        return Err(
-            "existing settings.json is not a JSON object at the top level".to_string(),
-        );
+        return Err("existing settings.json is not a JSON object at the top level".to_string());
     }
-    let merged = claude_hooks::merge_hooks(&existing, state.port, &state.token);
+    let merged = claude_hooks::merge_hooks(&existing, state.port, &state.token)?;
     serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())
 }
 
@@ -83,6 +80,7 @@ pub fn apply_hook_merge(
 /// The raw hooks JSON snippet, for the "copy it myself" fallback path.
 #[tauri::command]
 pub fn get_hook_snippet(state: State<'_, std::sync::Arc<AppState>>) -> String {
-    serde_json::to_string_pretty(&claude_hooks::snippet(state.port, &state.token))
+    claude_hooks::snippet(state.port, &state.token)
+        .and_then(|value| serde_json::to_string_pretty(&value).map_err(|error| error.to_string()))
         .unwrap_or_default()
 }

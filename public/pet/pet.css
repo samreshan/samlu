@@ -1,73 +1,6 @@
-/* Samlu mascot overlay — a small "thinking" widget: a thought bubble showing
- * agent status, floating above an animated mascot, inside a 250x270
- * transparent, frameless, always-on-top window (see PET_W/PET_H in
- * src-tauri/src/pet.rs). Adapted from the Kettles project (same author).
- *
- * Sprite frames are positioned in PIXELS (computed in pet.js), not percentages,
- * and the mascot animates continuously — both keep it reliably painted on the
- * Windows WebView2 compositor (percent + CSS filters drop frames there).
- */
-
-[hidden] {
-  display: none !important;
-}
-
-:root {
-  --font: "Urbanist", "Segoe UI", system-ui, sans-serif;
-
-  /* Dark palette (default — overlays read best dark). Mirrors globals.css. */
-  --surface: rgba(24, 25, 27, 0.94);
-  --surface-2: rgba(34, 36, 38, 0.96);
-  --border: rgba(255, 255, 255, 0.10);
-  --border-strong: rgba(255, 255, 255, 0.16);
-  --text: #f4f6f8;
-  --text-muted: #9aa1ac;
-
-  --accent: #3385ff;
-  --accent-glow: rgba(51, 133, 255, 0.45);
-  --running: #3385ff;
-  --paused: #f5b14c;
-  --finished: #10b981;
-  --idle: #8a8f98;
-
-  --shadow: none;
-  --radius: 16px;
-
-  /* Glassmorphism custom tokens */
-  --surface-glass: rgba(18, 19, 21, 0.78);
-  --border-glass: rgba(255, 255, 255, 0.12);
-  --text-highlight: rgba(255, 255, 255, 0.95);
-  --btn-bg: rgba(255, 255, 255, 0.06);
-  --btn-border: rgba(255, 255, 255, 0.08);
-  --btn-hover-bg: rgba(255, 255, 255, 0.12);
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    --surface: rgba(255, 255, 255, 0.96);
-    --surface-2: rgba(244, 247, 251, 0.98);
-    --border: rgba(11, 18, 32, 0.08);
-    --border-strong: rgba(11, 18, 32, 0.14);
-    --text: #0b1220;
-    --text-muted: #5b6675;
-
-    --accent: #1a74de;
-    --accent-glow: rgba(26, 116, 222, 0.32);
-    --running: #1a74de;
-
-    --shadow: none;
-
-    /* Glassmorphism custom tokens */
-    --surface-glass: rgba(255, 255, 255, 0.82);
-    --border-glass: rgba(11, 18, 32, 0.10);
-    --text-highlight: rgba(11, 18, 32, 0.92);
-    --btn-bg: rgba(11, 18, 32, 0.04);
-    --btn-border: rgba(11, 18, 32, 0.08);
-    --btn-hover-bg: rgba(11, 18, 32, 0.08);
-  }
-}
-
-* { box-sizing: border-box; }
+/* Samlu's pet overlay. The window is stretched over a whole display and is
+ * click-through except while the card is up, so everything here is positioned
+ * absolutely against the display's own coordinate space. */
 
 html,
 body {
@@ -76,393 +9,236 @@ body {
   margin: 0;
   overflow: hidden;
   background: transparent;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-body {
-  font-family: var(--font);
+  font-family: var(--samlu-font);
   -webkit-font-smoothing: antialiased;
 }
 
-.shell {
-  position: relative;
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-}
-
-.shell.dragging { cursor: grabbing; }
-
-/* ===================== mascot ============================================= */
-
-.mascot {
+/* Parked at the pointer; the bee and card position themselves around it. */
+.anchor {
   position: absolute;
-  bottom: 2px;
-  left: 50%;
-  margin-left: calc(var(--mascot-width, 118px) / -2);
-  width: var(--mascot-width, 118px);
-  height: var(--mascot-height, 128px);
-  background-repeat: no-repeat;
-  background-position: 0 0;       /* px offset, driven by pet.js */
-  cursor: grab;
-  z-index: 3;
-  transform: translateZ(0);       /* own compositor layer → always painted */
-  will-change: background-position;
-  transition: transform 0.16s ease;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
 }
 
-/* Soft ground shadow so the mascot doesn't float. Scales proportionally. */
-.mascot::after {
+.bee {
+  position: absolute;
+  left: -23px;
+  top: -23px;
+  width: 46px;
+  height: 46px;
+  will-change: transform;
+}
+
+.bee svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Pollen trail — two motes shed on a loop while the bee moves. */
+.pollen {
+  position: absolute;
+  animation: drift 0.95s linear infinite;
+}
+
+.pollen.a {
+  left: 20px;
+  top: 20px;
+  width: 6px;
+  height: 6px;
+  background: var(--brand);
+  opacity: 0.38;
+}
+
+.pollen.b {
+  left: 21px;
+  top: 21px;
+  width: 5px;
+  height: 5px;
+  background: #44390c;
+  opacity: 0.26;
+  animation-delay: 0.34s;
+}
+
+@keyframes drift {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+  22% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-16px, 17px);
+  }
+}
+
+.card {
+  position: absolute;
+  width: 320px;
+  padding: 14px 15px 16px;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  box-shadow: 0 22px 50px rgba(45, 36, 4, 0.24);
+  backdrop-filter: blur(28px) saturate(1.25);
+  -webkit-backdrop-filter: blur(28px) saturate(1.25);
+  animation: card-in 220ms var(--ease-out) both;
+}
+
+.card[data-leaving="true"] {
+  animation: card-out var(--duration-exit) var(--ease-in) both;
+}
+
+/* The same depleting hairline the Island uses. Both deliver the same class of
+ * event, so both have to say the same way that they will leave on their own. */
+.card-timeout {
+  position: absolute;
+  right: 15px;
+  bottom: 6px;
+  left: 15px;
+  height: 1px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--surface-muted);
+}
+
+.card-timeout::after {
   content: "";
-  position: absolute;
-  left: 50%;
-  bottom: 2%;
-  width: 55%;
-  height: 9%;
-  transform: translateX(-50%);
-  border-radius: 50%;
-  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.22), transparent 72%);
-  z-index: -1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--brand);
+  opacity: 0.55;
+  transform-origin: left;
+  animation: card-timeout var(--timeout, 9s) linear both;
+  animation-play-state: var(--timeout-play-state, running);
 }
 
-
-
-.mascot:hover { transform: none; }
-
-.mascot.pop { animation: pop 0.7s ease 2; }
-
-@keyframes pop {
-  0%, 100% { transform: translateZ(0) translateY(0) scale(1); }
-  45%      { transform: translateZ(0) translateY(-8px) scale(1.07); }
-}
-
-/* Flying kiss — spawned by pet.js on click for the companion mascot. */
-.kiss {
-  position: absolute;
-  left: 50%;
-  font-size: 22px;
-  line-height: 1;
-  pointer-events: none;
-  z-index: 5;
-  transform: translateX(-50%) translateY(0) scale(0.4);
-  animation: kissFloat 1.4s cubic-bezier(0.22, 0.7, 0.3, 1) forwards;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
-}
-
-@keyframes kissFloat {
-  0%   { opacity: 0;   transform: translateX(-50%) translateY(0) scale(0.4); }
-  18%  { opacity: 1;   transform: translateX(-50%) translateY(-8px) scale(1.05); }
-  100% { opacity: 0;   transform: translateX(calc(-50% + var(--kiss-drift, 0px))) translateY(-72px) scale(0.9); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .kiss { animation-duration: 0.6s; }
-}
-
-/* ===================== thought bubble ===================================== */
-
-.bubble {
-  position: absolute;
-  bottom: calc(var(--mascot-height, 128px) + 16px);
-  left: 50%;
-  width: 222px;
-  margin-left: -111px;
-  padding: 11px 13px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  color: var(--text);
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent),
-    var(--surface-glass);
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow), inset 0 1px 0px rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(16px) saturate(1.2);
-  -webkit-backdrop-filter: blur(16px) saturate(1.2);
-  transform-origin: 50% 100%;
-  transition: opacity 0.2s ease, transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.3);
-  z-index: 2;
-}
-
-/* Gentle bob while focusing — the "thinking" feel. */
-.shell[data-phase="running"] .bubble {
-  animation: bob 3.2s ease-in-out infinite;
-}
-
-@keyframes bob {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-2.5px); }
-}
-
-.shell[data-collapsed="true"] .bubble {
-  opacity: 0;
-  transform: scale(0.8) translateY(8px);
-  pointer-events: none;
-}
-
-.bubble-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.dot {
-  flex: none;
-  position: relative;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--idle);
-  transition: background 0.25s ease;
-}
-
-.dot::after {
-  display: none !important;
-}
-
-@keyframes pulse-halo {
-  0% { transform: scale(1); opacity: 0.5; }
-  100% { transform: scale(2.2); opacity: 0; }
-}
-
-.label {
-  flex: 1;
-  min-width: 0;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.collapse {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  margin: -4px -5px -4px 0;
-  padding: 0;
-  color: var(--text-muted);
-  background: transparent;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition: color 0.14s ease, background 0.14s ease, transform 0.14s ease;
-}
-
-.collapse:hover {
-  color: var(--text-highlight);
-  background: var(--btn-hover-bg);
-  transform: scale(1.08);
-}
-
-.chev {
-  width: 7px;
-  height: 7px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: translateY(2px) rotate(-135deg);   /* points up = collapse */
-}
-
-.chev.down { transform: translateY(-1px) rotate(45deg); }
-
-.timer {
-  margin: 1px 0 0;
-  font-size: 28px;
-  font-weight: 800;
-  line-height: 1.0;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-highlight);
-  transition: color 0.2s ease;
-}
-
-.task {
-  margin: 0;
-  overflow: hidden;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.25;
-  color: var(--text-highlight);
-  opacity: 0.85;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Samlu repurposes .timer as a wrapping event-summary line (project/agent
- * activity text), not a countdown clock — override the large tabular-nums
- * clock styling from the base .timer rule above. */
-.timer.detail-line {
-  margin-top: 2px;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: normal;
-  font-variant-numeric: normal;
-  line-height: 1.3;
-  color: var(--text-muted);
-  white-space: normal;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-}
-
-.timer.detail-line:empty {
+.card[data-persistent="true"] .card-timeout {
   display: none;
 }
 
-/* phase accents */
-.shell[data-phase="running"]  .dot   { background: var(--running); }
-.shell[data-phase="running"]  .timer { color: var(--running); }
-.shell[data-phase="paused"]    .dot   { background: var(--paused); }
-.shell[data-phase="paused"]    .timer { color: var(--paused); }
-.shell[data-phase="finished"]  .dot   { background: var(--finished); }
-.shell[data-phase="finished"]  .timer { color: var(--finished); }
-
-/* ===================== controls (play / pause / open) ===================== */
-
-.controls {
-  display: flex;
-  gap: 7px;
-  margin-top: 8px;
+@keyframes card-timeout {
+  to { transform: scaleX(0); }
 }
 
-.controls[hidden] { display: none; }
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
 
-.btn {
+@keyframes card-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+.card-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.card-meta strong {
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+}
+
+.mono {
+  font: 9.5px/1 var(--samlu-mono);
+  color: var(--ink-muted);
+}
+
+.grow {
   flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 10px;
-  font: inherit;
+}
+
+.card p {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-secondary);
+}
+
+.card-actions {
+  margin-top: 11px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.text-button,
+.primary-button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-highlight);
-  background: var(--btn-bg);
-  border: 1px solid var(--btn-border);
-  border-radius: 10px;
   cursor: pointer;
-  transition: background 0.14s ease, border-color 0.14s ease, transform 0.1s ease, box-shadow 0.14s ease;
+  font-family: inherit;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    transform var(--duration-instant) var(--ease-out);
 }
 
-.btn:hover {
-  background: var(--btn-hover-bg);
-  border-color: rgba(255, 255, 255, 0.15);
-  transform: translateY(-0.5px);
+.text-button {
+  background: transparent;
+  color: var(--ink-secondary);
 }
 
-.btn:active {
+.primary-button {
+  padding: 0 11px;
+  background: var(--brand);
+  color: var(--ink-on-accent);
+}
+
+.text-button:active,
+.primary-button:active {
   transform: scale(0.96);
 }
 
-.btn-primary {
-  color: #fff;
-  background: linear-gradient(135deg, #0088ff, #0055ee);
-  border-color: transparent;
-  box-shadow: 0 3px 8px rgba(0, 102, 255, 0.2);
-}
-.btn-primary:hover {
-  background: linear-gradient(135deg, #3399ff, #0066ff);
-  box-shadow: 0 4px 12px rgba(0, 102, 255, 0.35);
+[data-theme="dark"] .card {
+  box-shadow: var(--shadow-float);
 }
 
-.shell[data-phase="paused"]   .btn-primary {
-  background: linear-gradient(135deg, #f5b14c, #e09a30);
-  box-shadow: 0 3px 8px rgba(245, 177, 76, 0.2);
-}
-.shell[data-phase="paused"]   .btn-primary:hover {
-  background: linear-gradient(135deg, #f7c06d, #f5b14c);
-  box-shadow: 0 4px 12px rgba(245, 177, 76, 0.35);
-}
-
-.shell[data-phase="finished"] .btn-primary {
-  background: linear-gradient(135deg, #10b981, #059669);
-  box-shadow: 0 3px 8px rgba(16, 185, 129, 0.2);
-}
-.shell[data-phase="finished"] .btn-primary:hover {
-  background: linear-gradient(135deg, #34d399, #10b981);
-  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35);
-}
-
-/* play triangle / pause bars */
-.ico { display: inline-block; }
-#toggle[data-act="play"] .ico {
-  width: 0; height: 0;
-  border-left: 8px solid currentColor;
-  border-top: 5px solid transparent;
-  border-bottom: 5px solid transparent;
-}
-#toggle[data-act="pause"] .ico {
-  width: 9px; height: 10px;
-  border-left: 3px solid currentColor;
-  border-right: 3px solid currentColor;
-}
-
-/* ===================== thought trail ===================================== */
-
-.trail {
+[hidden] {
   display: none !important;
 }
 
-.trail span {
-  border-radius: 50%;
-  background: var(--surface-glass);
-  border: 1px solid var(--border-glass);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-.trail span:nth-child(1) { width: 10px; height: 10px; }
-.trail span:nth-child(2) { width: 7px;  height: 7px; }
-.trail span:nth-child(3) { width: 4px;  height: 4px; }
-
-.shell[data-phase="running"] .trail span {
-  animation: think 1.6s ease-in-out infinite;
-}
-.trail span:nth-child(2) { animation-delay: 0.18s !important; }
-.trail span:nth-child(3) { animation-delay: 0.36s !important; }
-
-@keyframes think {
-  0%, 100% { opacity: 0.5; transform: scale(0.9); }
-  50%      { opacity: 1;   transform: scale(1.1); }
-}
-
-.shell[data-collapsed="true"] .trail { opacity: 0; pointer-events: none; }
-
-/* ===================== reopen handle (collapsed) ========================== */
-
-.reopen {
-  position: absolute;
-  bottom: calc(var(--mascot-height, 128px) - 12px);
-  left: 50%;
-  margin-left: 22px;
-  display: none;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  color: #fff;
-  background: var(--idle);
-  border: 2px solid var(--surface);
-  border-radius: 50%;
-  box-shadow: none;
-  cursor: pointer;
-  z-index: 4;
-  transition: transform 0.14s ease;
-}
-
-.shell[data-collapsed="true"] .reopen { display: grid; }
-.reopen:hover { transform: scale(1.14); }
-
-.shell[data-phase="running"]  .reopen { background: var(--running); }
-.shell[data-phase="paused"]   .reopen { background: var(--paused); }
-.shell[data-phase="finished"] .reopen { background: var(--finished); }
-
+/* No flying when motion is reduced: the bee and card simply appear. */
 @media (prefers-reduced-motion: reduce) {
-  .bubble, .trail span, .mascot::before, .dot { animation: none !important; }
-  .bubble { transition: opacity 0.15s ease; }
+  .pollen {
+    display: none;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .text-button:hover {
+    color: var(--ink);
+    background: var(--surface-muted);
+  }
+
+  .primary-button:hover {
+    background: var(--brand-hover);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .card {
+    background: var(--surface-solid);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
