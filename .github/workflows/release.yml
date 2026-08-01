@@ -54,6 +54,8 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           if [ -n "${APPLE_CERTIFICATE}" ]; then
@@ -62,7 +64,10 @@ jobs:
             echo "signed=false" >> "$GITHUB_OUTPUT"
             echo "::notice::No APPLE_CERTIFICATE secret set - building an ad-hoc signed release."
           fi
-          if [ -n "${APPLE_CERTIFICATE}" ] && [ -n "${APPLE_ID}" ]; then
+          # All three notarization values must be present. A partial set would
+          # switch notarization on and then fail validating the missing one.
+          if [ -n "${APPLE_CERTIFICATE}" ] && [ -n "${APPLE_ID}" ] \
+            && [ -n "${APPLE_PASSWORD}" ] && [ -n "${APPLE_TEAM_ID}" ]; then
             echo "notarize=true" >> "$GITHUB_OUTPUT"
           else
             echo "notarize=false" >> "$GITHUB_OUTPUT"
@@ -113,11 +118,34 @@ jobs:
       - name: Build universal app bundle
         working-directory: src-tauri
         env:
-          APPLE_SIGNING_IDENTITY: ${{ steps.signing.outputs.signed == 'true' && secrets.APPLE_SIGNING_IDENTITY || '-' }}
-          APPLE_ID: ${{ steps.signing.outputs.notarize == 'true' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ steps.signing.outputs.notarize == 'true' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ steps.signing.outputs.notarize == 'true' && secrets.APPLE_TEAM_ID || '' }}
-        run: cargo tauri build --target "$TARGET" --bundles app
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          NOTARIZE: ${{ steps.signing.outputs.notarize }}
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ "$SIGNED" = "true" ] && [ -n "${SIGNING_IDENTITY:-}" ]; then
+            export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
+          else
+            export APPLE_SIGNING_IDENTITY="-"
+          fi
+
+          # The notarization credentials are exported only when they are real.
+          # Tauri decides to notarize on whether APPLE_ID is *defined*, not on
+          # whether it holds anything, so passing empty values through `env:`
+          # turns notarization on and then fails on the blank team ID.
+          if [ "$NOTARIZE" = "true" ]; then
+            export APPLE_ID="$NOTARY_APPLE_ID"
+            export APPLE_PASSWORD="$NOTARY_PASSWORD"
+            export APPLE_TEAM_ID="$NOTARY_TEAM_ID"
+            echo "Building signed and notarized."
+          else
+            echo "Building ad-hoc signed (no notarization credentials)."
+          fi
+
+          cargo tauri build --target "$TARGET" --bundles app
 
       - name: Package disk image and archive
         id: package
