@@ -2,6 +2,7 @@
 //! same `ProviderError`, so `cloud::with_retries` and the recovery flow treat
 //! them identically. Local engines only produce permanent errors.
 
+mod deepgram;
 mod openai_compat;
 
 use super::cloud::ProviderError;
@@ -76,6 +77,7 @@ pub fn effective_language(language: &str, model: &str) -> Option<String> {
 pub async fn transcribe(audio: &PreparedAudio, opts: &SttOptions) -> Result<String, ProviderError> {
     match opts.settings.engine {
         SttEngine::OpenaiCompat => openai_compat::transcribe(audio, opts).await,
+        SttEngine::Deepgram => deepgram::transcribe(audio, opts).await,
         other => Err(ProviderError::permanent(format!(
             "The {other:?} speech engine is not available in this build."
         ))),
