@@ -161,6 +161,7 @@ pub fn run() {
             let voice_hotkey = voice_config.hotkey();
             app.manage(voice_config);
             app.manage(Arc::new(voice::VoiceState::new()));
+            voice::engines_init();
             if let Err(error) = voice::voice_preview_init(app.handle()) {
                 log::error!("failed to create voice preview window: {error}");
             }

@@ -191,6 +191,10 @@ pub fn voice_preview_init(app: &AppHandle) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+pub fn engines_init() {
+    engines::whisper::init();
+}
+
 fn derive_shortcuts(base: &str) -> (String, String, String) {
     let mut parts: Vec<&str> = base
         .split('+')
@@ -497,6 +501,10 @@ fn voice_pressed(app: &AppHandle, mode: Mode) {
                 target: target.clone(),
             };
             drop(runtime);
+            let stt = app.state::<Arc<VoiceConfig>>().stt();
+            if stt.engine == config::SttEngine::WhisperCpp {
+                engines::whisper::preload(std::path::PathBuf::from(stt.model));
+            }
             show_status(
                 app,
                 &target,

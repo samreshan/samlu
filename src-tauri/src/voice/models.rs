@@ -1,4 +1,4 @@
-#![allow(dead_code)] // Removed once the whisper engine (Task 8) uses this module.
+#![allow(dead_code)] // Removed once the models UI (Task 9) uses this module.
 
 //! whisper.cpp models: the download catalog, file validation, and the merged
 //! list of downloaded, discovered, and hand-added models.

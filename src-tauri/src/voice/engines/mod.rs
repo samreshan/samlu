@@ -5,6 +5,7 @@
 mod deepgram;
 mod elevenlabs;
 mod openai_compat;
+pub mod whisper;
 
 use super::cloud::ProviderError;
 use super::config::{SttEngine, SttSettings};
@@ -15,8 +16,6 @@ use std::sync::OnceLock;
 /// local engines need, decoded at most once so a retry reuses them.
 pub struct PreparedAudio {
     pub wav: Vec<u8>,
-    // Temporary: first read by the local engines in later tasks.
-    #[allow(dead_code)]
     local: OnceLock<Result<Vec<f32>, String>>,
 }
 
@@ -28,8 +27,6 @@ impl PreparedAudio {
         }
     }
 
-    // Temporary: first called by the local engines in later tasks.
-    #[allow(dead_code)]
     pub fn local_samples(&self) -> Result<&[f32], String> {
         self.local
             .get_or_init(|| super::audio::to_local_samples(&self.wav))
@@ -80,6 +77,7 @@ pub async fn transcribe(audio: &PreparedAudio, opts: &SttOptions) -> Result<Stri
         SttEngine::OpenaiCompat => openai_compat::transcribe(audio, opts).await,
         SttEngine::Deepgram => deepgram::transcribe(audio, opts).await,
         SttEngine::Elevenlabs => elevenlabs::transcribe(audio, opts).await,
+        SttEngine::WhisperCpp => whisper::transcribe(audio, opts).await,
         other => Err(ProviderError::permanent(format!(
             "The {other:?} speech engine is not available in this build."
         ))),
