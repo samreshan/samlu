@@ -49,7 +49,9 @@ pub fn onboarding_state(
     serde_json::json!({
         "microphone": crate::macos::microphone_access().as_str(),
         "accessibility": crate::voice::get_voice_accessibility_status(),
-        "hasVoiceKey": voice.has_api_key("transcription"),
+        "voiceReady": voice.stt_ready(),
+        "appleAvailable": crate::voice::apple_available(),
+        "recommendedModel": crate::voice::recommended_model(),
         "voiceHotkey": voice.hotkey(),
         "delivery": config.delivery(),
         "completed": config.onboarding_completed(),

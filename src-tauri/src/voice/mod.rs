@@ -208,6 +208,14 @@ pub fn engines_shutdown() {
     engines::whisper::unload();
 }
 
+pub fn apple_available() -> bool {
+    engines::apple::available()
+}
+
+pub fn recommended_model() -> &'static str {
+    models::recommended_id()
+}
+
 fn derive_shortcuts(base: &str) -> (String, String, String) {
     let mut parts: Vec<&str> = base
         .split('+')

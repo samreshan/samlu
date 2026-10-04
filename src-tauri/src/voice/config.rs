@@ -251,6 +251,18 @@ impl VoiceConfig {
         self.save();
     }
 
+    /// Whether dictation can run without further setup.
+    pub fn stt_ready(&self) -> bool {
+        let stt = self.stt();
+        match stt.engine {
+            SttEngine::WhisperCpp => {
+                super::models::inspect(std::path::Path::new(&stt.model)).is_ok()
+            }
+            SttEngine::Apple => super::engines::apple::available(),
+            _ => self.has_api_key("transcription"),
+        }
+    }
+
     pub fn transformation_config(&self) -> EndpointConfig {
         let data = self.data.lock().unwrap();
         EndpointConfig {
@@ -630,6 +642,19 @@ mod tests {
             ..SttSettings::default()
         });
         assert_eq!(config.engine_label(), "whisper · large-v3-turbo-q5_0");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn local_whisper_is_ready_only_with_a_valid_model_file() {
+        let dir = std::env::temp_dir().join(format!("samlu-ready-{}", std::process::id()));
+        let config = VoiceConfig::load(&dir);
+        config.set_stt(SttSettings {
+            engine: SttEngine::WhisperCpp,
+            model: dir.join("missing.bin").to_string_lossy().into_owned(),
+            ..SttSettings::default()
+        });
+        assert!(!config.stt_ready());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

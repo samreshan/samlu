@@ -101,14 +101,30 @@
           </p>
 
           <div class="key-setup" id="key-setup" hidden>
-            <div class="eyebrow small">Transcription key</div>
-            <p class="note flush">
-              Dictation needs a Groq API key (or any OpenAI-compatible endpoint, configurable later
-              in Settings). It is stored in the macOS Keychain.
-            </p>
-            <div class="compound-field">
-              <input id="voice-key" type="password" autocomplete="off" spellcheck="false" placeholder="gsk_…" />
-              <button class="secondary-button" id="save-voice-key" type="button">Save key</button>
+            <div class="eyebrow small">Where should speech be transcribed?</div>
+            <div class="choice-row">
+              <button class="secondary-button" id="voice-local" type="button">On this Mac (private, no account)</button>
+              <button class="secondary-button" id="voice-cloud" type="button">Cloud provider</button>
+            </div>
+
+            <div id="voice-local-setup" hidden>
+              <p class="note flush" id="voice-local-note"></p>
+              <button class="primary-button" id="voice-local-go" type="button"></button>
+              <p class="note flush" id="voice-local-progress" aria-live="polite"></p>
+            </div>
+
+            <div id="voice-cloud-setup" hidden>
+              <div class="compound-field">
+                <select id="voice-cloud-provider">
+                  <option value="groq">Groq</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="deepgram">Deepgram</option>
+                  <option value="elevenlabs">ElevenLabs</option>
+                </select>
+                <input id="voice-key" type="password" autocomplete="off" spellcheck="false" placeholder="API key" />
+                <button class="secondary-button" id="save-voice-key" type="button">Save key</button>
+              </div>
+              <p class="note flush">Keys are stored in the macOS Keychain. Other providers are in Settings.</p>
             </div>
           </div>
 
