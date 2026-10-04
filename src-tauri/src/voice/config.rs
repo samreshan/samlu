@@ -350,6 +350,33 @@ impl VoiceConfig {
         self.save();
     }
 
+    /// Short description of the speech engine for history entries.
+    pub fn engine_label(&self) -> String {
+        let stt = self.stt();
+        let model_name = std::path::Path::new(&stt.model)
+            .file_stem()
+            .map(|stem| {
+                stem.to_string_lossy()
+                    .trim_start_matches("ggml-")
+                    .to_string()
+            })
+            .unwrap_or_default();
+        match stt.engine {
+            SttEngine::OpenaiCompat => {
+                let provider = match stt.preset.as_deref() {
+                    Some("groq") => "Groq",
+                    Some("openai") => "OpenAI",
+                    _ => "Custom",
+                };
+                format!("{provider} · {}", stt.model)
+            }
+            SttEngine::Deepgram => format!("Deepgram · {}", stt.model),
+            SttEngine::Elevenlabs => format!("ElevenLabs · {}", stt.model),
+            SttEngine::WhisperCpp => format!("whisper · {model_name}"),
+            SttEngine::Apple => "Apple · on-device".to_string(),
+        }
+    }
+
     pub fn added_models(&self) -> Vec<String> {
         self.data.lock().unwrap().added_models.clone()
     }
@@ -645,5 +672,18 @@ mod tests {
             keychain_service("custom", "https://API.Example.com/openai/v1"),
             "com.samlu.desktop.voice.custom.api_example_com_openai_v1"
         );
+    }
+
+    #[test]
+    fn engine_labels_name_the_engine_and_model() {
+        let dir = std::env::temp_dir().join(format!("samlu-label-{}", std::process::id()));
+        let config = VoiceConfig::load(&dir);
+        config.set_stt(SttSettings {
+            engine: SttEngine::WhisperCpp,
+            model: "/m/ggml-large-v3-turbo-q5_0.bin".into(),
+            ..SttSettings::default()
+        });
+        assert_eq!(config.engine_label(), "whisper · large-v3-turbo-q5_0");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

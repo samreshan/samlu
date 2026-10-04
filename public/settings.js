@@ -286,6 +286,56 @@ async function runButton(button, busyLabel, operation) {
   }
 }
 
+let voiceHistory = [];
+
+function renderVoiceHistory() {
+  const list = byId("voice-history-list");
+  const showRaw = byId("voice-history-raw").checked;
+  list.replaceChildren();
+  if (!voiceHistory.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = byId("voice-keep-history").checked
+      ? "No dictations yet."
+      : "History is off.";
+    list.append(empty);
+    return;
+  }
+  voiceHistory.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "history-row";
+    const body = document.createElement("div");
+    const text = document.createElement("p");
+    text.textContent = showRaw && entry.raw ? entry.raw : entry.text;
+    const meta = document.createElement("small");
+    const when = new Date(entry.timestamp).toLocaleString();
+    const outcome = entry.outcome.replace(/_/g, " ");
+    meta.textContent = `${when} · ${entry.mode} · ${entry.engine} · ${outcome}${entry.targetApp ? ` · ${entry.targetApp}` : ""}`;
+    body.append(text, meta);
+    const copy = document.createElement("button");
+    copy.className = "secondary-button";
+    copy.type = "button";
+    copy.textContent = "Copy";
+    copy.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(text.textContent);
+      showSaveState("voice-history-save-state", "Copied");
+    });
+    row.append(body, copy);
+    list.append(row);
+  });
+}
+
+async function loadVoiceHistory() {
+  try {
+    voiceHistory = await invoke("get_voice_history", {
+      query: byId("voice-history-search").value,
+    });
+    renderVoiceHistory();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
 async function loadVoiceSettings() {
   try {
     const [settings, microphoneStatus, accessibilityTrusted] = await Promise.all([
@@ -308,6 +358,8 @@ async function loadVoiceSettings() {
     byId("voice-prompt-delivery").value = settings.delivery?.prompt || "editable_preview";
     byId("voice-interface-sounds").checked = settings.interfaceSounds !== false;
     byId("voice-pet-capsule").checked = settings.petCapsule !== false;
+    byId("voice-keep-history").checked = settings.keepHistory !== false;
+    await loadVoiceHistory();
     renderMicrophonePermission(microphoneStatus);
     const accessibility = byId("voice-accessibility-status");
     accessibility.className = `status-pill ${accessibilityTrusted ? "good" : "warn"}`;
@@ -885,6 +937,26 @@ function bindEvents() {
     } catch (error) {
       toast(errorMessage(error), true);
       await loadVoiceSettings();
+    }
+  });
+  byId("voice-history-search").addEventListener("input", loadVoiceHistory);
+  byId("voice-history-raw").addEventListener("change", renderVoiceHistory);
+  byId("voice-keep-history").addEventListener("change", async (event) => {
+    try {
+      await invoke("set_voice_keep_history", { enabled: event.currentTarget.checked });
+      showSaveState("voice-history-save-state");
+      await loadVoiceHistory();
+    } catch (error) {
+      toast(errorMessage(error), true);
+    }
+  });
+  byId("clear-voice-history").addEventListener("click", async () => {
+    try {
+      await invoke("clear_voice_history");
+      showSaveState("voice-history-save-state", "Cleared");
+      await loadVoiceHistory();
+    } catch (error) {
+      toast(errorMessage(error), true);
     }
   });
 

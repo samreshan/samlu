@@ -161,6 +161,7 @@ pub fn run() {
             let voice_config = Arc::new(voice::config::VoiceConfig::load(&app_data_dir));
             let voice_hotkey = voice_config.hotkey();
             app.manage(voice_config);
+            app.manage(Arc::new(voice::history::VoiceHistory::load(&app_data_dir)));
             app.manage(Arc::new(voice::VoiceState::new()));
             app.manage(Arc::new(voice::Downloads::new()));
             voice::engines_init();
@@ -278,6 +279,9 @@ pub fn run() {
             voice::voice_recovery_retry,
             voice::voice_recovery_copy,
             voice::voice_recovery_preview,
+            voice::get_voice_history,
+            voice::clear_voice_history,
+            voice::set_voice_keep_history,
             voice::model_commands::get_voice_models,
             voice::model_commands::voice_download_model,
             voice::model_commands::voice_cancel_model_download,

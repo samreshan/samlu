@@ -6,6 +6,7 @@ mod cloud;
 pub mod config;
 mod download;
 mod engines;
+pub mod history;
 pub mod model_commands;
 mod models;
 mod paste;
@@ -122,6 +123,7 @@ pub struct VoiceState {
     /// its default bottom-center anchor. Reset per session so a one-off nudge
     /// never becomes a permanent, forgotten position.
     drag_offset: Mutex<(f64, f64)>,
+    last_history_id: Mutex<Option<String>>,
 }
 
 impl VoiceState {
@@ -134,6 +136,7 @@ impl VoiceState {
             presentation_ready: std::sync::atomic::AtomicBool::new(false),
             pending_presentation: Mutex::new(None),
             drag_offset: Mutex::new((0.0, 0.0)),
+            last_history_id: Mutex::new(None),
         }
     }
 
@@ -306,6 +309,7 @@ pub fn get_voice_settings(config: tauri::State<'_, Arc<VoiceConfig>>) -> serde_j
         },
         "interfaceSounds": config.interface_sounds(),
         "petCapsule": config.pet_capsule(),
+        "keepHistory": config.keep_history(),
     })
 }
 
@@ -716,8 +720,6 @@ async fn process_capture(app: AppHandle, mut capture: Capture, mode: Mode, targe
 /// Text ready for delivery, plus what history needs to know about it.
 struct Produced {
     text: String,
-    /// The transcript, when a transform changed it.
-    #[allow(dead_code)]
     raw: Option<String>,
     cleanup_skipped: bool,
 }
@@ -826,6 +828,7 @@ async fn deliver(app: AppHandle, produced: Produced, mode: Mode, target: TargetC
     // insertion landing in its own window.
     let _ = app.emit_to(crate::onboarding::LABEL, "voice://result", text.clone());
     let delivery = app.state::<Arc<VoiceConfig>>().delivery(mode);
+    record_history(&app, &produced, mode, &target, delivery);
     match delivery {
         DeliveryBehavior::EditablePreview => {
             let state = app.state::<Arc<VoiceState>>();
@@ -921,6 +924,7 @@ pub async fn voice_preview_accept(
     match inject_without_blocking(&app, &final_text, &target.app).await {
         Ok(()) => {
             *state.runtime.lock().unwrap() = Runtime::Idle;
+            update_last_history(&app, history::Outcome::Inserted);
             show_success(&app, &target, mode, "Inserted");
             Ok(())
         }
@@ -938,6 +942,7 @@ pub fn voice_preview_cancel(app: AppHandle, state: tauri::State<'_, Arc<VoiceSta
         std::mem::replace(&mut *runtime, Runtime::Idle)
     };
     if let Runtime::Previewing { text, .. } = previous {
+        update_last_history(&app, history::Outcome::PreviewCancelled);
         let _ = paste::copy(&app, &text);
     }
     hide_preview(&app);
@@ -1482,6 +1487,87 @@ fn mode_output_label(mode: Mode) -> &'static str {
         Mode::Normal => "Transcript",
         Mode::Summarize => "Summary",
         Mode::Prompt => "Detailed prompt",
+    }
+}
+
+fn history_mode(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Normal => "dictation",
+        Mode::Summarize => "summary",
+        Mode::Prompt => "prompt",
+    }
+}
+
+fn record_history(
+    app: &AppHandle,
+    produced: &Produced,
+    mode: Mode,
+    target: &TargetContext,
+    delivery: DeliveryBehavior,
+) {
+    let config = app.state::<Arc<VoiceConfig>>();
+    if !config.keep_history() {
+        return;
+    }
+    let outcome = if produced.cleanup_skipped {
+        history::Outcome::CleanupSkipped
+    } else {
+        match delivery {
+            DeliveryBehavior::InstantInsert => history::Outcome::Inserted,
+            DeliveryBehavior::CopyOnly => history::Outcome::Copied,
+            DeliveryBehavior::EditablePreview => history::Outcome::Previewing,
+        }
+    };
+    let entry = history::HistoryEntry::new(
+        history_mode(mode),
+        produced.text.clone(),
+        produced.raw.clone(),
+        config.engine_label(),
+        target.app.bundle_id.clone().unwrap_or_default(),
+        outcome,
+    );
+    *app.state::<Arc<VoiceState>>()
+        .last_history_id
+        .lock()
+        .unwrap() = Some(entry.id.clone());
+    app.state::<Arc<history::VoiceHistory>>().record(entry);
+}
+
+fn update_last_history(app: &AppHandle, outcome: history::Outcome) {
+    let id = app
+        .state::<Arc<VoiceState>>()
+        .last_history_id
+        .lock()
+        .unwrap()
+        .take();
+    if let Some(id) = id {
+        app.state::<Arc<history::VoiceHistory>>()
+            .set_outcome(&id, outcome);
+    }
+}
+
+#[tauri::command]
+pub fn get_voice_history(
+    query: String,
+    history: tauri::State<'_, Arc<history::VoiceHistory>>,
+) -> Vec<history::HistoryEntry> {
+    history.search(&query, history::CAPACITY)
+}
+
+#[tauri::command]
+pub fn clear_voice_history(history: tauri::State<'_, Arc<history::VoiceHistory>>) {
+    history.clear();
+}
+
+#[tauri::command]
+pub fn set_voice_keep_history(
+    enabled: bool,
+    config: tauri::State<'_, Arc<VoiceConfig>>,
+    history: tauri::State<'_, Arc<history::VoiceHistory>>,
+) {
+    config.set_keep_history(enabled);
+    if !enabled {
+        history.clear();
     }
 }
 
