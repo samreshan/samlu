@@ -262,6 +262,7 @@ pub fn run() {
             voice::set_voice_delivery,
             voice::set_voice_interface_sounds,
             voice::set_voice_pet_capsule,
+            voice::voice_apple_install,
             voice::get_voice_microphone_status,
             voice::request_voice_microphone,
             voice::open_voice_microphone_settings,

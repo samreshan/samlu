@@ -390,6 +390,13 @@ pub fn set_voice_pet_capsule(enabled: bool, config: tauri::State<'_, Arc<VoiceCo
 }
 
 #[tauri::command]
+pub async fn voice_apple_install(language: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || engines::apple::install(&language))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub fn get_voice_microphone_status() -> &'static str {
     crate::macos::microphone_access().as_str()
 }
