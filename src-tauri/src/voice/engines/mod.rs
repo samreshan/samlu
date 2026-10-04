@@ -3,6 +3,7 @@
 //! them identically. Local engines only produce permanent errors.
 
 mod deepgram;
+mod elevenlabs;
 mod openai_compat;
 
 use super::cloud::ProviderError;
@@ -78,6 +79,7 @@ pub async fn transcribe(audio: &PreparedAudio, opts: &SttOptions) -> Result<Stri
     match opts.settings.engine {
         SttEngine::OpenaiCompat => openai_compat::transcribe(audio, opts).await,
         SttEngine::Deepgram => deepgram::transcribe(audio, opts).await,
+        SttEngine::Elevenlabs => elevenlabs::transcribe(audio, opts).await,
         other => Err(ProviderError::permanent(format!(
             "The {other:?} speech engine is not available in this build."
         ))),
