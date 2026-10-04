@@ -8,8 +8,7 @@ or leave an agent running without monitoring a terminal.
 
 The current release has three surfaces:
 
-1. Global speech to text with normal dictation, summary, and detailed prompt
-   modes.
+1. Speech to text on this Mac (Whisper, Apple) or through a chosen cloud provider, with normal dictation, optional cleanup, summary, and detailed prompt modes.
 2. A developer-focused launcher for apps, projects, source files, calculator
    expressions, snippets, clipboard history, commands, and screen colors.
 3. Configurable native macOS notifications for agent input and completion.
@@ -17,7 +16,6 @@ The current release has three surfaces:
 ## Deferred work
 
 - Windows support
-- Local speech or text models
 - Full Spotlight replacement behavior
 - iPhone companion app
 - Hosted APNs relay
