@@ -4,11 +4,15 @@
 mod audio;
 mod cloud;
 pub mod config;
+mod download;
 mod engines;
+pub mod model_commands;
 mod models;
 mod paste;
 mod recorder;
 mod vocabulary;
+
+pub use download::Downloads;
 
 use config::{DeliveryBehavior, VoiceConfig};
 use serde::Serialize;

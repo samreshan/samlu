@@ -38,3 +38,5 @@ tauri-plugin-clipboard-manager = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 toml_edit = "0.22"
 whisper-rs = { version = "0.16", features = ["metal", "log_backend"] }
+sha2 = "0.10"
+tauri-plugin-dialog = "2"

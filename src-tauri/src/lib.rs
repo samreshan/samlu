@@ -104,6 +104,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
@@ -161,6 +162,7 @@ pub fn run() {
             let voice_hotkey = voice_config.hotkey();
             app.manage(voice_config);
             app.manage(Arc::new(voice::VoiceState::new()));
+            app.manage(Arc::new(voice::Downloads::new()));
             voice::engines_init();
             if let Err(error) = voice::voice_preview_init(app.handle()) {
                 log::error!("failed to create voice preview window: {error}");
@@ -275,6 +277,12 @@ pub fn run() {
             voice::voice_recovery_retry,
             voice::voice_recovery_copy,
             voice::voice_recovery_preview,
+            voice::model_commands::get_voice_models,
+            voice::model_commands::voice_download_model,
+            voice::model_commands::voice_cancel_model_download,
+            voice::model_commands::voice_add_model,
+            voice::model_commands::voice_remove_model,
+            voice::model_commands::voice_delete_model,
             setup::get_hook_status,
             setup::preview_hook_merge,
             setup::apply_hook_merge,
