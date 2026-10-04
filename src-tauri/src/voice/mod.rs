@@ -6,6 +6,7 @@ mod cloud;
 pub mod config;
 mod paste;
 mod recorder;
+mod vocabulary;
 
 use config::{DeliveryBehavior, VoiceConfig};
 use serde::Serialize;
