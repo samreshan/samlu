@@ -91,6 +91,13 @@
                   <option value="dark">Dark</option>
                 </select>
               </label>
+              <label class="setting-row">
+                <span><strong>When Settings closes</strong><small>Keep Samlu active in the menu bar for shortcuts and agent notifications, or quit it completely.</small></span>
+                <select id="close-behavior">
+                  <option value="background">Keep running in menu bar</option>
+                  <option value="quit">Quit Samlu</option>
+                </select>
+              </label>
             </div>
           </section>
 
@@ -160,32 +167,9 @@
             </div>
           </header>
 
-          <section class="integration">
-            <div class="integration-head">
-              <div class="integration-logo claude-logo" aria-hidden="true">C</div>
-              <div><h2>Claude Code</h2><p id="claude-path">~/.claude/settings.json</p></div>
-              <span class="status-pill" id="claude-pill">Checking</span>
-            </div>
-            <p>Installs HTTP hooks for permission prompts, stopped turns, and completed tasks. The local authentication token remains stable across app restarts.</p>
-            <div class="button-row">
-              <button class="primary-button" id="install-claude" type="button">Install hooks</button>
-              <button class="secondary-button" id="preview-claude" type="button">Preview changes</button>
-              <button class="secondary-button" id="copy-claude" type="button">Copy snippet</button>
-            </div>
-          </section>
-
-          <section class="integration">
-            <div class="integration-head">
-              <div class="integration-logo codex-logo" aria-hidden="true">X</div>
-              <div><h2>Codex CLI</h2><p id="codex-path">~/.codex/config.toml</p></div>
-              <span class="status-pill" id="codex-pill">Checking</span>
-            </div>
-            <p>Configures Codex's external notify command for completed agent turns while preserving your model, profile, sandbox, and project settings.</p>
-            <div class="button-row">
-              <button class="primary-button" id="install-codex" type="button">Install notifier</button>
-              <button class="secondary-button" id="preview-codex" type="button">Preview changes</button>
-            </div>
-          </section>
+          <div id="agent-integrations" aria-live="polite">
+            <div class="empty-state">Checking supported agent integrations…</div>
+          </div>
 
           <section class="code-preview" id="agent-preview" hidden>
             <div class="section-heading">

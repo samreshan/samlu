@@ -85,6 +85,22 @@ enum Runtime {
         text: String,
         mode: Mode,
     },
+    /// Processing failed after audio was captured. The capture is held until
+    /// the user retries or discards it, so a provider failure never costs
+    /// them what they said.
+    Failed {
+        target: TargetContext,
+        capture: Capture,
+        mode: Mode,
+    },
+}
+
+/// One dictation's audio, kept until it has produced text.
+struct Capture {
+    wav: Vec<u8>,
+    /// Set once transcription succeeds, so a retry after a failed transform
+    /// does not pay for (or risk) transcribing again.
+    transcript: Option<String>,
 }
 
 pub struct VoiceState {
@@ -462,7 +478,12 @@ fn voice_pressed(app: &AppHandle, mode: Mode) {
     }
     let mut runtime = state.runtime.lock().unwrap();
     match &*runtime {
-        Runtime::Idle => {
+        // A new dictation replaces a failed one: blocking the shortcut until
+        // the failure is dismissed would read as voice being broken.
+        Runtime::Idle | Runtime::Failed { .. } => {
+            if matches!(&*runtime, Runtime::Failed { .. }) {
+                log::info!("[voice] discarding failed dictation for a new recording");
+            }
             let pressed_at = Instant::now();
             let target = capture_target(app);
             *runtime = Runtime::Starting {
@@ -617,99 +638,23 @@ fn spawn_processing(
         false,
     );
     tauri::async_runtime::spawn(async move {
-        match process(&app, recording, mode, &target).await {
-            Ok(text) => {
-                // The setup guide shows the transcript itself rather than
-                // relying on insertion landing in its own window.
-                let _ = app.emit_to(crate::onboarding::LABEL, "voice://result", text.clone());
-                let delivery = app.state::<Arc<VoiceConfig>>().delivery(mode);
-                match delivery {
-                    DeliveryBehavior::EditablePreview => {
-                        let state = app.state::<Arc<VoiceState>>();
-                        *state.runtime.lock().unwrap() = Runtime::Previewing {
-                            target: target.clone(),
-                            text: text.clone(),
-                            mode,
-                        };
-                        show_status(
-                            &app,
-                            &target,
-                            "preview",
-                            mode_output_label(mode),
-                            "Review before inserting",
-                            &text,
-                            true,
-                        );
-                    }
-                    DeliveryBehavior::CopyOnly => match paste::copy(&app, &text) {
-                        Ok(()) => {
-                            *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
-                            show_success(&app, &target, mode, "Copied");
-                        }
-                        Err(error) => show_recovery(&app, target, text, error, mode),
-                    },
-                    DeliveryBehavior::InstantInsert => {
-                        // Avoid an animation and app switch that cannot
-                        // succeed. Preserve the result, explain the fallback,
-                        // then immediately release the runtime for another
-                        // dictation.
-                        if !paste::accessibility_trusted() {
-                            match paste::copy(&app, &text) {
-                                Ok(()) => show_clipboard_fallback(&app, &target, mode),
-                                Err(error) => show_recovery(&app, target, text, error, mode),
-                            }
-                            return;
-                        }
-                        // Samlu ferries the result to the pointer before it
-                        // lands. Short by design — this delay sits between
-                        // releasing the hotkey and seeing the text.
-                        if app.state::<Arc<VoiceConfig>>().pet_capsule() {
-                            show_status(
-                                &app,
-                                &target,
-                                "delivering",
-                                mode_label(mode),
-                                "Inserting",
-                                "",
-                                false,
-                            );
-                            if crate::pet::carry(&app) {
-                                // The travelling pet is now the presentation;
-                                // avoid leaving a duplicate capsule behind.
-                                hide_preview(&app);
-                                let _ = tauri::async_runtime::spawn_blocking(|| {
-                                    std::thread::sleep(Duration::from_millis(
-                                        crate::pet::CARRY_DURATION_MS,
-                                    ));
-                                })
-                                .await;
-                            }
-                        }
-                        match inject_without_blocking(&app, &text, &target.app).await {
-                            Ok(()) => {
-                                *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() =
-                                    Runtime::Idle;
-                                show_success(&app, &target, mode, "Inserted");
-                            }
-                            Err(error) => handle_delivery_error(&app, target, text, error, mode),
-                        }
-                    }
-                }
+        match finish_recording(recording).await {
+            Ok(wav) => {
+                let capture = Capture {
+                    wav,
+                    transcript: None,
+                };
+                process_capture(app, capture, mode, target).await;
             }
             Err(error) => {
                 let _ = app.emit_to(crate::onboarding::LABEL, "voice://error", error.clone());
-                fail(&app, &error)
+                fail(&app, &error);
             }
         }
     });
 }
 
-async fn process(
-    app: &AppHandle,
-    recording: recorder::Recording,
-    mode: Mode,
-    target: &TargetContext,
-) -> Result<String, String> {
+async fn finish_recording(recording: recorder::Recording) -> Result<Vec<u8>, String> {
     let wav = tauri::async_runtime::spawn_blocking(move || recording.stop())
         .await
         .map_err(|error| format!("recording task failed: {error}"))??;
@@ -719,30 +664,152 @@ async fn process(
     if wav.len() > 24 * 1024 * 1024 {
         return Err("Recording is too large for the configured provider.".to_string());
     }
+    Ok(wav)
+}
+
+/// Turns a capture into text and delivers it. Any failure from here on keeps
+/// the capture so the user can retry it.
+async fn process_capture(app: AppHandle, mut capture: Capture, mode: Mode, target: TargetContext) {
+    match produce_text(&app, &mut capture, mode, &target).await {
+        Ok(text) if text.trim().is_empty() => {
+            let error = "The provider returned an empty transcript.".to_string();
+            let _ = app.emit_to(crate::onboarding::LABEL, "voice://error", error.clone());
+            fail(&app, &error);
+        }
+        Ok(text) => deliver(app, text, mode, target).await,
+        Err(error) => {
+            let _ = app.emit_to(crate::onboarding::LABEL, "voice://error", error.clone());
+            show_failed(&app, target, capture, mode, &error);
+        }
+    }
+}
+
+async fn produce_text(
+    app: &AppHandle,
+    capture: &mut Capture,
+    mode: Mode,
+    target: &TargetContext,
+) -> Result<String, String> {
     let config = app.state::<Arc<VoiceConfig>>();
-    let transcription = config.transcription_config();
-    let transcription_key = config.api_key("transcription")?;
-    let transcript = cloud::transcribe(wav, &transcription, &transcription_key).await?;
-    let output = if mode == Mode::Normal {
-        transcript
-    } else {
+    let show_retry = |attempt: u32| {
         show_status(
             app,
             target,
             "processing",
             mode_label(mode),
-            "Structuring",
+            &format!("Retrying ({attempt}/{})", cloud::MAX_ATTEMPTS),
             "",
             false,
         );
-        let transformation = config.transformation_config();
-        let transformation_key = config.api_key("transformation")?;
-        cloud::transform(&transcript, mode, &transformation, &transformation_key).await?
     };
-    if output.trim().is_empty() {
-        Err("The provider returned an empty transcript.".to_string())
-    } else {
-        Ok(output)
+    let transcript = match &capture.transcript {
+        Some(transcript) => transcript.clone(),
+        None => {
+            let transcription = config.transcription_config();
+            let transcription_key = config.api_key("transcription")?;
+            let wav = &capture.wav;
+            let transcript = cloud::with_retries(
+                || cloud::transcribe(wav.clone(), &transcription, &transcription_key),
+                show_retry,
+            )
+            .await?;
+            capture.transcript = Some(transcript.clone());
+            transcript
+        }
+    };
+    if mode == Mode::Normal || transcript.trim().is_empty() {
+        return Ok(transcript);
+    }
+    show_status(
+        app,
+        target,
+        "processing",
+        mode_label(mode),
+        "Structuring",
+        "",
+        false,
+    );
+    let transformation = config.transformation_config();
+    let transformation_key = config.api_key("transformation")?;
+    cloud::with_retries(
+        || cloud::transform(&transcript, mode, &transformation, &transformation_key),
+        show_retry,
+    )
+    .await
+}
+
+async fn deliver(app: AppHandle, text: String, mode: Mode, target: TargetContext) {
+    // The setup guide shows the transcript itself rather than relying on
+    // insertion landing in its own window.
+    let _ = app.emit_to(crate::onboarding::LABEL, "voice://result", text.clone());
+    let delivery = app.state::<Arc<VoiceConfig>>().delivery(mode);
+    match delivery {
+        DeliveryBehavior::EditablePreview => {
+            let state = app.state::<Arc<VoiceState>>();
+            *state.runtime.lock().unwrap() = Runtime::Previewing {
+                target: target.clone(),
+                text: text.clone(),
+                mode,
+            };
+            show_status(
+                &app,
+                &target,
+                "preview",
+                mode_output_label(mode),
+                "Review before inserting",
+                &text,
+                true,
+            );
+        }
+        DeliveryBehavior::CopyOnly => match paste::copy(&app, &text) {
+            Ok(()) => {
+                *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
+                show_success(&app, &target, mode, "Copied");
+            }
+            Err(error) => show_recovery(&app, target, text, error, mode),
+        },
+        DeliveryBehavior::InstantInsert => {
+            // Avoid an animation and app switch that cannot succeed. Preserve
+            // the result, explain the fallback, then immediately release the
+            // runtime for another dictation.
+            if !paste::accessibility_trusted() {
+                match paste::copy(&app, &text) {
+                    Ok(()) => show_clipboard_fallback(&app, &target, mode),
+                    Err(error) => show_recovery(&app, target, text, error, mode),
+                }
+                return;
+            }
+            // Samlu ferries the result to the pointer before it lands. Short
+            // by design — this delay sits between releasing the hotkey and
+            // seeing the text.
+            if app.state::<Arc<VoiceConfig>>().pet_capsule() {
+                show_status(
+                    &app,
+                    &target,
+                    "delivering",
+                    mode_label(mode),
+                    "Inserting",
+                    "",
+                    false,
+                );
+                if crate::pet::carry(&app) {
+                    // The travelling pet is now the presentation; avoid
+                    // leaving a duplicate capsule behind.
+                    hide_preview(&app);
+                    let _ = tauri::async_runtime::spawn_blocking(|| {
+                        std::thread::sleep(Duration::from_millis(crate::pet::CARRY_DURATION_MS));
+                    })
+                    .await;
+                }
+            }
+            match inject_without_blocking(&app, &text, &target.app).await {
+                Ok(()) => {
+                    *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
+                    show_success(&app, &target, mode, "Inserted");
+                }
+                Err(error) => handle_delivery_error(&app, target, text, error, mode),
+            }
+        }
     }
 }
 
@@ -833,9 +900,34 @@ pub fn voice_cancel(app: AppHandle) {
             *state.runtime.lock().unwrap() = Runtime::Processing;
             return;
         }
-        Runtime::Idle | Runtime::Starting { .. } => {}
+        Runtime::Idle | Runtime::Starting { .. } | Runtime::Failed { .. } => {}
     }
     hide_preview(&app);
+}
+
+/// Takes the text a recovery action can work with: an undelivered result, or
+/// the transcript of a dictation whose transform failed.
+fn take_recoverable_text(
+    state: &VoiceState,
+    next: Runtime,
+) -> Result<(TargetContext, String, Mode), String> {
+    let mut runtime = state.runtime.lock().unwrap();
+    match std::mem::replace(&mut *runtime, next) {
+        Runtime::Recovering { target, text, mode } => Ok((target, text, mode)),
+        Runtime::Failed {
+            target,
+            capture:
+                Capture {
+                    transcript: Some(text),
+                    ..
+                },
+            mode,
+        } => Ok((target, text, mode)),
+        other => {
+            *runtime = other;
+            Err("No voice result is waiting for delivery.".to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -845,9 +937,34 @@ pub async fn voice_recovery_retry(app: AppHandle) -> Result<(), String> {
         let mut runtime = state.runtime.lock().unwrap();
         std::mem::replace(&mut *runtime, Runtime::Processing)
     };
-    let Runtime::Recovering { target, text, mode } = previous else {
-        *state.runtime.lock().unwrap() = previous;
-        return Err("No voice result is waiting for delivery.".to_string());
+    let (target, text, mode) = match previous {
+        Runtime::Recovering { target, text, mode } => (target, text, mode),
+        Runtime::Failed {
+            target,
+            capture,
+            mode,
+        } => {
+            let detail = if capture.transcript.is_some() {
+                "Structuring"
+            } else {
+                "Transcribing"
+            };
+            show_status(
+                &app,
+                &target,
+                "processing",
+                mode_label(mode),
+                detail,
+                "",
+                false,
+            );
+            process_capture(app.clone(), capture, mode, target).await;
+            return Ok(());
+        }
+        other => {
+            *state.runtime.lock().unwrap() = other;
+            return Err("No voice result is waiting for delivery.".to_string());
+        }
     };
 
     show_status(
@@ -875,17 +992,7 @@ pub async fn voice_recovery_retry(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn voice_recovery_copy(app: AppHandle) -> Result<(), String> {
     let state = app.state::<Arc<VoiceState>>();
-    let previous = {
-        let mut runtime = state.runtime.lock().unwrap();
-        std::mem::replace(&mut *runtime, Runtime::Idle)
-    };
-    let Runtime::Recovering {
-        target, text, mode, ..
-    } = previous
-    else {
-        *state.runtime.lock().unwrap() = previous;
-        return Err("No voice result is waiting for delivery.".to_string());
-    };
+    let (target, text, mode) = take_recoverable_text(&state, Runtime::Idle)?;
     paste::copy(&app, &text)?;
     show_success(&app, &target, mode, "Copied");
     Ok(())
@@ -894,17 +1001,7 @@ pub fn voice_recovery_copy(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn voice_recovery_preview(app: AppHandle) -> Result<(), String> {
     let state = app.state::<Arc<VoiceState>>();
-    let previous = {
-        let mut runtime = state.runtime.lock().unwrap();
-        std::mem::replace(&mut *runtime, Runtime::Processing)
-    };
-    let Runtime::Recovering {
-        target, text, mode, ..
-    } = previous
-    else {
-        *state.runtime.lock().unwrap() = previous;
-        return Err("No voice result is waiting for delivery.".to_string());
-    };
+    let (target, text, mode) = take_recoverable_text(&state, Runtime::Processing)?;
     *state.runtime.lock().unwrap() = Runtime::Previewing {
         target: target.clone(),
         text: text.clone(),
@@ -962,8 +1059,9 @@ fn show_status(
     if let Some(window) = app.get_webview_window(PREVIEW_LABEL) {
         let already_visible = window.is_visible().unwrap_or(false);
         position_window(&window, target, width, height);
-        let interactive =
-            editable || state_name == "recovery" || (state_name == "listening" && !pet);
+        let interactive = editable
+            || matches!(state_name, "recovery" | "failed")
+            || (state_name == "listening" && !pet);
         crate::macos::set_ignores_mouse_events(&window, !interactive);
         // Re-presenting orders the window out and back in, which reads as a
         // flicker mid-session. Only do it for a genuine arrival; while the
@@ -1123,6 +1221,25 @@ fn show_recovery(app: &AppHandle, target: TargetContext, text: String, error: St
     );
 }
 
+/// Unlike `fail`, this stays up until the user acts: auto-dismissing would
+/// silently drop the recording it is holding.
+fn show_failed(app: &AppHandle, target: TargetContext, capture: Capture, mode: Mode, error: &str) {
+    log::warn!("[voice] processing failed; keeping the recording for retry: {error}");
+    let title = if capture.transcript.is_some() {
+        "Transcript is safe"
+    } else {
+        "Recording is safe"
+    };
+    // The transcript tells the presentation whether Copy and Preview apply.
+    let transcript = capture.transcript.clone().unwrap_or_default();
+    *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Failed {
+        target: target.clone(),
+        capture,
+        mode,
+    };
+    show_status(app, &target, "failed", title, error, &transcript, false);
+}
+
 fn fail(app: &AppHandle, error: &str) {
     log::error!("[voice] {error}");
     if let Some(state) = app.try_state::<Arc<VoiceState>>() {
@@ -1166,7 +1283,7 @@ fn capture_target(app: &AppHandle) -> TargetContext {
 fn state_size(state_name: &str, pet: bool) -> (f64, f64) {
     match state_name {
         "preview" => (EDITOR_WIDTH, EDITOR_HEIGHT),
-        "recovery" => (RECOVERY_WIDTH, RECOVERY_HEIGHT),
+        "recovery" | "failed" => (RECOVERY_WIDTH, RECOVERY_HEIGHT),
         "copied" if pet => (PET_FALLBACK_WIDTH, PET_FALLBACK_HEIGHT),
         "listening" | "processing" | "delivering" if pet => (PET_CAPSULE_WIDTH, PET_CAPSULE_HEIGHT),
         _ => (CAPSULE_WIDTH, CAPSULE_HEIGHT),
@@ -1188,10 +1305,9 @@ fn position_window(window: &tauri::WebviewWindow, target: &TargetContext, width:
         .map(|state| *state.drag_offset.lock().unwrap())
         .unwrap_or((0.0, 0.0));
     let x = display.x as f64 + (display.width as f64 - physical_width) / 2.0 + offset_x;
-    let y = display.y as f64 + display.height as f64
-        - physical_height
-        - BOTTOM_MARGIN * display.scale
-        + offset_y;
+    let y =
+        display.y as f64 + display.height as f64 - physical_height - BOTTOM_MARGIN * display.scale
+            + offset_y;
     let (x, y) = clamp_to_display(
         x,
         y,

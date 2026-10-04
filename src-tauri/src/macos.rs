@@ -23,6 +23,7 @@ extern "C" {
     fn samlu_order_front_without_activating(window: *mut std::ffi::c_void);
     fn samlu_set_ignores_mouse_events(window: *mut std::ffi::c_void, ignores: bool);
     fn samlu_set_background_mode(background_mode: bool);
+    fn samlu_present_application_window(window: *mut std::ffi::c_void) -> bool;
     fn samlu_microphone_authorization() -> i32;
     fn samlu_request_microphone_access();
     fn samlu_request_accessibility_access() -> bool;
@@ -180,4 +181,13 @@ pub fn order_front_without_activating(window: &WebviewWindow) {
 
 pub fn set_background_mode(background_mode: bool) {
     unsafe { samlu_set_background_mode(background_mode) };
+}
+
+/// Presents a normal, focusable application window without racing AppKit's
+/// activation-policy transition against Tauri's asynchronous window commands.
+pub fn present_application_window(window: &WebviewWindow) -> bool {
+    match window.ns_window() {
+        Ok(pointer) => unsafe { samlu_present_application_window(pointer) },
+        Err(_) => false,
+    }
 }

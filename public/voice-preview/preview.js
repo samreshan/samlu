@@ -11,6 +11,10 @@ const el = {
   recovery: document.getElementById("recovery"),
   recoveryTitle: document.getElementById("recovery-title"),
   recoveryDetail: document.getElementById("recovery-detail"),
+  recoverySymbol: document.getElementById("recovery-symbol"),
+  recoveryDiscard: document.getElementById("recovery-discard"),
+  recoveryCopy: document.getElementById("recovery-copy"),
+  recoveryPreview: document.getElementById("recovery-preview"),
   editor: document.getElementById("editor"),
   editorKicker: document.getElementById("editor-kicker"),
   editorTitle: document.getElementById("editor-title"),
@@ -111,7 +115,7 @@ function playStateSound(state, enabled) {
     setTimeout(() => tone(760, 0.11), 65);
   }
   if (state === "copied") tone(460, 0.09, 0.018);
-  if (state === "error" || state === "recovery") tone(280, 0.14, 0.02);
+  if (state === "error" || state === "recovery" || state === "failed") tone(280, 0.14, 0.02);
 }
 
 /* ------------------------------------------------------------------ surface */
@@ -163,9 +167,18 @@ function render(payload) {
   el.detail.textContent = payload.detail || "";
   if (pet) el.petStatus.textContent = payload.detail || PET_STATUS[state] || "";
 
-  if (state === "recovery") {
+  if (state === "recovery" || state === "failed") {
+    // A failed dictation can always be retried, but only has text to copy
+    // or edit once transcription itself succeeded.
+    const failed = state === "failed";
+    const hasText = !failed || Boolean(payload.text);
     el.recoveryTitle.textContent = payload.title || "Result is safe";
     el.recoveryDetail.textContent = payload.detail || "Samlu could not insert into the original field.";
+    el.recoveryDetail.title = payload.detail || "";
+    el.recoverySymbol.textContent = failed ? "!" : "↗";
+    el.recoveryDiscard.hidden = !failed;
+    el.recoveryCopy.hidden = !hasText;
+    el.recoveryPreview.hidden = !hasText;
   }
 
   if (state === "preview") {
@@ -175,7 +188,7 @@ function render(payload) {
   }
 
   if (pet) setActiveLayer(el.petCapsule);
-  else if (state === "recovery") setActiveLayer(el.recovery);
+  else if (state === "recovery" || state === "failed") setActiveLayer(el.recovery);
   else if (state === "preview") setActiveLayer(el.editor);
   else setActiveLayer(el.capsule);
 
@@ -326,6 +339,10 @@ document.getElementById("cancel-preview").addEventListener("click", () => {
 
 document.getElementById("recovery-retry").addEventListener("click", () => {
   invoke("voice_recovery_retry").catch(console.error);
+});
+
+el.recoveryDiscard.addEventListener("click", () => {
+  invoke("voice_cancel").catch(console.error);
 });
 
 document.getElementById("recovery-copy").addEventListener("click", () => {

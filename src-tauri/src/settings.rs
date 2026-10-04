@@ -21,6 +21,9 @@ struct Data {
     delivery: Option<String>,
     clipboard_history_enabled: bool,
     onboarding_completed: bool,
+    /// `background` keeps shortcuts and agent notifications active after
+    /// Settings closes; `quit` exits the process instead.
+    close_behavior: String,
 }
 
 pub const DELIVERY_PET: &str = "pet";
@@ -50,6 +53,7 @@ impl Default for Data {
             delivery: None,
             clipboard_history_enabled: false,
             onboarding_completed: false,
+            close_behavior: "background".to_string(),
         }
     }
 }
@@ -64,6 +68,7 @@ pub struct NotificationPreferences {
     pub include_agent_summary: bool,
     pub delivery: String,
     pub clipboard_history_enabled: bool,
+    pub close_behavior: String,
 }
 
 pub struct AppConfig {
@@ -126,6 +131,14 @@ impl AppConfig {
         self.data.lock().unwrap().onboarding_completed
     }
 
+    pub fn close_behavior(&self) -> String {
+        let value = self.data.lock().unwrap().close_behavior.clone();
+        match value.as_str() {
+            "quit" => value,
+            _ => "background".to_string(),
+        }
+    }
+
     pub fn set_onboarding_completed(&self, completed: bool) {
         self.data.lock().unwrap().onboarding_completed = completed;
         self.save();
@@ -172,6 +185,10 @@ impl AppConfig {
                 .unwrap_or(DELIVERY_ISLAND)
                 .to_string(),
             clipboard_history_enabled: data.clipboard_history_enabled,
+            close_behavior: match data.close_behavior.as_str() {
+                "quit" => "quit".to_string(),
+                _ => "background".to_string(),
+            },
         }
     }
 
@@ -188,6 +205,10 @@ impl AppConfig {
                 data.show_agent_island = delivery == DELIVERY_ISLAND;
             }
             data.clipboard_history_enabled = preferences.clipboard_history_enabled;
+            data.close_behavior = match preferences.close_behavior.as_str() {
+                "quit" => "quit".to_string(),
+                _ => "background".to_string(),
+            };
         }
         self.save();
     }

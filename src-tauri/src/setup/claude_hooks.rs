@@ -170,6 +170,50 @@ pub fn apply(path: &Path, app_data_dir: &Path, port: u16, token: &str) -> Result
     Ok(())
 }
 
+/// Removes only Samlu's localhost hooks while retaining every unrelated hook
+/// and matcher in the user's Claude configuration.
+pub fn uninstall(path: &Path, app_data_dir: &Path) -> Result<(), String> {
+    let existing = read_settings(path)?;
+    if !existing.is_object() {
+        return Err("existing settings.json is not a JSON object at the top level".to_string());
+    }
+    if path.exists() {
+        let backup = backup_path(app_data_dir, path);
+        if let Some(parent) = backup.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        fs::copy(path, backup).map_err(|error| error.to_string())?;
+    }
+    let mut updated = existing;
+    let root = updated
+        .as_object_mut()
+        .expect("just ensured configuration is an object");
+    if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
+        for event in ["Notification", "Stop", "TaskCompleted"] {
+            if let Some(entries) = hooks.get_mut(event).and_then(Value::as_array_mut) {
+                for entry in entries.iter_mut() {
+                    if let Some(handlers) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
+                        handlers.retain(|handler| {
+                            !handler
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .is_some_and(|url| url.contains("/hooks/claude-code/"))
+                        });
+                    }
+                }
+                entries.retain(|entry| {
+                    entry
+                        .get("hooks")
+                        .and_then(Value::as_array)
+                        .map_or(true, |handlers| !handlers.is_empty())
+                });
+            }
+        }
+    }
+    let pretty = serde_json::to_string_pretty(&updated).map_err(|error| error.to_string())?;
+    fs::write(path, pretty).map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{is_installed, merge_hooks};

@@ -5,6 +5,7 @@ const byId = (id) => document.getElementById(id);
 let notificationPreferences = null;
 let snippets = [];
 let projectSettings = { roots: [], excludedPaths: [], projectCount: 0 };
+let agentIntegrations = [];
 let toastTimer = null;
 let saveTimer = null;
 const saveStateTimers = {};
@@ -61,12 +62,6 @@ function setDot(id, state) {
   byId(id).className = `status-dot ${state || ""}`.trim();
 }
 
-function setPill(id, installed, pending = false) {
-  const pill = byId(id);
-  pill.className = `status-pill ${pending ? "" : installed ? "good" : "warn"}`.trim();
-  pill.textContent = pending ? "Checking" : installed ? "Connected" : "Setup needed";
-}
-
 function selectTab(name) {
   document.querySelectorAll(".nav-item").forEach((button) => {
     const active = button.dataset.tab === name;
@@ -86,34 +81,87 @@ function selectTab(name) {
 }
 
 async function loadAgentStatus() {
-  setPill("claude-pill", false, true);
-  setPill("codex-pill", false, true);
-  const [claude, codex] = await Promise.allSettled([
-    invoke("get_hook_status", { global: true, projectDir: null }),
-    invoke("get_codex_status"),
-  ]);
-
-  if (claude.status === "fulfilled") {
-    byId("claude-path").textContent = claude.value.path;
-    setPill("claude-pill", claude.value.installed);
-    setDot("claude-dot", claude.value.installed ? "good" : "warn");
-    byId("claude-detail").textContent = claude.value.installed ? "Connected" : "Setup needed";
-  } else {
-    setPill("claude-pill", false);
-    setDot("claude-dot", "warn");
-    byId("claude-detail").textContent = "Status unavailable";
+  try {
+    agentIntegrations = await invoke("get_agent_integrations");
+    renderAgentIntegrations();
+    ["claude-code", "codex"].forEach((id) => {
+      const integration = agentIntegrations.find((item) => item.id === id);
+      const prefix = id === "claude-code" ? "claude" : "codex";
+      const connected = Boolean(integration?.installed);
+      setDot(`${prefix}-dot`, connected ? "good" : "warn");
+      byId(`${prefix}-detail`).textContent = integration?.error
+        ? "Status unavailable"
+        : connected
+          ? "Connected"
+          : "Setup needed";
+    });
+  } catch (error) {
+    agentIntegrations = [];
+    byId("agent-integrations").replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = `Agent status unavailable: ${errorMessage(error)}`;
+    byId("agent-integrations").append(empty);
+    ["claude", "codex"].forEach((prefix) => {
+      setDot(`${prefix}-dot`, "warn");
+      byId(`${prefix}-detail`).textContent = "Status unavailable";
+    });
   }
+}
 
-  if (codex.status === "fulfilled") {
-    byId("codex-path").textContent = codex.value.path;
-    setPill("codex-pill", codex.value.installed);
-    setDot("codex-dot", codex.value.installed ? "good" : "warn");
-    byId("codex-detail").textContent = codex.value.installed ? "Connected" : "Setup needed";
-  } else {
-    setPill("codex-pill", false);
-    setDot("codex-dot", "warn");
-    byId("codex-detail").textContent = "Status unavailable";
-  }
+function renderAgentIntegrations() {
+  const container = byId("agent-integrations");
+  container.replaceChildren();
+  agentIntegrations.forEach((integration) => {
+    const section = document.createElement("section");
+    section.className = "integration";
+    const head = document.createElement("div");
+    head.className = "integration-head";
+    const logo = document.createElement("div");
+    logo.className = "integration-logo";
+    logo.setAttribute("aria-hidden", "true");
+    logo.textContent = integration.name.slice(0, 1);
+    const copy = document.createElement("div");
+    const title = document.createElement("h2");
+    title.textContent = integration.name;
+    const path = document.createElement("p");
+    path.textContent = integration.path;
+    path.title = integration.path;
+    copy.append(title, path);
+    const pill = document.createElement("span");
+    pill.className = `status-pill ${integration.installed ? "good" : "warn"}`;
+    pill.textContent = integration.installed ? "Connected" : "Setup needed";
+    head.append(logo, copy, pill);
+
+    const description = document.createElement("p");
+    description.textContent = integration.error || integration.description;
+    const actions = document.createElement("div");
+    actions.className = "button-row";
+    const install = document.createElement("button");
+    install.type = "button";
+    install.className = "primary-button";
+    install.dataset.integrationAction = "apply";
+    install.dataset.integrationId = integration.id;
+    install.textContent = integration.installed ? "Repair connection" : "Install integration";
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.className = "secondary-button";
+    preview.dataset.integrationAction = "preview";
+    preview.dataset.integrationId = integration.id;
+    preview.textContent = "Preview changes";
+    actions.append(install, preview);
+    if (integration.installed) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "secondary-button danger-text";
+      remove.dataset.integrationAction = "remove";
+      remove.dataset.integrationId = integration.id;
+      remove.textContent = "Disconnect";
+      actions.append(remove);
+    }
+    section.append(head, description, actions);
+    container.append(section);
+  });
 }
 
 async function loadNotificationPreferences() {
@@ -123,6 +171,7 @@ async function loadNotificationPreferences() {
   byId("notify-turn-finished").checked = notificationPreferences.notifyTurnFinished;
   byId("include-agent-summary").checked = notificationPreferences.includeAgentSummary;
   byId("agent-delivery").value = notificationPreferences.delivery || "island";
+  byId("close-behavior").value = notificationPreferences.closeBehavior || "background";
   byId("notification-debounce").value = notificationPreferences.debounceSecs;
   byId("clipboard-history-enabled").checked = notificationPreferences.clipboardHistoryEnabled;
 }
@@ -137,6 +186,7 @@ async function saveNotificationPreferences(stateId) {
     includeAgentSummary: byId("include-agent-summary").checked,
     delivery: byId("agent-delivery").value,
     clipboardHistoryEnabled: byId("clipboard-history-enabled").checked,
+    closeBehavior: byId("close-behavior").value,
   };
   setSaveState(stateId, "Saving");
   try {
@@ -631,6 +681,7 @@ function bindEvents() {
     "include-agent-summary",
     "agent-delivery",
     "notification-debounce",
+    "close-behavior",
   ].forEach((id) => byId(id).addEventListener("change", () => queuePreferenceSave()));
   byId("clipboard-history-enabled").addEventListener("change", () =>
     queuePreferenceSave("launcher-save-state"),
@@ -654,49 +705,31 @@ function bindEvents() {
     }
   });
 
-  byId("preview-claude").addEventListener("click", async () => {
-    try {
-      showAgentPreview(
-        "Claude Code configuration preview",
-        await invoke("preview_hook_merge", { global: true, projectDir: null }),
-      );
-    } catch (error) {
-      toast(errorMessage(error), true);
-    }
-  });
-  byId("preview-codex").addEventListener("click", async () => {
-    try {
-      showAgentPreview("Codex configuration preview", await invoke("preview_codex_config"));
-    } catch (error) {
-      toast(errorMessage(error), true);
-    }
-  });
   byId("close-agent-preview").addEventListener("click", () => {
     byId("agent-preview").hidden = true;
   });
-  byId("copy-claude").addEventListener("click", async () => {
+  byId("agent-integrations").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-integration-action]");
+    if (!button) return;
+    const id = button.dataset.integrationId;
+    const action = button.dataset.integrationAction;
+    const integration = agentIntegrations.find((item) => item.id === id);
     try {
-      await navigator.clipboard.writeText(await invoke("get_hook_snippet"));
-      toast("Claude hook snippet copied.");
-    } catch (error) {
-      toast(errorMessage(error), true);
-    }
-  });
-  byId("install-claude").addEventListener("click", async (event) => {
-    try {
-      await runButton(event.currentTarget, "Installing", () =>
-        invoke("apply_hook_merge", { global: true, projectDir: null }),
-      );
-      toast("Claude Code hooks installed.");
-      await loadAgentStatus();
-    } catch (error) {
-      toast(errorMessage(error), true);
-    }
-  });
-  byId("install-codex").addEventListener("click", async (event) => {
-    try {
-      await runButton(event.currentTarget, "Installing", () => invoke("apply_codex_config"));
-      toast("Codex notifier installed.");
+      if (action === "preview") {
+        showAgentPreview(
+          `${integration?.name || "Agent"} configuration preview`,
+          await invoke("preview_agent_integration", { id }),
+        );
+        return;
+      }
+      if (action === "remove") {
+        if (!window.confirm(`Disconnect ${integration?.name || "this integration"}?`)) return;
+        await runButton(button, "Disconnecting", () => invoke("remove_agent_integration", { id }));
+        toast(`${integration?.name || "Integration"} disconnected.`);
+      } else {
+        await runButton(button, "Installing", () => invoke("apply_agent_integration", { id }));
+        toast(`${integration?.name || "Integration"} connected.`);
+      }
       await loadAgentStatus();
     } catch (error) {
       toast(errorMessage(error), true);

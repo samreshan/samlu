@@ -69,13 +69,14 @@
 
       <section class="layer recovery" id="recovery" data-active="false">
         <div class="recovery-copy">
-          <span class="recovery-symbol" aria-hidden="true">↗</span>
+          <span class="recovery-symbol" id="recovery-symbol" aria-hidden="true">↗</span>
           <div>
             <strong id="recovery-title">Result is safe</strong>
             <p id="recovery-detail">Samlu could not insert into the original field.</p>
           </div>
         </div>
         <div class="recovery-actions">
+          <button class="text-button" id="recovery-discard" type="button" hidden>Discard</button>
           <button class="text-button" id="recovery-copy" type="button">Copy</button>
           <button class="text-button" id="recovery-preview" type="button">Preview</button>
           <button class="primary-button" id="recovery-retry" type="button">Try again</button>
