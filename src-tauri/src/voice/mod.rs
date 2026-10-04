@@ -700,12 +700,12 @@ async fn finish_recording(recording: recorder::Recording) -> Result<Vec<u8>, Str
 /// the capture so the user can retry it.
 async fn process_capture(app: AppHandle, mut capture: Capture, mode: Mode, target: TargetContext) {
     match produce_text(&app, &mut capture, mode, &target).await {
-        Ok(text) if text.trim().is_empty() => {
+        Ok(produced) if produced.text.trim().is_empty() => {
             let error = "The provider returned an empty transcript.".to_string();
             let _ = app.emit_to(crate::onboarding::LABEL, "voice://error", error.clone());
             fail(&app, &error);
         }
-        Ok(text) => deliver(app, text, mode, target).await,
+        Ok(produced) => deliver(app, produced, mode, target).await,
         Err(error) => {
             let _ = app.emit_to(crate::onboarding::LABEL, "voice://error", error.clone());
             show_failed(&app, target, capture, mode, &error);
@@ -713,12 +713,21 @@ async fn process_capture(app: AppHandle, mut capture: Capture, mode: Mode, targe
     }
 }
 
+/// Text ready for delivery, plus what history needs to know about it.
+struct Produced {
+    text: String,
+    /// The transcript, when a transform changed it.
+    #[allow(dead_code)]
+    raw: Option<String>,
+    cleanup_skipped: bool,
+}
+
 async fn produce_text(
     app: &AppHandle,
     capture: &mut Capture,
     mode: Mode,
     target: &TargetContext,
-) -> Result<String, String> {
+) -> Result<Produced, String> {
     let config = app.state::<Arc<VoiceConfig>>();
     let show_retry = |attempt: u32| {
         show_status(
@@ -752,28 +761,67 @@ async fn produce_text(
             transcript
         }
     };
-    if mode == Mode::Normal || transcript.trim().is_empty() {
-        return Ok(transcript);
+    if transcript.trim().is_empty() || (mode == Mode::Normal && !config.cleanup_dictation()) {
+        return Ok(Produced {
+            text: transcript,
+            raw: None,
+            cleanup_skipped: false,
+        });
     }
     show_status(
         app,
         target,
         "processing",
         mode_label(mode),
-        "Structuring",
+        if mode == Mode::Normal {
+            "Cleaning up"
+        } else {
+            "Structuring"
+        },
         "",
         false,
     );
     let transformation = config.transformation_config();
-    let transformation_key = config.api_key("transformation")?;
-    cloud::with_retries(
-        || cloud::transform(&transcript, mode, &transformation, &transformation_key),
-        show_retry,
-    )
-    .await
+    let vocabulary = config.vocabulary();
+    let transformed = match config.api_key("transformation") {
+        Ok(key) => {
+            cloud::with_retries(
+                || cloud::transform(&transcript, mode, &vocabulary, &transformation, &key),
+                show_retry,
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    match transformed {
+        Ok(text) => Ok(Produced {
+            raw: (text != transcript).then(|| transcript.clone()),
+            text,
+            cleanup_skipped: false,
+        }),
+        // Cleanup is polish: losing it must never cost the user their words.
+        Err(error) if mode == Mode::Normal => {
+            log::warn!("[voice] cleanup skipped: {error}");
+            Ok(Produced {
+                text: transcript,
+                raw: None,
+                cleanup_skipped: true,
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
-async fn deliver(app: AppHandle, text: String, mode: Mode, target: TargetContext) {
+async fn deliver(app: AppHandle, produced: Produced, mode: Mode, target: TargetContext) {
+    let text = produced.text.clone();
+    let cleanup_skipped = produced.cleanup_skipped;
+    let success = |base: &'static str| -> String {
+        if cleanup_skipped {
+            format!("{base} · cleanup skipped")
+        } else {
+            base.to_string()
+        }
+    };
     // The setup guide shows the transcript itself rather than relying on
     // insertion landing in its own window.
     let _ = app.emit_to(crate::onboarding::LABEL, "voice://result", text.clone());
@@ -799,7 +847,7 @@ async fn deliver(app: AppHandle, text: String, mode: Mode, target: TargetContext
         DeliveryBehavior::CopyOnly => match paste::copy(&app, &text) {
             Ok(()) => {
                 *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
-                show_success(&app, &target, mode, "Copied");
+                show_success(&app, &target, mode, &success("Copied"));
             }
             Err(error) => show_recovery(&app, target, text, error, mode),
         },
@@ -840,7 +888,7 @@ async fn deliver(app: AppHandle, text: String, mode: Mode, target: TargetContext
             match inject_without_blocking(&app, &text, &target.app).await {
                 Ok(()) => {
                     *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
-                    show_success(&app, &target, mode, "Inserted");
+                    show_success(&app, &target, mode, &success("Inserted"));
                 }
                 Err(error) => handle_delivery_error(&app, target, text, error, mode),
             }
