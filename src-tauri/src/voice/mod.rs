@@ -5,6 +5,7 @@ mod audio;
 mod cloud;
 pub mod config;
 mod engines;
+mod models;
 mod paste;
 mod recorder;
 mod vocabulary;
