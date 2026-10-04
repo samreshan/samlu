@@ -72,8 +72,6 @@ pub fn preload(path: PathBuf) {
     });
 }
 
-// Removed once consumed by models UI (Task 9).
-#[allow(dead_code)]
 pub fn unload() {
     LOADED.lock().unwrap().take();
 }
@@ -208,6 +206,7 @@ mod tests {
             tauri::async_runtime::block_on(transcribe(&audio, &options(model.to_str().unwrap())))
                 .map_err(|error| format!("{error:?}"))
                 .unwrap();
+        unload();
         assert!(text.to_lowercase().contains("brown fox"), "{text}");
     }
 }

@@ -195,6 +195,12 @@ pub fn engines_init() {
     engines::whisper::init();
 }
 
+/// Releases the resident whisper model before process exit; ggml-metal
+/// asserts if a context is still alive during its static teardown.
+pub fn engines_shutdown() {
+    engines::whisper::unload();
+}
+
 fn derive_shortcuts(base: &str) -> (String, String, String) {
     let mut parts: Vec<&str> = base
         .split('+')

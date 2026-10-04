@@ -334,6 +334,7 @@ pub fn run() {
         } if BACKGROUND_CLOSE_GENERATION.swap(0, Ordering::AcqRel) != 0 => {
             api.prevent_exit();
         }
+        tauri::RunEvent::Exit => voice::engines_shutdown(),
         _ => {}
     });
 }
