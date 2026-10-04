@@ -57,6 +57,7 @@ pub(super) async fn transcribe(
         .send()
         .await
         .map_err(|error| {
+            let error = error.without_url();
             let message = format!("ElevenLabs transcription request failed: {error}");
             ProviderError::from_send(error, message)
         })?;

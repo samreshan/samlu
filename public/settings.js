@@ -468,6 +468,7 @@ function renderTextProcessing(transformation, cleanup) {
   byId("voice-cleanup").checked = cleanup;
   byId("voice-transform-provider").value = transformation.provider;
   byId("voice-transform-model").value = transformation.model || "";
+  byId("voice-transform-model-hint").hidden = !["ollama", "lmstudio", "custom"].includes(transformation.provider);
   byId("voice-transform-base-url").value = transformation.baseUrl || "";
   byId("voice-transform-base-url-row").hidden = transformation.provider !== "custom";
   byId("voice-transform-key-row").hidden = !transformation.needsApiKey;
@@ -975,6 +976,13 @@ function bindEvents() {
   byId("save-voice-stt-key").addEventListener("click", async (event) => {
     const input = byId("voice-stt-api-key");
     if (!input.value.trim()) return toast("Paste an API key first.", true);
+    if (byId("voice-stt-choice").value !== voiceSettings?.stt.choice) {
+      await saveSpeechChoice();
+      if (byId("voice-stt-choice").value !== voiceSettings?.stt.choice) {
+        toast("Enter the provider URL before saving a key.", true);
+        return;
+      }
+    }
     try {
       await runButton(event.currentTarget, "Saving", () =>
         invoke("set_voice_api_key", { role: "transcription", key: input.value.trim() }),

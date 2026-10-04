@@ -22,44 +22,47 @@ fn unload_if_selected(config: &VoiceConfig, path: &str) {
 }
 
 #[tauri::command]
-pub fn get_voice_models(
-    app: AppHandle,
-    config: tauri::State<'_, Arc<VoiceConfig>>,
-    downloads: tauri::State<'_, Arc<Downloads>>,
-) -> Result<serde_json::Value, String> {
-    let home = dirs::home_dir().unwrap_or_default();
-    let models = models::list(&app_data_dir(&app)?, &home, &config.added_models());
-    let downloaded: HashSet<&str> = models
-        .iter()
-        .filter(|model| model.source == ModelSource::Downloaded)
-        .map(|model| model.name.as_str())
-        .collect();
-    let catalog: Vec<_> = models::CATALOG
-        .iter()
-        .map(|entry| {
-            serde_json::json!({
-                "id": entry.id,
-                "label": entry.label,
-                "file": entry.file,
-                "bytes": entry.bytes,
-                "downloaded": downloaded.contains(entry.file),
-                "downloading": downloads.is_active(entry.id),
+pub async fn get_voice_models(app: AppHandle) -> Result<serde_json::Value, String> {
+    let data_dir = app_data_dir(&app)?;
+    let config = app.state::<Arc<VoiceConfig>>().inner().clone();
+    let downloads = app.state::<Arc<Downloads>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = dirs::home_dir().unwrap_or_default();
+        let models = models::list(&data_dir, &home, &config.added_models());
+        let downloaded: HashSet<&str> = models
+            .iter()
+            .filter(|model| model.source == ModelSource::Downloaded)
+            .map(|model| model.name.as_str())
+            .collect();
+        let catalog: Vec<_> = models::CATALOG
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "id": entry.id,
+                    "label": entry.label,
+                    "file": entry.file,
+                    "bytes": entry.bytes,
+                    "downloaded": downloaded.contains(entry.file),
+                    "downloading": downloads.is_active(entry.id),
+                })
             })
+            .collect();
+        // A cloud engine's model name is not a whisper file; report no selection.
+        let stt = config.stt();
+        let selected = if stt.engine == SttEngine::WhisperCpp {
+            stt.model
+        } else {
+            String::new()
+        };
+        serde_json::json!({
+            "models": models,
+            "catalog": catalog,
+            "recommended": models::recommended_id(),
+            "selected": selected,
         })
-        .collect();
-    // A cloud engine's model name is not a whisper file; report no selection.
-    let stt = config.stt();
-    let selected = if stt.engine == SttEngine::WhisperCpp {
-        stt.model
-    } else {
-        String::new()
-    };
-    Ok(serde_json::json!({
-        "models": models,
-        "catalog": catalog,
-        "recommended": models::recommended_id(),
-        "selected": selected,
-    }))
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

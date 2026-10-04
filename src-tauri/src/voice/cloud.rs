@@ -219,6 +219,7 @@ pub async fn transform(
         request = request.bearer_auth(api_key);
     }
     let response = request.send().await.map_err(|error| {
+        let error = error.without_url();
         let message = format!("{} transform request failed: {error}", endpoint.provider);
         ProviderError::from_send(error, message)
     })?;

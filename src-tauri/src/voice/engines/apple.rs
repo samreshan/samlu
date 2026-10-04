@@ -37,9 +37,16 @@ fn bridge_locale(language: &str) -> &str {
 fn status_message(status: i32, detail: &str) -> String {
     match status {
         2 => NOT_INSTALLED.to_string(),
-        3 => format!(
-            "Apple speech doesn't support {detail}. Choose another language in Voice settings."
-        ),
+        3 => {
+            let language = if detail.is_empty() {
+                "your system language"
+            } else {
+                detail
+            };
+            format!(
+                "Apple speech doesn't support {language}. Choose another language in Voice settings."
+            )
+        }
         4 => detail.to_string(),
         _ => format!("Apple speech failed: {detail}"),
     }
@@ -129,6 +136,7 @@ mod tests {
     fn bridge_statuses_map_to_actionable_messages() {
         assert_eq!(status_message(2, "en-US"), NOT_INSTALLED);
         assert!(status_message(3, "xx").contains("doesn't support xx"));
+        assert!(status_message(3, "").contains("your system language"));
         assert_eq!(status_message(1, "boom"), "Apple speech failed: boom");
         assert_eq!(status_message(4, "needs macOS 26"), "needs macOS 26");
     }

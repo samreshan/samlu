@@ -49,8 +49,10 @@ pub(super) fn build_request(
         Some(language) => query.push(("language", language)),
         None => query.push(("detect_language", "true".to_string())),
     }
-    for term in vocabulary::take_within(&opts.vocabulary, KEYTERM_CHARS) {
-        query.push(("keyterm", term.to_string()));
+    if model.starts_with("nova-3") {
+        for term in vocabulary::take_within(&opts.vocabulary, KEYTERM_CHARS) {
+            query.push(("keyterm", term.to_string()));
+        }
     }
     client
         .post(LISTEN_URL)
@@ -82,6 +84,7 @@ pub(super) async fn transcribe(
     let request = build_request(client, audio.wav.clone(), opts, opts.api_key()?)
         .map_err(|error| ProviderError::permanent(error.to_string()))?;
     let response = client.execute(request).await.map_err(|error| {
+        let error = error.without_url();
         let message = format!("Deepgram transcription request failed: {error}");
         ProviderError::from_send(error, message)
     })?;
@@ -157,6 +160,16 @@ mod tests {
             .map(|(_, value)| value.as_str())
             .collect();
         assert_eq!(keyterms, vec!["Samlu", "Claude Code"]);
+    }
+
+    #[test]
+    fn nova2_model_with_vocabulary_sends_no_keyterm() {
+        let mut opts = options("en", &["Samlu", "Claude Code"]);
+        opts.settings.model = "nova-2-general".to_string();
+        let request = build_request(&reqwest::Client::new(), vec![], &opts, "k").unwrap();
+        let pairs = query(&request);
+        assert!(pairs.contains(&("model".into(), "nova-2-general".into())));
+        assert!(!pairs.iter().any(|(key, _)| key == "keyterm"));
     }
 
     #[test]

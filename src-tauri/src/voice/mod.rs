@@ -449,7 +449,16 @@ pub fn set_voice_transformation(
         None if provider == "custom" => normalize_endpoint_url(&base_url)?,
         None => return Err("Choose a supported text provider.".to_string()),
     };
+    let provider_changed = config.transformation_config().provider != provider;
+    let default_model = if provider_changed {
+        config::transform_default_model(&provider)
+    } else {
+        None
+    };
     config.set_transform_endpoint(provider, base_url);
+    if let Some(model) = default_model {
+        config.set_transform_model(model.to_string());
+    }
     Ok(())
 }
 
@@ -814,7 +823,8 @@ async fn finish_recording(recording: recorder::Recording) -> Result<Vec<u8>, Str
 async fn process_capture(app: AppHandle, mut capture: Capture, mode: Mode, target: TargetContext) {
     match produce_text(&app, &mut capture, mode, &target).await {
         Ok(produced) if produced.text.trim().is_empty() => {
-            let error = "The provider returned an empty transcript.".to_string();
+            let error = "No speech was recognized. Try again a little closer to the microphone."
+                .to_string();
             let _ = app.emit_to(crate::onboarding::LABEL, "voice://error", error.clone());
             fail(&app, &error);
         }
@@ -1090,7 +1100,11 @@ pub fn voice_cancel(app: AppHandle) {
         Runtime::Recording { recording, .. } => {
             std::thread::spawn(move || recording.cancel());
         }
-        Runtime::Previewing { text, .. } | Runtime::Recovering { text, .. } => {
+        Runtime::Previewing { text, .. } => {
+            let _ = paste::copy(&app, &text);
+            update_last_history(&app, history::Outcome::PreviewCancelled);
+        }
+        Runtime::Recovering { text, .. } => {
             let _ = paste::copy(&app, &text);
         }
         Runtime::Processing => {

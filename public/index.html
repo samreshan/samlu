@@ -269,7 +269,7 @@
 
           <section class="settings-section" aria-labelledby="voice-text-title">
             <div class="section-heading">
-              <div><h2 id="voice-text-title">Text processing</h2><p>Cleanup, summaries, and prompts use a language model.</p></div>
+              <div><h2 id="voice-text-title">Text processing</h2><p>Cleanup, summaries, and prompts send the transcript text (never audio) to the provider below. Choose Ollama or LM Studio to keep it on this Mac.</p></div>
               <span class="save-state" id="voice-text-save-state" aria-live="polite"></span>
             </div>
             <div class="setting-rows">
@@ -290,6 +290,7 @@
               </label>
               <label class="field"><span>Model</span>
                 <input id="voice-transform-model" type="text" spellcheck="false" />
+                <small class="field-note" id="voice-transform-model-hint" hidden>Use a model name your server lists, for example from <code>ollama list</code> or LM Studio's loaded model.</small>
               </label>
               <label class="field full" id="voice-transform-base-url-row" hidden><span>API base URL</span>
                 <input id="voice-transform-base-url" type="url" spellcheck="false" placeholder="https://api.provider.com/v1" />

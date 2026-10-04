@@ -92,6 +92,15 @@ pub fn transform_preset_base_url(provider: &str) -> Option<&'static str> {
     }
 }
 
+pub fn transform_default_model(provider: &str) -> Option<&'static str> {
+    match provider {
+        "groq" => Some(DEFAULT_TRANSFORM_MODEL),
+        "openai" => Some("gpt-4.1-mini"),
+        "ollama" => Some("llama3.2"),
+        _ => None,
+    }
+}
+
 /// Local model servers accept requests without a key.
 pub fn transform_needs_key(provider: &str) -> bool {
     !matches!(provider, "ollama" | "lmstudio")
@@ -622,6 +631,20 @@ mod tests {
         assert!(transform_needs_key("custom"));
         assert_eq!(transform_preset_base_url("ollama"), Some(OLLAMA_BASE_URL));
         assert_eq!(transform_preset_base_url("custom"), None);
+    }
+
+    #[test]
+    fn transform_default_model_covers_all_providers() {
+        assert_eq!(
+            transform_default_model("groq"),
+            Some(DEFAULT_TRANSFORM_MODEL)
+        );
+        assert_eq!(transform_default_model("openai"), Some("gpt-4.1-mini"));
+        assert_eq!(transform_default_model("ollama"), Some("llama3.2"));
+        assert_eq!(transform_default_model("lmstudio"), None);
+        assert_eq!(transform_default_model("custom"), None);
+        assert_eq!(transform_default_model("unknown"), None);
+        assert_eq!(transform_default_model(""), None);
     }
 
     #[test]

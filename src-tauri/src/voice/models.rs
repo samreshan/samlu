@@ -150,7 +150,6 @@ pub fn discovery_roots(home: &Path) -> Vec<PathBuf> {
         "Library/Application Support/MacWhisper",
         "Library/Application Support/superwhisper",
         "superwhisper",
-        "Documents/superwhisper",
         ".cache/huggingface/hub/models--ggerganov--whisper.cpp",
     ]
     .iter()
@@ -326,5 +325,15 @@ mod tests {
             download_url(entry),
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
         );
+    }
+
+    #[test]
+    fn discovery_roots_excludes_documents() {
+        let home = Path::new("/Users/test");
+        let roots = discovery_roots(home);
+        assert_eq!(roots.len(), 4);
+        assert!(!roots
+            .iter()
+            .any(|p| p.to_string_lossy().contains("Documents")));
     }
 }
