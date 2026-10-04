@@ -1,6 +1,7 @@
 //! Global voice dictation for macOS. A short tap starts toggle recording; a
 //! press held for at least 350 ms records until release.
 
+mod audio;
 mod cloud;
 pub mod config;
 mod paste;
