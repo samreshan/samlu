@@ -1,10 +1,6 @@
 //! Persisted non-secret voice preferences. Provider credentials live in the
 //! macOS Keychain and never enter this JSON file.
 
-// The multi-engine settings API lands ahead of its consumers (later voice
-// tasks); drop this allow once they use it.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -57,10 +53,6 @@ pub enum SttEngine {
 impl SttEngine {
     pub fn needs_api_key(self) -> bool {
         matches!(self, Self::OpenaiCompat | Self::Deepgram | Self::Elevenlabs)
-    }
-
-    pub fn is_local(self) -> bool {
-        matches!(self, Self::WhisperCpp | Self::Apple)
     }
 }
 
@@ -259,38 +251,12 @@ impl VoiceConfig {
         self.save();
     }
 
-    /// Legacy view of an OpenAI-compatible speech endpoint. Removed with the
-    /// old settings UI in Task 13.
-    pub fn transcription_config(&self) -> EndpointConfig {
-        let stt = self.stt();
-        EndpointConfig {
-            provider: stt.preset.unwrap_or_else(|| "custom".to_string()),
-            base_url: stt.base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
-            model: stt.model,
-        }
-    }
-
     pub fn transformation_config(&self) -> EndpointConfig {
         let data = self.data.lock().unwrap();
         EndpointConfig {
             provider: data.transform_provider.clone(),
             base_url: data.transform_base_url.clone(),
             model: data.transform_model.clone(),
-        }
-    }
-
-    /// Legacy: whether transformation differs from the speech endpoint.
-    pub fn separate_providers(&self) -> bool {
-        let speech = self.transcription_config();
-        let transform = self.transformation_config();
-        speech.provider != transform.provider || speech.base_url != transform.base_url
-    }
-
-    /// Legacy: turning separation off copies the speech endpoint over.
-    pub fn set_separate_providers(&self, enabled: bool) {
-        if !enabled {
-            let speech = self.transcription_config();
-            self.set_transform_endpoint(speech.provider, speech.base_url);
         }
     }
 
@@ -301,26 +267,6 @@ impl VoiceConfig {
             data.transform_base_url = base_url.trim_end_matches('/').to_string();
         }
         self.save();
-    }
-
-    /// Legacy: role-based endpoint setter used by the old settings UI.
-    pub fn set_endpoint(&self, role: &str, provider: String, base_url: String) {
-        if role == "transformation" {
-            self.set_transform_endpoint(provider, base_url);
-            return;
-        }
-        let mut stt = self.stt();
-        stt.engine = SttEngine::OpenaiCompat;
-        stt.preset = Some(provider);
-        stt.base_url = Some(base_url.trim_end_matches('/').to_string());
-        self.set_stt(stt);
-    }
-
-    /// Legacy: model setter used by the old settings UI.
-    pub fn set_stt_model(&self, model: String) {
-        let mut stt = self.stt();
-        stt.model = model;
-        self.set_stt(stt);
     }
 
     pub fn cleanup_dictation(&self) -> bool {

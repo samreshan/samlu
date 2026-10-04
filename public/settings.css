@@ -841,6 +841,45 @@ kbd {
   color: var(--muted);
 }
 
+.model-list {
+  display: grid;
+  gap: 8px;
+}
+
+.model-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.model-row small {
+  display: block;
+  color: var(--muted);
+}
+
+.model-row-actions,
+.model-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.model-actions {
+  margin: 10px 0 18px;
+}
+
+.model-catalog-title {
+  margin: 0 0 8px;
+}
+
+#voice-vocabulary {
+  width: 100%;
+  font: inherit;
+}
+
 .tool-index {
   margin-bottom: 28px;
   display: grid;

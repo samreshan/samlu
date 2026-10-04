@@ -283,24 +283,106 @@ pub fn unregister_hotkeys(app: &AppHandle, hotkey: &str) {
     let _ = app.global_shortcut().unregister(prompt.as_str());
 }
 
+const OPENAI_STT_MODEL: &str = "gpt-4o-transcribe";
+
+/// The single picker value the settings UI uses for engine + preset.
+fn stt_choice(stt: &config::SttSettings) -> &'static str {
+    use config::SttEngine::*;
+    match stt.engine {
+        OpenaiCompat => match stt.preset.as_deref() {
+            Some("groq") => "groq",
+            Some("openai") => "openai",
+            _ => "custom",
+        },
+        Deepgram => "deepgram",
+        Elevenlabs => "elevenlabs",
+        WhisperCpp => "whisper_cpp",
+        Apple => "apple",
+    }
+}
+
+/// Builds settings for a picker choice. An empty `model` falls back to the
+/// choice's default; the language carries over from `current`.
+fn stt_from_choice(
+    choice: &str,
+    base_url: &str,
+    model: &str,
+    current: &config::SttSettings,
+) -> Result<config::SttSettings, String> {
+    use config::SttEngine::*;
+    let model = model.trim();
+    let pick = |default: &str| {
+        if model.is_empty() {
+            default.to_string()
+        } else {
+            model.to_string()
+        }
+    };
+    let (engine, preset, base_url, model) = match choice {
+        "groq" => (
+            OpenaiCompat,
+            Some("groq"),
+            Some(config::DEFAULT_BASE_URL.to_string()),
+            pick(config::DEFAULT_STT_MODEL),
+        ),
+        "openai" => (
+            OpenaiCompat,
+            Some("openai"),
+            Some(config::OPENAI_BASE_URL.to_string()),
+            pick(OPENAI_STT_MODEL),
+        ),
+        "custom" => (
+            OpenaiCompat,
+            Some("custom"),
+            Some(normalize_endpoint_url(base_url)?),
+            pick(config::DEFAULT_STT_MODEL),
+        ),
+        "deepgram" => (Deepgram, None, None, pick(config::DEEPGRAM_DEFAULT_MODEL)),
+        "elevenlabs" => (
+            Elevenlabs,
+            None,
+            None,
+            pick(config::ELEVENLABS_DEFAULT_MODEL),
+        ),
+        "whisper_cpp" => (WhisperCpp, None, None, model.to_string()),
+        "apple" => (Apple, None, None, String::new()),
+        _ => return Err("Choose a supported speech engine.".to_string()),
+    };
+    Ok(config::SttSettings {
+        engine,
+        preset: preset.map(str::to_string),
+        model,
+        base_url,
+        language: current.language.clone(),
+    })
+}
+
 #[tauri::command]
 pub fn get_voice_settings(config: tauri::State<'_, Arc<VoiceConfig>>) -> serde_json::Value {
-    let transcription = config.transcription_config();
+    let stt = config.stt();
     let transformation = config.transformation_config();
     serde_json::json!({
-        "separateProviders": config.separate_providers(),
-        "transcription": {
-            "provider": transcription.provider,
-            "baseUrl": transcription.base_url,
-            "model": transcription.model,
-            "hasApiKey": config.has_api_key("transcription"),
+        "stt": {
+            "choice": stt_choice(&stt),
+            "engine": stt.engine,
+            "preset": stt.preset,
+            "baseUrl": stt.base_url,
+            "model": stt.model,
+            "language": stt.language,
+            "needsApiKey": stt.engine.needs_api_key(),
+            "hasApiKey": stt.engine.needs_api_key() && config.has_api_key("transcription"),
         },
+        "appleAvailable": engines::apple::available(),
         "transformation": {
             "provider": transformation.provider,
             "baseUrl": transformation.base_url,
             "model": transformation.model,
+            "needsApiKey": config::transform_needs_key(&transformation.provider),
             "hasApiKey": config.has_api_key("transformation"),
         },
+        "cleanupDictation": config.cleanup_dictation(),
+        "vocabulary": config.vocabulary(),
+        "keepHistory": config.keep_history(),
         "hotkey": config.hotkey(),
         "delivery": {
             "dictation": config.delivery(Mode::Normal),
@@ -309,7 +391,6 @@ pub fn get_voice_settings(config: tauri::State<'_, Arc<VoiceConfig>>) -> serde_j
         },
         "interfaceSounds": config.interface_sounds(),
         "petCapsule": config.pet_capsule(),
-        "keepHistory": config.keep_history(),
     })
 }
 
@@ -324,41 +405,61 @@ pub fn set_voice_api_key(
 }
 
 #[tauri::command]
-pub fn set_voice_endpoint(
-    role: String,
+pub fn set_voice_stt(
+    choice: String,
+    base_url: String,
+    model: String,
+    config: tauri::State<'_, Arc<VoiceConfig>>,
+) -> Result<(), String> {
+    let current = config.stt();
+    let next = stt_from_choice(&choice, &base_url, &model, &current)?;
+    if current.engine == config::SttEngine::WhisperCpp && current.model != next.model {
+        engines::whisper::unload();
+    }
+    config.set_stt(next);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_voice_language(language: String, config: tauri::State<'_, Arc<VoiceConfig>>) {
+    let mut stt = config.stt();
+    stt.language = match language.trim() {
+        "" => "auto".to_string(),
+        other => other.to_string(),
+    };
+    config.set_stt(stt);
+}
+
+#[tauri::command]
+pub fn set_voice_transformation(
     provider: String,
     base_url: String,
     config: tauri::State<'_, Arc<VoiceConfig>>,
 ) -> Result<(), String> {
-    validate_role(&role)?;
-    if provider != "groq" && provider != "custom" {
-        return Err("Provider must be Groq or OpenAI-compatible.".to_string());
-    }
-    let base_url = if provider == "groq" {
-        config::DEFAULT_BASE_URL.to_string()
-    } else {
-        normalize_endpoint_url(&base_url)?
+    let base_url = match config::transform_preset_base_url(&provider) {
+        Some(preset) => preset.to_string(),
+        None if provider == "custom" => normalize_endpoint_url(&base_url)?,
+        None => return Err("Choose a supported text provider.".to_string()),
     };
-    config.set_endpoint(&role, provider, base_url);
+    config.set_transform_endpoint(provider, base_url);
     Ok(())
 }
 
 #[tauri::command]
-pub fn set_voice_separate_providers(enabled: bool, config: tauri::State<'_, Arc<VoiceConfig>>) {
-    config.set_separate_providers(enabled);
+pub fn set_voice_cleanup(enabled: bool, config: tauri::State<'_, Arc<VoiceConfig>>) {
+    config.set_cleanup_dictation(enabled);
 }
 
+/// One term per line; returns the normalized list so the UI can show what
+/// was kept.
 #[tauri::command]
-pub fn set_voice_stt_model(
-    model: String,
+pub fn set_voice_vocabulary(
+    text: String,
     config: tauri::State<'_, Arc<VoiceConfig>>,
-) -> Result<(), String> {
-    let model = model.trim();
-    if model.is_empty() {
-        return Err("Speech model cannot be empty.".to_string());
-    }
-    config.set_stt_model(model.to_string());
-    Ok(())
+) -> Vec<String> {
+    let terms = vocabulary::normalize(text.lines().map(str::to_string));
+    config.set_vocabulary(terms.clone());
+    terms
 }
 
 #[tauri::command]
@@ -1581,7 +1682,50 @@ fn validate_role(role: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_shortcuts, normalize_endpoint_url};
+    use super::*;
+    use config::{SttEngine, SttSettings};
+
+    #[test]
+    fn choices_map_to_engine_settings_and_back() {
+        let current = SttSettings::default();
+        for (choice, engine) in [
+            ("groq", SttEngine::OpenaiCompat),
+            ("openai", SttEngine::OpenaiCompat),
+            ("deepgram", SttEngine::Deepgram),
+            ("elevenlabs", SttEngine::Elevenlabs),
+            ("whisper_cpp", SttEngine::WhisperCpp),
+            ("apple", SttEngine::Apple),
+        ] {
+            let settings = stt_from_choice(choice, "", "", &current).unwrap();
+            assert_eq!(settings.engine, engine, "{choice}");
+            assert_eq!(stt_choice(&settings), choice);
+            assert_eq!(settings.language, "auto");
+        }
+        let custom = stt_from_choice("custom", "https://stt.example/v1/", "m", &current).unwrap();
+        assert_eq!(custom.base_url.as_deref(), Some("https://stt.example/v1"));
+        assert_eq!(stt_choice(&custom), "custom");
+        assert!(stt_from_choice("custom", "ftp://x", "m", &current).is_err());
+        assert!(stt_from_choice("nope", "", "", &current).is_err());
+    }
+
+    #[test]
+    fn switching_cloud_presets_uses_their_default_model() {
+        let current = SttSettings::default();
+        assert_eq!(
+            stt_from_choice("openai", "", "", &current).unwrap().model,
+            "gpt-4o-transcribe"
+        );
+        assert_eq!(
+            stt_from_choice("deepgram", "", "", &current).unwrap().model,
+            "nova-3"
+        );
+        assert_eq!(
+            stt_from_choice("groq", "", "my-model", &current)
+                .unwrap()
+                .model,
+            "my-model"
+        );
+    }
 
     #[test]
     fn derives_mode_shortcuts_from_a_simple_base() {

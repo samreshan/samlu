@@ -343,15 +343,10 @@ async function loadVoiceSettings() {
       invoke("get_voice_microphone_status"),
       invoke("get_voice_accessibility_status"),
     ]);
-    byId("voice-separate-providers").checked = settings.separateProviders;
-    renderVoiceEndpoint("stt", settings.transcription);
-    renderVoiceEndpoint("transform", settings.transformation);
-    byId("voice-transform-provider-block").hidden = !settings.separateProviders;
-    byId("voice-stt-provider-note").textContent = settings.separateProviders
-      ? "Used only for speech to text."
-      : "Also used for summaries and prompt transformation.";
-    byId("voice-stt-model").value = settings.transcription.model || "";
-    byId("voice-transform-model").value = settings.transformation.model || "";
+    voiceSettings = settings;
+    renderSpeechEngine(settings);
+    renderTextProcessing(settings.transformation, settings.cleanupDictation);
+    byId("voice-vocabulary").value = (settings.vocabulary || []).join("\n");
     voiceHotkeyRecorder.set(settings.hotkey || "Alt+V");
     byId("voice-dictation-delivery").value = settings.delivery?.dictation || "instant_insert";
     byId("voice-summary-delivery").value = settings.delivery?.summary || "instant_insert";
@@ -419,13 +414,199 @@ async function refreshMicrophonePermission(attempts = 1) {
   return "not_determined";
 }
 
-function renderVoiceEndpoint(prefix, endpoint) {
-  byId(`voice-${prefix}-provider`).value = endpoint.provider;
-  byId(`voice-${prefix}-base-url`).value = endpoint.baseUrl || "";
-  byId(`voice-${prefix}-base-url-row`).hidden = endpoint.provider !== "custom";
-  const keyStatus = byId(`voice-${prefix}-key-status`);
-  keyStatus.className = `status-pill ${endpoint.hasApiKey ? "good" : "warn"}`;
-  keyStatus.textContent = endpoint.hasApiKey ? "Key saved" : "Key required";
+let voiceSettings = null;
+let voiceModels = { models: [], catalog: [], recommended: "", selected: "" };
+const downloadProgress = {};
+
+function formatBytes(bytes) {
+  if (!bytes) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`;
+}
+
+function setKeyStatus(id, hasKey) {
+  const pill = byId(id);
+  pill.className = `status-pill ${hasKey ? "good" : "warn"}`;
+  pill.textContent = hasKey ? "Key saved" : "Key required";
+}
+
+function renderSpeechEngine(settings) {
+  const stt = settings.stt;
+  const choice = stt.choice;
+  byId("voice-apple-option").disabled = !settings.appleAvailable;
+  byId("voice-apple-option").textContent = settings.appleAvailable
+    ? "Apple (on-device)"
+    : "Apple (on-device) — needs macOS 26";
+  byId("voice-stt-choice").value = choice;
+  byId("voice-language").value = stt.language || "auto";
+  const cloud = !["whisper_cpp", "apple"].includes(choice);
+  byId("voice-cloud-fields").hidden = !cloud;
+  byId("voice-whisper-fields").hidden = choice !== "whisper_cpp";
+  byId("voice-apple-fields").hidden = choice !== "apple";
+  byId("voice-stt-base-url-row").hidden = choice !== "custom";
+  byId("voice-stt-base-url").value = stt.baseUrl || "";
+  if (cloud) {
+    byId("voice-stt-model").value = stt.model || "";
+    setKeyStatus("voice-stt-key-status", stt.hasApiKey);
+  }
+  const englishOnly = choice === "whisper_cpp" && /\.en[.-]/i.test(stt.model || "");
+  const note = byId("voice-language-note");
+  note.hidden = !englishOnly && choice !== "apple";
+  note.textContent = englishOnly
+    ? "This model only understands English."
+    : "Apple has no automatic detection; Detect automatically uses your Mac's language.";
+  if (choice === "whisper_cpp") loadVoiceModels();
+}
+
+function renderTextProcessing(transformation, cleanup) {
+  byId("voice-cleanup").checked = cleanup;
+  byId("voice-transform-provider").value = transformation.provider;
+  byId("voice-transform-model").value = transformation.model || "";
+  byId("voice-transform-base-url").value = transformation.baseUrl || "";
+  byId("voice-transform-base-url-row").hidden = transformation.provider !== "custom";
+  byId("voice-transform-key-row").hidden = !transformation.needsApiKey;
+  setKeyStatus("voice-transform-key-status", transformation.hasApiKey);
+}
+
+function modelRow(title, detail, actions) {
+  const row = document.createElement("div");
+  row.className = "model-row";
+  const text = document.createElement("div");
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  const small = document.createElement("small");
+  small.textContent = detail;
+  text.append(strong, small);
+  const buttons = document.createElement("div");
+  buttons.className = "model-row-actions";
+  actions.forEach(([label, handler, primary]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = primary ? "primary-button" : "secondary-button";
+    button.textContent = label;
+    button.addEventListener("click", async (event) => {
+      try {
+        await handler(event.currentTarget);
+      } catch (error) {
+        toast(errorMessage(error), true);
+      }
+    });
+    buttons.append(button);
+  });
+  row.append(text, buttons);
+  return row;
+}
+
+function renderVoiceModels() {
+  const list = byId("voice-model-list");
+  list.replaceChildren();
+  if (!voiceModels.models.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "No whisper models yet. Download one below or add a file you already have.";
+    list.append(empty);
+  }
+  const sourceLabel = { downloaded: "Downloaded", discovered: "Found on this Mac", added: "Added" };
+  voiceModels.models.forEach((model) => {
+    const selected = model.path === voiceModels.selected;
+    const detail = [
+      model.missing ? "Missing" : formatBytes(model.bytes),
+      sourceLabel[model.source],
+      model.englishOnly ? "English only" : "",
+      selected ? "In use" : "",
+    ].filter(Boolean).join(" · ");
+    const actions = [];
+    if (!selected && !model.missing) {
+      actions.push(["Use", async () => {
+        await invoke("set_voice_stt", { choice: "whisper_cpp", baseUrl: "", model: model.path });
+        showSaveState("voice-provider-save-state");
+        await loadVoiceSettings();
+      }, true]);
+    }
+    if (model.source === "downloaded") {
+      actions.push(["Delete", async () => {
+        if (!confirm(`Delete ${model.name} from this Mac?`)) return;
+        await invoke("voice_delete_model", { path: model.path });
+        await loadVoiceModels();
+      }]);
+    } else if (model.source === "added") {
+      actions.push(["Remove", async () => {
+        await invoke("voice_remove_model", { path: model.path });
+        await loadVoiceModels();
+      }]);
+    }
+    list.append(modelRow(model.name, detail, actions));
+  });
+
+  const catalog = byId("voice-model-catalog");
+  catalog.replaceChildren();
+  voiceModels.catalog.forEach((entry) => {
+    const progress = downloadProgress[entry.id];
+    const recommended = entry.id === voiceModels.recommended ? " · Recommended for this Mac" : "";
+    let detail = `${formatBytes(entry.bytes)}${recommended}`;
+    let actions = [];
+    if (entry.downloaded) {
+      detail = `Downloaded${recommended}`;
+    } else if (entry.downloading) {
+      const percent = progress ? Math.floor((progress.received / progress.total) * 100) : 0;
+      detail = `Downloading ${percent}% of ${formatBytes(entry.bytes)}`;
+      actions = [["Cancel", () => invoke("voice_cancel_model_download", { id: entry.id })]];
+    } else {
+      actions = [["Download", async () => {
+        const download = invoke("voice_download_model", { id: entry.id });
+        await loadVoiceModels();
+        try {
+          const path = await download;
+          // First usable model: select it so dictation works right away.
+          if (!voiceModels.selected) {
+            await invoke("set_voice_stt", { choice: "whisper_cpp", baseUrl: "", model: path });
+          }
+          showSaveState("voice-provider-save-state", "Model ready");
+        } catch (error) {
+          if (errorMessage(error) !== "Download cancelled.") throw error;
+        } finally {
+          delete downloadProgress[entry.id];
+          await loadVoiceSettings();
+        }
+      }, entry.id === voiceModels.recommended]];
+    }
+    catalog.append(modelRow(entry.label, detail, actions));
+  });
+}
+
+async function loadVoiceModels() {
+  try {
+    voiceModels = await invoke("get_voice_models");
+    renderVoiceModels();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+async function saveSpeechChoice() {
+  const choice = byId("voice-stt-choice").value;
+  const baseUrl = byId("voice-stt-base-url").value.trim();
+  if (choice === "custom" && !baseUrl) {
+    byId("voice-stt-base-url-row").hidden = false;
+    byId("voice-stt-base-url").focus();
+    return;
+  }
+  let model = choice === voiceSettings?.stt.choice ? byId("voice-stt-model").value : "";
+  if (choice === "whisper_cpp") {
+    // Keep the current whisper model, or fall back to the first usable one.
+    await loadVoiceModels();
+    model =
+      voiceModels.selected || voiceModels.models.find((item) => !item.missing)?.path || "";
+  }
+  await invoke("set_voice_stt", { choice, baseUrl, model });
+  showSaveState("voice-provider-save-state");
+  await loadVoiceSettings();
 }
 
 function shortcutGlyphs(shortcut) {
@@ -545,23 +726,6 @@ function createShortcutRecorder(id, save, restore) {
       if (!recording) rest();
     },
   };
-}
-
-function endpointRole(prefix) {
-  return prefix === "transform" ? "transformation" : "transcription";
-}
-
-async function saveVoiceEndpoint(prefix) {
-  const provider = byId(`voice-${prefix}-provider`).value;
-  const baseUrl = byId(`voice-${prefix}-base-url`).value.trim();
-  if (provider === "custom" && !baseUrl) {
-    throw new Error("Enter the OpenAI-compatible API base URL.");
-  }
-  await invoke("set_voice_endpoint", {
-    role: endpointRole(prefix),
-    provider,
-    baseUrl,
-  });
 }
 
 async function loadLauncherSettings() {
@@ -788,14 +952,65 @@ function bindEvents() {
     }
   });
 
-  byId("voice-separate-providers").addEventListener("change", async (event) => {
-    const enabled = event.currentTarget.checked;
+  listen("voice://model-download", (event) => {
+    downloadProgress[event.payload.id] = event.payload;
+    if (!byId("voice-whisper-fields").hidden) renderVoiceModels();
+  });
+  byId("voice-stt-choice").addEventListener("change", () =>
+    saveSpeechChoice().catch((error) => toast(errorMessage(error), true)),
+  );
+  ["voice-stt-base-url", "voice-stt-model"].forEach((id) => {
+    byId(id).addEventListener("change", () =>
+      saveSpeechChoice().catch((error) => toast(errorMessage(error), true)),
+    );
+  });
+  byId("voice-language").addEventListener("change", async (event) => {
     try {
-      await invoke("set_voice_separate_providers", { enabled });
+      await invoke("set_voice_language", { language: event.currentTarget.value });
+      showSaveState("voice-provider-save-state");
+    } catch (error) {
+      toast(errorMessage(error), true);
+    }
+  });
+  byId("save-voice-stt-key").addEventListener("click", async (event) => {
+    const input = byId("voice-stt-api-key");
+    if (!input.value.trim()) return toast("Paste an API key first.", true);
+    try {
+      await runButton(event.currentTarget, "Saving", () =>
+        invoke("set_voice_api_key", { role: "transcription", key: input.value.trim() }),
+      );
+      input.value = "";
+      showSaveState("voice-provider-save-state", "Saved to Keychain");
       await loadVoiceSettings();
     } catch (error) {
       toast(errorMessage(error), true);
-      await loadVoiceSettings();
+    }
+  });
+  byId("voice-add-model").addEventListener("click", async () => {
+    try {
+      const path = await invoke("voice_add_model");
+      if (path) await loadVoiceModels();
+    } catch (error) {
+      toast(errorMessage(error), true);
+    }
+  });
+  byId("voice-rescan-models").addEventListener("click", loadVoiceModels);
+  byId("voice-apple-install").addEventListener("click", async (event) => {
+    try {
+      const locale = await runButton(event.currentTarget, "Installing…", () =>
+        invoke("voice_apple_install", { language: byId("voice-language").value }),
+      );
+      byId("voice-apple-help").textContent = `Ready for ${locale}.`;
+    } catch (error) {
+      toast(errorMessage(error), true);
+    }
+  });
+  byId("voice-cleanup").addEventListener("change", async (event) => {
+    try {
+      await invoke("set_voice_cleanup", { enabled: event.currentTarget.checked });
+      showSaveState("voice-text-save-state");
+    } catch (error) {
+      toast(errorMessage(error), true);
     }
   });
   byId("open-voice-microphone").addEventListener("click", async (event) => {
@@ -836,65 +1051,50 @@ function bindEvents() {
     }
   });
 
-  ["stt", "transform"].forEach((prefix) => {
-    byId(`voice-${prefix}-provider`).addEventListener("change", async (event) => {
-      const custom = event.currentTarget.value === "custom";
-      byId(`voice-${prefix}-base-url-row`).hidden = !custom;
-      if (custom) {
-        const baseUrl = byId(`voice-${prefix}-base-url`);
-        if (baseUrl.value === "https://api.groq.com/openai/v1") baseUrl.value = "";
-        baseUrl.focus();
-        return;
-      }
-      try {
-        await saveVoiceEndpoint(prefix);
-        await loadVoiceSettings();
-        showSaveState("voice-provider-save-state");
-      } catch (error) {
-        toast(errorMessage(error), true);
-      }
-    });
-    byId(`voice-${prefix}-base-url`).addEventListener("change", async () => {
-      try {
-        await saveVoiceEndpoint(prefix);
-        await loadVoiceSettings();
-        showSaveState("voice-provider-save-state");
-      } catch (error) {
-        toast(errorMessage(error), true);
-      }
-    });
-    byId(`save-voice-${prefix}-key`).addEventListener("click", async (event) => {
-      const keyInput = byId(`voice-${prefix}-api-key`);
-      const key = keyInput.value.trim();
-      if (!key) {
-        toast("Paste an API key first.", true);
-        return;
-      }
-      try {
-        await runButton(event.currentTarget, "Saving", async () => {
-          await saveVoiceEndpoint(prefix);
-          await invoke("set_voice_api_key", { role: endpointRole(prefix), key });
-        });
-        keyInput.value = "";
-        showSaveState("voice-provider-save-state", "Saved to Keychain");
-        await loadVoiceSettings();
-      } catch (error) {
-        toast(errorMessage(error), true);
-      }
-    });
-  });
-  byId("voice-stt-model").addEventListener("change", async (event) => {
-    try {
-      await invoke("set_voice_stt_model", { model: event.currentTarget.value });
-      showSaveState("voice-provider-save-state");
-    } catch (error) {
-      toast(errorMessage(error), true);
+  const saveTransformation = async () => {
+    const provider = byId("voice-transform-provider").value;
+    const baseUrl = byId("voice-transform-base-url").value.trim();
+    byId("voice-transform-base-url-row").hidden = provider !== "custom";
+    if (provider === "custom" && !baseUrl) {
+      byId("voice-transform-base-url").focus();
+      return;
     }
+    await invoke("set_voice_transformation", { provider, baseUrl });
+    showSaveState("voice-text-save-state");
+    await loadVoiceSettings();
+  };
+  ["voice-transform-provider", "voice-transform-base-url"].forEach((id) => {
+    byId(id).addEventListener("change", () =>
+      saveTransformation().catch((error) => toast(errorMessage(error), true)),
+    );
   });
   byId("voice-transform-model").addEventListener("change", async (event) => {
     try {
       await invoke("set_voice_transform_model", { model: event.currentTarget.value });
-      showSaveState("voice-provider-save-state");
+      showSaveState("voice-text-save-state");
+    } catch (error) {
+      toast(errorMessage(error), true);
+    }
+  });
+  byId("save-voice-transform-key").addEventListener("click", async (event) => {
+    const input = byId("voice-transform-api-key");
+    if (!input.value.trim()) return toast("Paste an API key first.", true);
+    try {
+      await runButton(event.currentTarget, "Saving", () =>
+        invoke("set_voice_api_key", { role: "transformation", key: input.value.trim() }),
+      );
+      input.value = "";
+      showSaveState("voice-text-save-state", "Saved to Keychain");
+      await loadVoiceSettings();
+    } catch (error) {
+      toast(errorMessage(error), true);
+    }
+  });
+  byId("voice-vocabulary").addEventListener("change", async (event) => {
+    try {
+      const terms = await invoke("set_voice_vocabulary", { text: event.currentTarget.value });
+      event.currentTarget.value = terms.join("\n");
+      showSaveState("voice-vocabulary-save-state", `${terms.length} terms saved`);
     } catch (error) {
       toast(errorMessage(error), true);
     }

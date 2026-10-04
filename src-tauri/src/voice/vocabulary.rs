@@ -1,6 +1,4 @@
 //! The user's custom vocabulary, shaped for each engine's biasing mechanism.
-// Temporary: Task 4 adds the first consumer and removes this allow.
-#![allow(dead_code)]
 
 use std::collections::HashSet;
 
