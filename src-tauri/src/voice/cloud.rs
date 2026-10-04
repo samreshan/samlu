@@ -1,5 +1,4 @@
-//! OpenAI-compatible cloud speech and text transforms. Groq is the default
-//! preset; custom providers can supply another compatible base URL.
+//! Shared provider plumbing: the HTTP client, error classification, retries, and OpenAI-compatible text transforms.
 
 use super::config::EndpointConfig;
 use super::Mode;
@@ -30,7 +29,7 @@ pub struct ProviderError {
 }
 
 impl ProviderError {
-    fn permanent(message: String) -> Self {
+    pub(crate) fn permanent(message: String) -> Self {
         Self {
             message,
             transient: false,
@@ -38,7 +37,7 @@ impl ProviderError {
         }
     }
 
-    fn from_send(error: reqwest::Error, message: String) -> Self {
+    pub(crate) fn from_send(error: reqwest::Error, message: String) -> Self {
         Self {
             message,
             // Timeouts and connection failures are worth another attempt;
@@ -48,7 +47,7 @@ impl ProviderError {
         }
     }
 
-    async fn from_response(response: reqwest::Response, context: &str) -> Self {
+    pub(crate) async fn from_response(response: reqwest::Response, context: &str) -> Self {
         let status = response.status();
         let retry_after = parse_retry_after(response.headers());
         let body = response.text().await.unwrap_or_default();
@@ -124,11 +123,6 @@ where
 }
 
 #[derive(Deserialize)]
-struct TranscriptionResponse {
-    text: String,
-}
-
-#[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
 }
@@ -143,7 +137,7 @@ struct ChatMessage {
     content: String,
 }
 
-fn client() -> Result<&'static reqwest::Client, String> {
+pub(crate) fn client() -> Result<&'static reqwest::Client, String> {
     static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
     CLIENT
         .get_or_init(|| {
@@ -155,46 +149,6 @@ fn client() -> Result<&'static reqwest::Client, String> {
         })
         .as_ref()
         .map_err(|error| error.clone())
-}
-
-pub async fn transcribe(
-    wav_bytes: Vec<u8>,
-    endpoint: &EndpointConfig,
-    api_key: &str,
-) -> Result<String, ProviderError> {
-    let part = reqwest::multipart::Part::bytes(wav_bytes)
-        .file_name("audio.wav")
-        .mime_str("audio/wav")
-        .map_err(|error| ProviderError::permanent(error.to_string()))?;
-    let form = reqwest::multipart::Form::new()
-        .part("file", part)
-        .text("model", endpoint.model.clone())
-        .text("response_format", "json");
-
-    let response = client()
-        .map_err(ProviderError::permanent)?
-        .post(format!("{}/audio/transcriptions", endpoint.base_url))
-        .bearer_auth(api_key)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|error| {
-            let message = format!(
-                "{} transcription request failed: {error}",
-                endpoint.provider
-            );
-            ProviderError::from_send(error, message)
-        })?;
-    if !response.status().is_success() {
-        return Err(ProviderError::from_response(response, "transcription").await);
-    }
-    response
-        .json::<TranscriptionResponse>()
-        .await
-        .map(|response| response.text)
-        .map_err(|error| {
-            ProviderError::permanent(format!("could not parse transcription response: {error}"))
-        })
 }
 
 pub async fn transform(

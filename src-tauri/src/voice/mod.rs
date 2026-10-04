@@ -4,6 +4,7 @@
 mod audio;
 mod cloud;
 pub mod config;
+mod engines;
 mod paste;
 mod recorder;
 mod vocabulary;
@@ -99,7 +100,7 @@ enum Runtime {
 
 /// One dictation's audio, kept until it has produced text.
 struct Capture {
-    wav: Vec<u8>,
+    audio: engines::PreparedAudio,
     /// Set once transcription succeeds, so a retry after a failed transform
     /// does not pay for (or risk) transcribing again.
     transcript: Option<String>,
@@ -643,7 +644,7 @@ fn spawn_processing(
         match finish_recording(recording).await {
             Ok(wav) => {
                 let capture = Capture {
-                    wav,
+                    audio: engines::PreparedAudio::new(wav),
                     transcript: None,
                 };
                 process_capture(app, capture, mode, target).await;
@@ -707,14 +708,20 @@ async fn produce_text(
     let transcript = match &capture.transcript {
         Some(transcript) => transcript.clone(),
         None => {
-            let transcription = config.transcription_config();
-            let transcription_key = config.api_key("transcription")?;
-            let wav = &capture.wav;
-            let transcript = cloud::with_retries(
-                || cloud::transcribe(wav.clone(), &transcription, &transcription_key),
-                show_retry,
-            )
-            .await?;
+            let settings = config.stt();
+            let api_key = if settings.engine.needs_api_key() {
+                Some(config.api_key("transcription")?)
+            } else {
+                None
+            };
+            let options = engines::SttOptions {
+                settings,
+                vocabulary: config.vocabulary(),
+                api_key,
+            };
+            let audio = &capture.audio;
+            let transcript =
+                cloud::with_retries(|| engines::transcribe(audio, &options), show_retry).await?;
             capture.transcript = Some(transcript.clone());
             transcript
         }

@@ -1,7 +1,5 @@
 //! Converts a captured WAV into the 16 kHz mono `f32` samples on-device
 //! engines expect. Cloud engines keep receiving the original WAV.
-// Temporary: Task 4 adds the first consumer and removes this allow.
-#![allow(dead_code)]
 
 pub const LOCAL_SAMPLE_RATE: u32 = 16_000;
 
