@@ -5,7 +5,6 @@ mod lifecycle;
 mod macos;
 mod notify;
 mod onboarding;
-mod pet;
 mod server;
 mod settings;
 mod setup;
@@ -128,7 +127,6 @@ pub fn run() {
                 &app_data_dir,
             ));
             app.manage(app_state.clone());
-            app.manage(Arc::new(pet::PetState::new()));
             app.manage(Arc::new(notify::IslandState::new()));
 
             app.manage(Arc::new(launcher::history::LauncherHistory::load(
@@ -173,9 +171,6 @@ pub fn run() {
             }
             if let Err(error) = notify::island_init(app.handle()) {
                 log::error!("failed to create Samlu Island: {error}");
-            }
-            if let Err(error) = pet::pet_init(app.handle()) {
-                log::error!("failed to create the pet overlay: {error}");
             }
 
             let registry = Arc::new(adapters::AdapterRegistry::new());
@@ -226,10 +221,6 @@ pub fn run() {
             onboarding::onboarding_set_delivery,
             onboarding::onboarding_finish,
             onboarding::onboarding_show,
-            pet::pet_set_interactive,
-            pet::pet_ready,
-            pet::pet_dismiss,
-            pet::pet_open_activity,
             notify::agent_island_dismiss,
             notify::agent_island_ready,
             notify::agent_island_open_activity,
@@ -264,7 +255,6 @@ pub fn run() {
             voice::set_voice_hotkey,
             voice::set_voice_delivery,
             voice::set_voice_interface_sounds,
-            voice::set_voice_pet_capsule,
             voice::voice_apple_install,
             voice::get_voice_microphone_status,
             voice::request_voice_microphone,

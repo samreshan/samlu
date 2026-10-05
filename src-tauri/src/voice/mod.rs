@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{
-    utils::config::Color, AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl,
+    utils::config::Color, AppHandle, Emitter, LogicalSize, Manager, WebviewUrl,
     WebviewWindowBuilder,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -29,18 +29,29 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 const HOLD_THRESHOLD: Duration = Duration::from_millis(350);
 const MAX_RECORDING_DURATION: Duration = Duration::from_secs(120);
 const PREVIEW_LABEL: &str = "voice-preview";
-const CAPSULE_WIDTH: f64 = 260.0;
-const CAPSULE_HEIGHT: f64 = 72.0;
-/// The pet capsule is a square: just Samlu reacting to your voice, plus one
-/// line of status. No waveform, no elapsed timer.
-const PET_CAPSULE_WIDTH: f64 = 108.0;
-const PET_CAPSULE_HEIGHT: f64 = 88.0;
-const PET_FALLBACK_WIDTH: f64 = 180.0;
-const PET_FALLBACK_HEIGHT: f64 = 106.0;
-const RECOVERY_WIDTH: f64 = 440.0;
-const RECOVERY_HEIGHT: f64 = 142.0;
-const EDITOR_WIDTH: f64 = 540.0;
-const EDITOR_HEIGHT: f64 = 268.0;
+/// Window sizes are the visible surface plus the 8pt inset the webview keeps
+/// on every side for the float shadow (BODY_INSET in preview.js).
+const SURFACE_INSET: f64 = 16.0;
+/// Listening is a 44pt pill sized to its content: the breath bead, the voice
+/// beads and the timer, plus a mode chip for Summary and Prompt, plus Cancel
+/// and Stop once a tap has made it a toggle recording.
+const LISTENING_WIDTH: f64 = 160.0;
+const LISTENING_CHIP_WIDTH: f64 = 64.0;
+const LISTENING_CONTROLS_WIDTH: f64 = 60.0;
+const PILL_HEIGHT: f64 = 44.0;
+const CAPSULE_WIDTH: f64 = 236.0;
+const LANDED_WIDTH: f64 = 120.0;
+/// Room for a qualifier after the result, e.g. "Inserted · cleanup skipped".
+const LANDED_WIDE_WIDTH: f64 = 212.0;
+const LANDED_HEIGHT: f64 = 36.0;
+const COPIED_WIDTH: f64 = 248.0;
+const COPIED_HEIGHT: f64 = 52.0;
+const NOTICE_WIDTH: f64 = 340.0;
+const NOTICE_HEIGHT: f64 = 90.0;
+const RECOVERY_WIDTH: f64 = 360.0;
+const RECOVERY_HEIGHT: f64 = 118.0;
+const EDITOR_WIDTH: f64 = 524.0;
+const EDITOR_HEIGHT: f64 = 252.0;
 const BOTTOM_MARGIN: f64 = 28.0;
 /// Long enough for the capsule's exit to finish. Keep in step with
 /// --duration-exit in presence.css.
@@ -54,18 +65,11 @@ pub enum Mode {
 }
 
 #[derive(Clone, Debug)]
-struct DisplayAnchor {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    scale: f64,
-}
-
-#[derive(Clone, Debug)]
 struct TargetContext {
     app: paste::TargetApp,
-    display: Option<DisplayAnchor>,
+    /// The display you were working on when the shortcut fired. The capsule
+    /// stays on it for the whole session.
+    display: Option<crate::macos::ScreenFrame>,
 }
 
 enum Runtime {
@@ -123,6 +127,11 @@ pub struct VoiceState {
     /// its default bottom-center anchor. Reset per session so a one-off nudge
     /// never becomes a permanent, forgotten position.
     drag_offset: Mutex<(f64, f64)>,
+    /// Where the capsule currently sits: its display and window size, so a
+    /// drag can move it without asking AppKit where it is.
+    placement: Mutex<Option<(crate::macos::ScreenFrame, f64, f64)>>,
+    /// The current recording was started by a tap rather than a hold.
+    toggle_recording: AtomicBool,
     last_history_id: Mutex<Option<String>>,
 }
 
@@ -136,6 +145,8 @@ impl VoiceState {
             presentation_ready: std::sync::atomic::AtomicBool::new(false),
             pending_presentation: Mutex::new(None),
             drag_offset: Mutex::new((0.0, 0.0)),
+            placement: Mutex::new(None),
+            toggle_recording: AtomicBool::new(false),
             last_history_id: Mutex::new(None),
         }
     }
@@ -162,7 +173,9 @@ struct PreviewPayload {
     text: String,
     editable: bool,
     interface_sounds: bool,
-    pet: bool,
+    /// A tap started this recording, so it needs visible Cancel and Stop. A
+    /// held shortcut ends on release and keeps the capsule bare.
+    controls: bool,
     /// Logical size of the window this state occupies. The webview animates
     /// its single glass surface to match, so the presentation reads as one
     /// panel growing rather than three windows swapping.
@@ -180,7 +193,7 @@ pub fn voice_preview_init(app: &AppHandle) -> Result<(), String> {
         WebviewUrl::App("voice-preview/preview.html".into()),
     )
     .title("Samlu Voice")
-    .inner_size(CAPSULE_WIDTH, CAPSULE_HEIGHT)
+    .inner_size(CAPSULE_WIDTH + SURFACE_INSET, PILL_HEIGHT + SURFACE_INSET)
     .decorations(false)
     .transparent(true)
     .background_color(Color(0, 0, 0, 0))
@@ -398,7 +411,6 @@ pub fn get_voice_settings(config: tauri::State<'_, Arc<VoiceConfig>>) -> serde_j
             "prompt": config.delivery(Mode::Prompt),
         },
         "interfaceSounds": config.interface_sounds(),
-        "petCapsule": config.pet_capsule(),
     })
 }
 
@@ -504,11 +516,6 @@ pub fn set_voice_delivery(
 #[tauri::command]
 pub fn set_voice_interface_sounds(enabled: bool, config: tauri::State<'_, Arc<VoiceConfig>>) {
     config.set_interface_sounds(enabled);
-}
-
-#[tauri::command]
-pub fn set_voice_pet_capsule(enabled: bool, config: tauri::State<'_, Arc<VoiceConfig>>) {
-    config.set_pet_capsule(enabled);
 }
 
 #[tauri::command]
@@ -633,6 +640,7 @@ fn voice_pressed(app: &AppHandle, mode: Mode) {
             }
             let pressed_at = Instant::now();
             let target = capture_target(app);
+            state.toggle_recording.store(false, Ordering::Relaxed);
             *runtime = Runtime::Starting {
                 mode,
                 pressed_at,
@@ -697,8 +705,31 @@ fn voice_released(app: &AppHandle) {
                 spawn_processing(app.clone(), recording, mode, target);
             }
         }
+        Runtime::Recording { mode, target, .. } => {
+            let (mode, target) = (*mode, target.clone());
+            drop(runtime);
+            show_toggle_controls(app, &target, mode);
+        }
         _ => {}
     }
+}
+
+/// A tap, not a hold: the recording now waits for a second press, so the
+/// capsule widens to offer Cancel and Stop.
+fn show_toggle_controls(app: &AppHandle, target: &TargetContext, mode: Mode) {
+    let state = app.state::<Arc<VoiceState>>();
+    if state.toggle_recording.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    show_status(
+        app,
+        target,
+        "listening",
+        mode_label(mode),
+        "Listening",
+        "",
+        false,
+    );
 }
 
 fn begin_recording(app: AppHandle) {
@@ -737,13 +768,17 @@ fn begin_recording(app: AppHandle) {
             }
 
             let id = state.next_recording_id.fetch_add(1, Ordering::Relaxed);
+            let tapped = released_at.is_some();
             *state.runtime.lock().unwrap() = Runtime::Recording {
                 id,
                 recording,
                 mode,
                 pressed_at,
-                target,
+                target: target.clone(),
             };
+            if tapped {
+                show_toggle_controls(&app, &target, mode);
+            }
             schedule_recording_limit(app, id);
         }
         Err(error) => fail(&app, &error),
@@ -984,29 +1019,6 @@ async fn deliver(app: AppHandle, produced: Produced, mode: Mode, target: TargetC
                 }
                 return;
             }
-            // Samlu ferries the result to the pointer before it lands. Short
-            // by design — this delay sits between releasing the hotkey and
-            // seeing the text.
-            if app.state::<Arc<VoiceConfig>>().pet_capsule() {
-                show_status(
-                    &app,
-                    &target,
-                    "delivering",
-                    mode_label(mode),
-                    "Inserting",
-                    "",
-                    false,
-                );
-                if crate::pet::carry(&app) {
-                    // The travelling pet is now the presentation; avoid
-                    // leaving a duplicate capsule behind.
-                    hide_preview(&app);
-                    let _ = tauri::async_runtime::spawn_blocking(|| {
-                        std::thread::sleep(Duration::from_millis(crate::pet::CARRY_DURATION_MS));
-                    })
-                    .await;
-                }
-            }
             match inject_without_blocking(&app, &text, &target.app).await {
                 Ok(()) => {
                     *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
@@ -1244,11 +1256,13 @@ fn show_status(
         .as_ref()
         .map(|config| config.interface_sounds())
         .unwrap_or(false);
-    let pet = config
-        .as_ref()
-        .map(|config| config.pet_capsule())
-        .unwrap_or(true);
-    let (width, height) = state_size(state_name, pet);
+    let controls = state_name == "listening"
+        && app
+            .state::<Arc<VoiceState>>()
+            .toggle_recording
+            .load(Ordering::Relaxed);
+    let chip = state_name == "listening" && title != mode_label(Mode::Normal);
+    let (width, height) = state_size(state_name, detail, chip, controls);
     let payload = PreviewPayload {
         state: state_name.to_string(),
         mode: title.to_string(),
@@ -1257,7 +1271,7 @@ fn show_status(
         text: text.to_string(),
         editable,
         interface_sounds,
-        pet,
+        controls,
         width,
         height,
     };
@@ -1269,22 +1283,14 @@ fn show_status(
         + 1;
     if let Some(window) = app.get_webview_window(PREVIEW_LABEL) {
         let already_visible = window.is_visible().unwrap_or(false);
-        position_window(&window, target, width, height);
-        let interactive = editable
-            || matches!(state_name, "recovery" | "failed")
-            || (state_name == "listening" && !pet);
+        let interactive =
+            editable || matches!(state_name, "recovery" | "failed") || state_name == "listening";
         crate::macos::set_ignores_mouse_events(&window, !interactive);
         // Re-presenting orders the window out and back in, which reads as a
         // flicker mid-session. Only do it for a genuine arrival; while the
         // capsule is already up, resizing in place lets the webview animate
         // one surface from one state into the next.
-        if !already_visible {
-            let presented =
-                crate::macos::present_overlay_at_cursor(&window, width, height, BOTTOM_MARGIN);
-            if !presented {
-                let _ = window.show();
-            }
-        }
+        place_window(&window, target, width, height, !already_visible);
         if editable {
             crate::macos::focus_overlay(&window);
         }
@@ -1412,9 +1418,9 @@ fn show_clipboard_fallback(app: &AppHandle, target: &TargetContext, mode: Mode) 
 fn show_recovery(app: &AppHandle, target: TargetContext, text: String, error: String, mode: Mode) {
     log::warn!("[voice] delivery needs recovery: {error}");
     let detail = if paste::is_accessibility_error(&error) {
-        "Enable Accessibility for automatic insertion. Your result is already on the clipboard."
+        "Turn on Accessibility to insert automatically. Your words are on the clipboard."
     } else {
-        "Samlu could not restore the original field. Your result is safe."
+        "Samlu couldn’t reach the original field. Your words are right here."
     };
     *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Recovering {
         target: target.clone(),
@@ -1465,78 +1471,99 @@ fn fail(app: &AppHandle, error: &str) {
     });
 }
 
-fn capture_target(app: &AppHandle) -> TargetContext {
-    let display = app.get_webview_window(PREVIEW_LABEL).and_then(|window| {
-        let position = window.cursor_position().ok()?;
-        let monitor = window
-            .monitor_from_point(position.x, position.y)
-            .ok()
-            .flatten()
-            .or_else(|| window.primary_monitor().ok().flatten())?;
-        Some(DisplayAnchor {
-            x: monitor.position().x,
-            y: monitor.position().y,
-            width: monitor.size().width,
-            height: monitor.size().height,
-            scale: monitor.scale_factor(),
-        })
-    });
+fn capture_target(_app: &AppHandle) -> TargetContext {
     TargetContext {
         // NSWorkspace target capture is permission-independent and preserves
         // the original editor even when Accessibility is granted mid-session.
         app: paste::frontmost_target(),
-        display,
+        display: crate::macos::active_screen_frame(),
     }
 }
 
 /// Logical window size for a presentation state. Also handed to the webview so
 /// it can animate its surface to the same bounds.
-fn state_size(state_name: &str, pet: bool) -> (f64, f64) {
-    match state_name {
+fn state_size(state_name: &str, detail: &str, chip: bool, controls: bool) -> (f64, f64) {
+    let (width, height) = match state_name {
+        "listening" => {
+            let mut width = LISTENING_WIDTH;
+            if chip {
+                width += LISTENING_CHIP_WIDTH;
+            }
+            if controls {
+                width += LISTENING_CONTROLS_WIDTH;
+            }
+            (width, PILL_HEIGHT)
+        }
+        "success" if detail.contains('·') => (LANDED_WIDE_WIDTH, LANDED_HEIGHT),
+        "success" => (LANDED_WIDTH, LANDED_HEIGHT),
+        "copied" => (COPIED_WIDTH, COPIED_HEIGHT),
+        "error" => (NOTICE_WIDTH, NOTICE_HEIGHT),
         "preview" => (EDITOR_WIDTH, EDITOR_HEIGHT),
         "recovery" | "failed" => (RECOVERY_WIDTH, RECOVERY_HEIGHT),
-        "copied" if pet => (PET_FALLBACK_WIDTH, PET_FALLBACK_HEIGHT),
-        "listening" | "processing" | "delivering" if pet => (PET_CAPSULE_WIDTH, PET_CAPSULE_HEIGHT),
-        _ => (CAPSULE_WIDTH, CAPSULE_HEIGHT),
-    }
+        _ => (CAPSULE_WIDTH, PILL_HEIGHT),
+    };
+    (width + SURFACE_INSET, height + SURFACE_INSET)
 }
 
-fn position_window(window: &tauri::WebviewWindow, target: &TargetContext, width: f64, height: f64) {
-    if let Err(error) = window.set_size(LogicalSize::new(width, height)) {
-        log::warn!("[voice] could not resize preview window: {error}");
-    }
-    let Some(display) = target.display.as_ref() else {
+/// Puts the capsule at the bottom centre of the session's display, plus any
+/// drag offset, in AppKit points. Everything stays in points: converting
+/// through physical pixels uses the scale of whichever display the window is
+/// on now, which sent it back to the wrong screen on mixed-DPI setups.
+fn place_window(
+    window: &tauri::WebviewWindow,
+    target: &TargetContext,
+    width: f64,
+    height: f64,
+    present: bool,
+) {
+    let Some(display) = target.display.or_else(crate::macos::active_screen_frame) else {
+        let _ = window.set_size(LogicalSize::new(width, height));
+        if present {
+            let _ = window.show();
+        }
         return;
     };
-    let physical_width = width * display.scale;
-    let physical_height = height * display.scale;
-    let (offset_x, offset_y) = window
-        .app_handle()
-        .try_state::<Arc<VoiceState>>()
-        .map(|state| *state.drag_offset.lock().unwrap())
-        .unwrap_or((0.0, 0.0));
-    let x = display.x as f64 + (display.width as f64 - physical_width) / 2.0 + offset_x;
-    let y =
-        display.y as f64 + display.height as f64 - physical_height - BOTTOM_MARGIN * display.scale
-            + offset_y;
-    let (x, y) = clamp_to_display(
-        x,
-        y,
-        physical_width,
-        physical_height,
-        display.x as f64,
-        display.y as f64,
-        display.width as f64,
-        display.height as f64,
-    );
-    if let Err(error) = window.set_position(PhysicalPosition::new(x, y)) {
-        log::warn!("[voice] could not position preview window: {error}");
+    let Some(state) = window.app_handle().try_state::<Arc<VoiceState>>() else {
+        return;
+    };
+    let mut offset = state.drag_offset.lock().unwrap();
+    let (x, y) = capsule_origin(&display, width, height, &mut offset);
+    *state.placement.lock().unwrap() = Some((display, width, height));
+    drop(offset);
+    if !crate::macos::set_overlay_frame(window, x, y, width, height, present) {
+        let _ = window.set_size(LogicalSize::new(width, height));
+        if present {
+            let _ = window.show();
+        }
     }
 }
 
-/// Keeps the capsule wholly on its display, so a drag can never strand it
-/// half off an edge where its buttons are unreachable.
-#[allow(clippy::too_many_arguments)]
+/// Bottom-centre origin for a capsule of this size, moved by the user's drag
+/// offset (points, y down) and kept on the display. The offset is rewritten
+/// to what was actually applied, so dragging into an edge never banks travel
+/// that has to be dragged back out.
+fn capsule_origin(
+    display: &crate::macos::ScreenFrame,
+    width: f64,
+    height: f64,
+    offset: &mut (f64, f64),
+) -> (f64, f64) {
+    let base_x = display.x + (display.width - width) / 2.0;
+    let base_y = display.y + BOTTOM_MARGIN;
+    let (x, y) = clamp_to_display(
+        base_x + offset.0,
+        base_y - offset.1,
+        width,
+        height,
+        display.x,
+        display.y,
+        display.width,
+        display.height,
+    );
+    *offset = (x - base_x, base_y - y);
+    (x, y)
+}
+
 fn clamp_to_display(
     x: f64,
     y: f64,
@@ -1564,37 +1591,18 @@ pub fn voice_preview_drag(app: AppHandle, dx: f64, dy: f64) {
     let Some(window) = app.get_webview_window(PREVIEW_LABEL) else {
         return;
     };
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let Ok(position) = window.outer_position() else {
+    let Some(state) = app.try_state::<Arc<VoiceState>>() else {
         return;
     };
-    let Ok(size) = window.outer_size() else {
+    let Some((display, width, height)) = *state.placement.lock().unwrap() else {
         return;
     };
-    let mut x = position.x as f64 + dx * scale;
-    let mut y = position.y as f64 + dy * scale;
-
-    if let Ok(Some(monitor)) = window.current_monitor() {
-        let origin = monitor.position();
-        let bounds = monitor.size();
-        (x, y) = clamp_to_display(
-            x,
-            y,
-            size.width as f64,
-            size.height as f64,
-            origin.x as f64,
-            origin.y as f64,
-            bounds.width as f64,
-            bounds.height as f64,
-        );
-    }
-
-    if let Some(state) = app.try_state::<Arc<VoiceState>>() {
-        let mut offset = state.drag_offset.lock().unwrap();
-        offset.0 += x - position.x as f64;
-        offset.1 += y - position.y as f64;
-    }
-    let _ = window.set_position(PhysicalPosition::new(x, y));
+    let mut offset = state.drag_offset.lock().unwrap();
+    offset.0 += dx;
+    offset.1 += dy;
+    let (x, y) = capsule_origin(&display, width, height, &mut offset);
+    drop(offset);
+    crate::macos::set_overlay_frame(&window, x, y, width, height, false);
 }
 
 fn mode_label(mode: Mode) -> &'static str {
@@ -1706,6 +1714,54 @@ fn validate_role(role: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use config::{SttEngine, SttSettings};
+
+    fn display() -> crate::macos::ScreenFrame {
+        // A secondary display to the left of the primary one, as AppKit
+        // reports it: negative x, its own bottom edge.
+        crate::macos::ScreenFrame {
+            x: -1920.0,
+            y: 120.0,
+            width: 1920.0,
+            height: 1080.0,
+        }
+    }
+
+    #[test]
+    fn capsule_sits_bottom_centre_of_its_display() {
+        let mut offset = (0.0, 0.0);
+        let (x, y) = capsule_origin(&display(), 200.0, 60.0, &mut offset);
+        assert_eq!(x, -1920.0 + (1920.0 - 200.0) / 2.0);
+        assert_eq!(y, 120.0 + BOTTOM_MARGIN);
+        assert_eq!(offset, (0.0, 0.0));
+    }
+
+    #[test]
+    fn dragging_moves_in_points_with_y_down() {
+        let mut offset = (40.0, -100.0);
+        let (x, y) = capsule_origin(&display(), 200.0, 60.0, &mut offset);
+        assert_eq!(x, -1920.0 + 860.0 + 40.0);
+        assert_eq!(y, 120.0 + BOTTOM_MARGIN + 100.0);
+    }
+
+    #[test]
+    fn dragging_past_an_edge_does_not_bank_travel() {
+        let mut offset = (5000.0, 5000.0);
+        let (x, y) = capsule_origin(&display(), 200.0, 60.0, &mut offset);
+        assert_eq!(x, -1920.0 + 1920.0 - 200.0);
+        assert_eq!(y, 120.0);
+        // The offset now records only what was applied, so dragging back
+        // moves the capsule immediately.
+        assert_eq!(offset, (860.0, BOTTOM_MARGIN));
+    }
+
+    #[test]
+    fn listening_grows_for_the_mode_chip_and_tap_controls() {
+        let (bare, _) = state_size("listening", "", false, false);
+        let (chip, _) = state_size("listening", "", true, false);
+        let (both, height) = state_size("listening", "", true, true);
+        assert!(bare < chip && chip < both);
+        assert_eq!(height, PILL_HEIGHT + SURFACE_INSET);
+    }
 
     #[test]
     fn choices_map_to_engine_settings_and_back() {

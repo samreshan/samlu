@@ -121,7 +121,7 @@ function renderTryStep() {
   }
 }
 
-const DELIVERY_CARDS = { pet: "pick-pet", island: "pick-island", system: "pick-system" };
+const DELIVERY_CARDS = { island: "pick-island", system: "pick-system" };
 
 function renderDelivery() {
   Object.entries(DELIVERY_CARDS).forEach(([value, id]) => {

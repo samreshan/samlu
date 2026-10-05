@@ -60,6 +60,7 @@ fn main() {
         .flag("-fblocks")
         .compile("samlu_native");
     println!("cargo:rustc-link-lib=framework=AppKit");
+    println!("cargo:rustc-link-lib=framework=CoreGraphics");
     println!("cargo:rustc-link-lib=framework=AVFoundation");
     build_swift_bridge();
     tauri_build::build()

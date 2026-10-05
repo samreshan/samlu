@@ -23,7 +23,9 @@ The interface should feel calm, personable, and immediate. It should use macOS c
 
 - The everyday voice interface is a compact **Voice Capsule**, separate from the settings window.
 - The Voice Capsule appears at the bottom center of the display containing the focused window when recording begins.
-- If the focused window's display cannot be determined, use the display containing the pointer.
+- The focused window is the frontmost app's frontmost on-screen window, read from the window server (no Screen Recording permission needed). If it cannot be determined, use the display containing the pointer.
+- The Samlu Island and the launcher use the same rule, so every presence surface follows the window you switched to rather than where the pointer rests.
+- All overlay placement happens in AppKit points. Physical-pixel positioning is avoided because it converts with the scale of the display the window is currently on, which misplaces it across mixed-DPI displays.
 - Once recording begins, the Voice Capsule remains anchored to that display for the full recording session.
 - It must not activate Samlu or steal focus from the target application.
 - It must work across applications, displays, Spaces, and full-screen contexts.
@@ -58,8 +60,8 @@ The interface should feel calm, personable, and immediate. It should use macOS c
 - The visual system should feel warm and personable without becoming playful, toy-like, or visually noisy.
 - Translucent materials are reserved primarily for floating surfaces.
 - State must never be communicated by color alone.
-- A future Samlu mascot may appear during voice, launcher, and notification interactions, but essential status and controls must remain understandable without it.
-- The current companion pet or mascot is not part of this refinement.
+- Samlu's character on presence surfaces is the **breath bead**: a small yellow bead with a breathing halo (`.samlu-bead` in `presence.css`). The flying mascot and its pointer-delivered cards are retired.
+- Every `<select>` is drawn by `samlu-select.js` as a Samlu dropdown or, with `data-variant="segmented"`, a segmented control. Native select chrome never shows.
 
 ## Interaction architecture
 
@@ -138,7 +140,8 @@ Processing → Recovery
 
 ### Geometry and placement
 
-- The compact implementation window is 260 × 72 points, with a visible capsule of approximately 244 × 56 points.
+- Listening is a 44-point pill sized to its content: breath bead, voice beads and timer (160 points), plus a mode chip for Summary and Prompt, plus Cancel and Stop once a tap makes it a toggle recording. Windows add an 8-point inset on every side for the shadow.
+- Working is a 236 × 44 pill; Landed folds to 120 × 36; Kept safe grows to 360 × 118.
 - Place it at the horizontal center of the selected display, above the Dock and safe area.
 - It may expand horizontally to reveal contextual controls.
 - Editable preview expands upward from the same anchor.
@@ -157,8 +160,9 @@ Processing → Recovery
 
 - Initial appearance should complete in approximately 100 milliseconds.
 - The waveform is driven by real microphone levels.
-- The initial waveform direction uses rounded pulse beads rather than a conventional sharp equalizer.
-- During processing, the pulse beads gather into a calm traveling pulse.
+- Nine rounded voice beads, tallest in the middle, follow the real microphone level; quiet speech stays as dots.
+- During processing, the beads gather into a calm three-dot pulse, and the pill names the step honestly: "Heard" once transcription is done, then the shaping step.
+- Success folds the pill into a drawn check with a single word ("Inserted", "Copied") and dismisses.
 - Successful delivery resolves into a small confirmation mark and dismisses quickly.
 - Failure expands into the persistent Recovery state.
 - Reduce Motion replaces spatial morphs with short fades while retaining all state feedback.
@@ -252,8 +256,7 @@ Implementation tokens live in `public/presence.css` and are shared by Settings, 
 
 - Notification grouping for simultaneous agent events
 - A privacy mode that automatically obscures summaries during screen sharing
-- More precise focused-window display detection when the pointer and focused window are on different displays
-- Future mascot entrance, placement, and reduced-motion behavior
+- A caret glint at the insertion point after delivery (needs the focused element's caret bounds through Accessibility)
 
 ## Implemented refinement status
 

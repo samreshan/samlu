@@ -352,7 +352,6 @@ async function loadVoiceSettings() {
     byId("voice-summary-delivery").value = settings.delivery?.summary || "instant_insert";
     byId("voice-prompt-delivery").value = settings.delivery?.prompt || "editable_preview";
     byId("voice-interface-sounds").checked = settings.interfaceSounds !== false;
-    byId("voice-pet-capsule").checked = settings.petCapsule !== false;
     byId("voice-keep-history").checked = settings.keepHistory !== false;
     await loadVoiceHistory();
     renderMicrophonePermission(microphoneStatus);
@@ -632,10 +631,60 @@ function addShortcutModifier(shortcut, modifier) {
   return [...parts, modifier, key].join("+");
 }
 
+/** Draws a shortcut as one keycap per key, e.g. ⌥ ⇧ V. */
+function renderKeys(id, shortcut) {
+  const holder = byId(id);
+  if (!holder) return;
+  holder.replaceChildren();
+  if (!shortcut) {
+    holder.textContent = "Not set";
+    holder.classList.add("unset");
+    return;
+  }
+  holder.classList.remove("unset");
+  holder.setAttribute("aria-label", shortcutGlyphs(shortcut));
+  shortcut
+    .split("+")
+    .map((part) => shortcutGlyphs(part))
+    .filter(Boolean)
+    // Named keys read as words on a keycap: "Space", not "SPACE".
+    .map((glyph) => (glyph.length > 1 ? glyph[0] + glyph.slice(1).toLowerCase() : glyph))
+    .forEach((glyph) => {
+      const key = document.createElement("kbd");
+      key.className = "samlu-kbd";
+      key.textContent = glyph;
+      holder.appendChild(key);
+    });
+}
+
 function updateVoiceShortcutGuide(hotkey) {
-  byId("voice-normal-key").textContent = shortcutGlyphs(hotkey);
-  byId("voice-summary-key").textContent = shortcutGlyphs(addShortcutModifier(hotkey, "Shift"));
-  byId("voice-prompt-key").textContent = shortcutGlyphs(addShortcutModifier(hotkey, "Cmd"));
+  const summary = addShortcutModifier(hotkey, "Shift");
+  const prompt = addShortcutModifier(hotkey, "Cmd");
+  renderKeys("voice-normal-key", hotkey);
+  renderKeys("voice-summary-key", summary);
+  renderKeys("voice-prompt-key", prompt);
+  renderKeys("overview-normal-key", hotkey);
+  renderKeys("overview-summary-key", summary);
+  renderKeys("overview-prompt-key", prompt);
+  byId("overview-hold-key").textContent = shortcutGlyphs(hotkey);
+}
+
+/** The Overview's shortcut card reads both hotkeys at startup, without
+ * waiting for the Voice or Launcher tab to be opened. */
+async function loadShortcutSummary() {
+  const greeting = new Date().getHours();
+  byId("overview-greeting").textContent =
+    greeting < 12 ? "Good morning" : greeting < 18 ? "Good afternoon" : "Good evening";
+  try {
+    const [voice, launcher] = await Promise.all([
+      invoke("get_voice_settings"),
+      invoke("get_launcher_hotkey"),
+    ]);
+    updateVoiceShortcutGuide(voice?.hotkey || "Alt+V");
+    renderKeys("overview-launcher-key", launcher || "");
+  } catch (_) {
+    // The card keeps its defaults; each tab reports its own load errors.
+  }
 }
 
 // Ctrl, Alt, Shift, Cmd, then the key: the exact spelling and order the global
@@ -738,6 +787,7 @@ async function loadLauncherSettings() {
       invoke("get_project_settings"),
     ]);
     launcherHotkeyRecorder.set(hotkey);
+    renderKeys("overview-launcher-key", hotkey || "");
     notificationPreferences = preferences;
     byId("clipboard-history-enabled").checked = preferences.clipboardHistoryEnabled;
     snippets = storedSnippets;
@@ -1139,14 +1189,6 @@ function bindEvents() {
       await loadVoiceSettings();
     }
   });
-  byId("voice-pet-capsule").addEventListener("change", async (event) => {
-    try {
-      await invoke("set_voice_pet_capsule", { enabled: event.currentTarget.checked });
-    } catch (error) {
-      toast(errorMessage(error), true);
-      await loadVoiceSettings();
-    }
-  });
   byId("voice-history-search").addEventListener("input", loadVoiceHistory);
   byId("voice-history-raw").addEventListener("change", renderVoiceHistory);
   byId("voice-keep-history").addEventListener("change", async (event) => {
@@ -1172,6 +1214,7 @@ function bindEvents() {
     "launcher-hotkey",
     async (hotkey) => {
       await invoke("set_launcher_hotkey", { hotkey });
+      renderKeys("overview-launcher-key", hotkey);
       showSaveState("launcher-save-state");
     },
     async () => launcherHotkeyRecorder.set(await invoke("get_launcher_hotkey")),
@@ -1251,7 +1294,7 @@ async function boot() {
   window.addEventListener("focus", () => {
     if (byId("tab-voice").classList.contains("active")) loadVoiceSettings();
   });
-  await loadOverview();
+  await Promise.all([loadOverview(), loadShortcutSummary()]);
   await listen("agent://event", () => loadOverview());
   await listen("appearance://changed", (event) => {
     applyAppearance(event.payload);

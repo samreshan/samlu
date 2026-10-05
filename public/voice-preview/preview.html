@@ -8,99 +8,95 @@
     <link rel="stylesheet" href="../presence.css" />
     <link rel="stylesheet" href="./preview.css" />
   </head>
-  <body data-state="listening">
+  <body data-state="listening" data-controls="false">
     <!-- One surface for every state. The sections below are content layers
          that cross-fade inside it while it resizes around them. -->
-    <main class="presence" id="presence" data-motion="surface" aria-live="polite">
-      <!-- Pet presentation: Samlu waggles while you speak and scales with your
-           voice. Stands in for the waveform capsule when the pet is enabled. -->
-      <section class="layer pet-capsule" id="pet-capsule" data-active="false">
-        <span class="pet-run" id="pet-run">
-          <span class="pet-shake" id="pet-shake">
-            <span class="pet-level" id="pet-level">
-              <svg viewBox="0 0 240 240" aria-hidden="true">
-                <g class="samlu-mark-brand">
-                  <rect x="48" y="96" width="96" height="96" />
-                  <rect x="143.5" y=".5" width="96" height="96" />
-                  <rect y="192.5" width="48.5" height="47.5" />
-                </g>
-                <g class="samlu-mark-ink">
-                  <path d="M144,0h0v96H48C48,43.02,91.02,0,144,0Z" />
-                  <path d="M143,96h96c0,52.98-43.02,96-96,96h0v-96h0Z" />
-                </g>
-              </svg>
-            </span>
-          </span>
-        </span>
-        <span class="pet-status" id="pet-status">Listening</span>
-      </section>
+    <main class="presence" id="presence" data-motion="surface">
+      <p class="sr-only" id="announce" aria-live="polite"></p>
 
+      <!-- Listening and working: one pill. Its parts show or hide by state. -->
       <section class="layer capsule" id="capsule" data-active="true">
-        <div class="brand-signal" aria-hidden="true">
-          <i></i><i></i><i></i><i></i>
-        </div>
+        <button class="round-button cancel-button" id="cancel-recording" type="button" aria-label="Cancel recording">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" /></svg>
+        </button>
 
-        <div class="voice-copy">
-          <div class="voice-heading">
-            <strong id="title">Dictation</strong>
-            <span id="elapsed">0:00</span>
-          </div>
-          <span id="detail">Listening</span>
-        </div>
+        <span class="samlu-bead" id="bead" aria-hidden="true"></span>
 
-        <div class="waveform" id="waveform" aria-label="Microphone level">
-          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-        </div>
+        <span class="beads" id="beads" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </span>
 
-        <div class="state-symbol" aria-hidden="true">
-          <span class="success-mark">✓</span>
-          <span class="error-mark">!</span>
-        </div>
+        <span class="working" aria-hidden="true">
+          <span class="heard" id="heard">
+            <svg viewBox="0 0 12 12"><path d="M2.5 6.2l2.3 2.3 4.7-5" /></svg>Heard
+          </span>
+          <span class="working-label" id="working-label">Writing it down</span>
+          <span class="travel"><i></i><i></i><i></i></span>
+        </span>
 
-        <div class="capsule-actions">
-          <button class="circle-button cancel-button" id="cancel-recording" type="button" aria-label="Cancel">
-            <span aria-hidden="true">×</span>
-          </button>
-          <button class="circle-button stop-button" id="stop-recording" type="button" aria-label="Finish recording">
-            <span aria-hidden="true"></span>
-          </button>
+        <span class="mode-chip" id="mode-chip" hidden></span>
+        <span class="elapsed" id="elapsed" aria-hidden="true">0:00</span>
+
+        <button class="round-button stop-button" id="stop-recording" type="button" aria-label="Finish recording">
+          <span aria-hidden="true"></span>
+        </button>
+      </section>
+
+      <!-- Landed: the pill folds into a check and a word. -->
+      <section class="layer landed" id="landed" data-active="false">
+        <span class="landed-mark" aria-hidden="true">
+          <svg viewBox="0 0 12 12"><path d="M2.5 6.2l2.3 2.3 4.7-5" /></svg>
+        </span>
+        <strong id="landed-label">Inserted</strong>
+        <span id="landed-note"></span>
+      </section>
+
+      <!-- Short-lived notices: copied instead of inserted, or voice unavailable. -->
+      <section class="layer notice" id="notice" data-active="false">
+        <span class="notice-mark" aria-hidden="true">
+          <svg class="mark-copied" viewBox="0 0 14 14"><rect x="4.5" y="4.5" width="7" height="7" rx="1.6" /><path d="M9.5 4.5V3.6c0-.6-.5-1.1-1.1-1.1H3.6c-.6 0-1.1.5-1.1 1.1v4.8c0 .6.5 1.1 1.1 1.1h.9" /></svg>
+          <svg class="mark-alert" viewBox="0 0 14 14"><path d="M7 4v3.6M7 10h.01" /><circle cx="7" cy="7" r="5.2" /></svg>
+        </span>
+        <div class="notice-copy">
+          <strong id="notice-title">Copied instead</strong>
+          <p id="notice-detail">Paste with ⌘V</p>
         </div>
       </section>
 
+      <!-- Kept safe: persists until the result is handled. -->
       <section class="layer recovery" id="recovery" data-active="false">
         <div class="recovery-copy">
-          <span class="recovery-symbol" id="recovery-symbol" aria-hidden="true">↗</span>
+          <span class="recovery-mark" aria-hidden="true">
+            <svg class="mark-safe" viewBox="0 0 14 14"><path d="M7 1.8l4.2 1.6v3.3c0 2.6-1.8 4.6-4.2 5.5-2.4-.9-4.2-2.9-4.2-5.5V3.4L7 1.8z" /><path d="M5.2 7l1.3 1.3L9 5.8" /></svg>
+            <svg class="mark-alert" viewBox="0 0 14 14"><path d="M7 4v3.6M7 10h.01" /><circle cx="7" cy="7" r="5.2" /></svg>
+          </span>
           <div>
-            <strong id="recovery-title">Result is safe</strong>
-            <p id="recovery-detail">Samlu could not insert into the original field.</p>
+            <strong id="recovery-title">Kept safe</strong>
+            <p id="recovery-detail">Samlu couldn’t reach the original field.</p>
           </div>
         </div>
         <div class="recovery-actions">
-          <button class="text-button" id="recovery-discard" type="button" hidden>Discard</button>
-          <button class="text-button" id="recovery-copy" type="button">Copy</button>
-          <button class="text-button" id="recovery-preview" type="button">Preview</button>
+          <button class="quiet-button" id="recovery-discard" type="button" hidden>Discard</button>
+          <button class="quiet-button" id="recovery-copy" type="button">Copy</button>
+          <button class="soft-button" id="recovery-preview" type="button">Preview</button>
           <button class="primary-button" id="recovery-retry" type="button">Try again</button>
         </div>
       </section>
 
+      <!-- Review before inserting: grows upward from the same anchor. -->
       <section class="layer editor" id="editor" data-active="false">
         <header class="editor-header">
           <div>
-            <span class="editor-kicker" id="editor-kicker">Prompt</span>
+            <span class="mode-chip" id="editor-kicker">Prompt</span>
             <strong id="editor-title">Detailed prompt</strong>
           </div>
-          <span class="editor-status">Ready to insert</span>
+          <span class="editor-status" id="editor-status"><i aria-hidden="true"></i>Ready</span>
         </header>
-        <textarea
-          id="text"
-          class="text"
-          aria-label="Voice result"
-          spellcheck="true"
-        ></textarea>
+        <textarea id="text" class="text" aria-label="Voice result" spellcheck="true"></textarea>
         <footer class="editor-actions">
-          <span class="hint"><kbd>⌘</kbd><kbd>↵</kbd> insert</span>
+          <span class="hint"><kbd class="samlu-kbd">⌘</kbd><kbd class="samlu-kbd">↵</kbd> insert</span>
           <div class="buttons">
-            <button class="text-button" id="cancel-preview" type="button">Copy &amp; close</button>
+            <button class="quiet-button" id="cancel-preview" type="button">Copy &amp; close</button>
             <button class="primary-button" id="insert-preview" type="button">Insert</button>
           </div>
         </footer>
