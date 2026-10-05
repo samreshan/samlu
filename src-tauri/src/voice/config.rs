@@ -142,8 +142,6 @@ struct Data {
     summary_delivery: DeliveryBehavior,
     prompt_delivery: DeliveryBehavior,
     interface_sounds: bool,
-    /// Show Samlu itself in the recording capsule instead of the waveform.
-    pet_capsule: bool,
     cleanup_dictation: bool,
     vocabulary: Vec<String>,
     keep_history: bool,
@@ -170,7 +168,6 @@ impl Default for Data {
             summary_delivery: DeliveryBehavior::InstantInsert,
             prompt_delivery: DeliveryBehavior::EditablePreview,
             interface_sounds: true,
-            pet_capsule: true,
             cleanup_dictation: false,
             vocabulary: Vec::new(),
             keep_history: true,
@@ -407,15 +404,6 @@ impl VoiceConfig {
 
     pub fn interface_sounds(&self) -> bool {
         self.data.lock().unwrap().interface_sounds
-    }
-
-    pub fn pet_capsule(&self) -> bool {
-        self.data.lock().unwrap().pet_capsule
-    }
-
-    pub fn set_pet_capsule(&self, enabled: bool) {
-        self.data.lock().unwrap().pet_capsule = enabled;
-        self.save();
     }
 
     pub fn set_interface_sounds(&self, enabled: bool) {

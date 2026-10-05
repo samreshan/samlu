@@ -385,26 +385,8 @@ kbd.inline {
 .delivery-grid {
   margin-top: 22px;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
-}
-
-.glide-bee {
-  display: block;
-  width: 36px;
-  height: 36px;
-  animation: glide 2.4s ease-in-out infinite;
-}
-
-.glide-bee svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-@keyframes glide {
-  0%, 100% { transform: translate(-7px, 4px); }
-  50% { transform: translate(7px, -4px); }
 }
 
 .delivery-card {

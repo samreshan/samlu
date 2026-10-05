@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <CoreGraphics/CoreGraphics.h>
 
 typedef void (*SamluColorCallback)(const char *);
 static NSColorSampler *samluSampler;
@@ -52,6 +53,135 @@ static NSScreen *samlu_screen_under_pointer(void) {
   return [NSScreen mainScreen] ?: [[NSScreen screens] firstObject];
 }
 
+/// The display holding the window you are working in: the frontmost app's
+/// frontmost on-screen window. The pointer is only a fallback, because after
+/// Command-Tab, a Mission Control switch or a keyboard-driven focus change the
+/// pointer is often still resting on another display.
+///
+/// Window bounds and owner come from the window server and need no Screen
+/// Recording permission; only window titles would.
+static NSScreen *samlu_active_screen(void) {
+  NSRunningApplication *front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+  NSArray<NSScreen *> *screens = [NSScreen screens];
+  if (front != nil && screens.count > 0) {
+    pid_t pid = front.processIdentifier;
+    CFArrayRef list = CGWindowListCopyWindowInfo(
+      kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+      kCGNullWindowID
+    );
+    if (list != NULL) {
+      NSArray *windows = CFBridgingRelease(list);
+      // Window-server bounds are top-left based on the primary display;
+      // AppKit screen frames are bottom-left based on the same display.
+      CGFloat primaryTop = NSMaxY(screens.firstObject.frame);
+      // The list is ordered front to back, so the first normal-layer window
+      // the app owns is the one it is showing you.
+      for (NSDictionary *info in windows) {
+        if ([info[(__bridge id)kCGWindowOwnerPID] intValue] != pid) {
+          continue;
+        }
+        if ([info[(__bridge id)kCGWindowLayer] intValue] != 0) {
+          continue;
+        }
+        CGRect bounds;
+        CFDictionaryRef boundsInfo = (__bridge CFDictionaryRef)info[(__bridge id)kCGWindowBounds];
+        if (boundsInfo == NULL || !CGRectMakeWithDictionaryRepresentation(boundsInfo, &bounds)) {
+          continue;
+        }
+        if (bounds.size.width < 80 || bounds.size.height < 60) {
+          continue;
+        }
+        NSPoint center = NSMakePoint(CGRectGetMidX(bounds), primaryTop - CGRectGetMidY(bounds));
+        for (NSScreen *screen in screens) {
+          if (NSPointInRect(center, screen.frame)) {
+            return screen;
+          }
+        }
+      }
+    }
+  }
+  return samlu_screen_under_pointer();
+}
+
+/// Writes the active display's frame, in AppKit points, as x, y, width,
+/// height. Callers anchor a whole session to it.
+bool samlu_active_screen_frame(double *out) {
+  if (out == NULL) {
+    return false;
+  }
+  __block NSRect frame = NSZeroRect;
+  void (^probe)(void) = ^{
+    NSScreen *screen = samlu_active_screen();
+    if (screen != nil) {
+      frame = screen.frame;
+    }
+  };
+  if ([NSThread isMainThread]) {
+    probe();
+  } else {
+    dispatch_sync(dispatch_get_main_queue(), probe);
+  }
+  if (NSIsEmptyRect(frame)) {
+    return false;
+  }
+  out[0] = frame.origin.x;
+  out[1] = frame.origin.y;
+  out[2] = frame.size.width;
+  out[3] = frame.size.height;
+  return true;
+}
+
+/// Sets an overlay's frame in AppKit points. Tauri's physical positions are
+/// converted with the scale of the display the window is on *now*, so moving
+/// between a Retina and a non-Retina display through them lands the window in
+/// the wrong place, usually back on the display it came from.
+void samlu_set_overlay_frame(
+  void *windowPointer,
+  double x,
+  double y,
+  double width,
+  double height,
+  bool present
+) {
+  if (windowPointer == NULL) {
+    return;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow *window = (__bridge NSWindow *)windowPointer;
+    if (present) {
+      // Ordering out first lets a window that last showed on another Space
+      // arrive on the one you are looking at now.
+      [window orderOut:nil];
+      samlu_apply_overlay_behavior(window);
+    }
+    NSRect content = NSMakeRect(x, y, width, height);
+    [window setFrame:[window frameRectForContentRect:content] display:YES animate:NO];
+    if (present) {
+      [window orderFrontRegardless];
+    }
+  });
+}
+
+/// Hangs an overlay from the top centre of the active display, keeping its
+/// current size. Used by the Samlu Island.
+void samlu_center_overlay_at_top(void *windowPointer) {
+  if (windowPointer == NULL) {
+    return;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow *window = (__bridge NSWindow *)windowPointer;
+    NSScreen *screen = samlu_active_screen();
+    if (screen == nil) {
+      return;
+    }
+    NSRect frame = window.frame;
+    NSRect bounds = screen.frame;
+    frame.origin.x = NSMidX(bounds) - NSWidth(frame) / 2.0;
+    frame.origin.y = NSMaxY(bounds) - NSHeight(frame);
+    [window setFrame:frame display:YES animate:NO];
+  });
+}
+
 void samlu_pick_color(SamluColorCallback callback) {
   dispatch_async(dispatch_get_main_queue(), ^{
     samluSampler = [[NSColorSampler alloc] init];
@@ -90,7 +220,7 @@ void samlu_pick_color(SamluColorCallback callback) {
 bool samlu_active_display_has_notch(void) {
   __block BOOL notched = NO;
   void (^probe)(void) = ^{
-    NSScreen *screen = samlu_screen_under_pointer();
+    NSScreen *screen = samlu_active_screen();
     if (screen == nil) {
       return;
     }
@@ -116,41 +246,8 @@ void samlu_configure_overlay_window(void *windowPointer) {
   });
 }
 
-/// Reasserts fullscreen/Spaces behavior on every presentation and anchors the
-/// overlay to whichever display currently contains the pointer. AppKit owns
-/// this operation because its screen coordinates stay authoritative while a
-/// fullscreen Space is active.
-void samlu_present_overlay_at_cursor(
-  void *windowPointer,
-  double width,
-  double height,
-  double bottomMargin
-) {
-  if (windowPointer == NULL) {
-    return;
-  }
-  dispatch_async(dispatch_get_main_queue(), ^{
-    NSWindow *window = (__bridge NSWindow *)windowPointer;
-    [window orderOut:nil];
-    samlu_apply_overlay_behavior(window);
-
-    NSScreen *targetScreen = samlu_screen_under_pointer();
-
-    [window setContentSize:NSMakeSize(width, height)];
-    if (targetScreen != nil) {
-      NSRect frame = targetScreen.frame;
-      NSPoint origin = NSMakePoint(
-        NSMidX(frame) - width / 2.0,
-        NSMinY(frame) + bottomMargin
-      );
-      [window setFrameOrigin:origin];
-    }
-    [window orderFrontRegardless];
-  });
-}
-
-/// Moves a keyboard-driven overlay to the Space/display under the pointer
-/// before making it key. Doing this as one AppKit operation prevents focusing
+/// Moves a keyboard-driven overlay to the active Space and display before
+/// making it key. Doing this as one AppKit operation prevents focusing
 /// Samlu from switching back to the Space where Settings was last open.
 void samlu_present_focusable_overlay_at_cursor(
   void *windowPointer,
@@ -165,7 +262,7 @@ void samlu_present_focusable_overlay_at_cursor(
     NSWindow *window = (__bridge NSWindow *)windowPointer;
     [window orderOut:nil];
     samlu_apply_focusable_overlay_behavior(window);
-    NSScreen *targetScreen = samlu_screen_under_pointer();
+    NSScreen *targetScreen = samlu_active_screen();
 
     [window setContentSize:NSMakeSize(width, height)];
     if (targetScreen != nil) {
@@ -217,9 +314,8 @@ void samlu_focus_overlay(void *windowPointer) {
   });
 }
 
-/// Lets clicks fall through to whatever is behind the overlay. The pet turns
-/// this off only while its card is on screen, so the bee itself never steals a
-/// click during its flight.
+/// Lets clicks fall through to whatever is behind the overlay, so a surface
+/// that only reports status never steals a click.
 void samlu_set_ignores_mouse_events(void *windowPointer, bool ignores) {
   if (windowPointer == NULL) {
     return;

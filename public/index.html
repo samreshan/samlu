@@ -43,8 +43,11 @@
         </nav>
 
         <div class="sidebar-foot">
-          <span class="status-dot" id="sidebar-status-dot"></span>
-          <span id="sidebar-status">Checking listener</span>
+          <span class="samlu-bead" aria-hidden="true"></span>
+          <span class="sidebar-foot-copy">
+            <strong>Listening for shortcuts</strong>
+            <span><span class="status-dot" id="sidebar-status-dot"></span><span id="sidebar-status">Checking listener</span></span>
+          </span>
         </div>
       </aside>
 
@@ -52,12 +55,30 @@
         <section class="tab-view active" id="tab-overview" aria-labelledby="overview-title">
           <header class="page-header">
             <div>
-              <p class="eyebrow">macOS build</p>
-              <h1 id="overview-title">Development command center</h1>
-              <p>Voice, agent completion signals, and fast developer utilities in one menu bar app.</p>
+              <p class="eyebrow" id="overview-greeting">Hello</p>
+              <h1 id="overview-title">Everything’s listening.</h1>
+              <p>Samlu is quietly ready in the menu bar. Speak, search, or leave an agent running.</p>
             </div>
-            <button class="icon-button" id="refresh-overview" type="button" aria-label="Refresh status">↻</button>
+            <button class="icon-button" id="refresh-overview" type="button" aria-label="Refresh status"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.8h-2.8" /></svg></button>
           </header>
+
+          <section class="shortcut-hero" aria-labelledby="shortcut-hero-title">
+            <div class="shortcut-list">
+              <h2 id="shortcut-hero-title">Your shortcuts</h2>
+              <div class="shortcut-line"><span class="keys" id="overview-normal-key">⌥V</span><strong>Dictate</strong><span>Inserts what you said</span></div>
+              <div class="shortcut-line"><span class="keys" id="overview-summary-key">⌥⇧V</span><strong>Summarize</strong><span>Compact notes</span></div>
+              <div class="shortcut-line"><span class="keys" id="overview-prompt-key">⌥⌘V</span><strong>Prompt</strong><span>A detailed brief, reviewed first</span></div>
+              <div class="shortcut-line"><span class="keys" id="overview-launcher-key">Not set</span><strong>Launcher</strong><span>Apps, projects, snippets, maths</span></div>
+            </div>
+            <div class="capsule-stage" aria-hidden="true">
+              <span class="capsule-stage-hint">Hold <strong id="overview-hold-key">⌥V</strong> anywhere. This appears.</span>
+              <span class="capsule-demo">
+                <span class="samlu-bead"></span>
+                <span class="capsule-demo-beads"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                <span class="capsule-demo-time">0:03</span>
+              </span>
+            </div>
+          </section>
 
           <div class="health-strip">
             <div>
@@ -85,7 +106,7 @@
             <div class="setting-rows">
               <label class="setting-row">
                 <span><strong>Appearance</strong><small>Follow macOS or keep Samlu in a specific theme.</small></span>
-                <select id="appearance">
+                <select id="appearance" data-variant="segmented">
                   <option value="system">System</option>
                   <option value="light">Light</option>
                   <option value="dark">Dark</option>
@@ -130,11 +151,10 @@
                 <input id="include-agent-summary" type="checkbox" />
               </label>
               <label class="setting-row">
-                <span><strong>Delivery style</strong><small>Where an event shows up first: beside your pointer, under the notch, or as a standard banner. Notification Center always keeps the record.</small></span>
-                <select id="agent-delivery">
-                  <option value="pet">Samlu brings it — card by your pointer</option>
-                  <option value="island">Samlu Island — under the notch</option>
-                  <option value="system">System only — macOS banner</option>
+                <span><strong>Delivery style</strong><small>Where an event shows up first, on the display you are working on. Notification Center always keeps the record.</small></span>
+                <select id="agent-delivery" data-variant="segmented">
+                  <option value="island" data-short="Under the notch">Samlu Island — under the notch</option>
+                  <option value="system" data-short="macOS banner">System only — macOS banner</option>
                 </select>
               </label>
               <label class="setting-row">
@@ -183,9 +203,9 @@
         <section class="tab-view" id="tab-voice" aria-labelledby="voice-title" hidden>
           <header class="page-header">
             <div>
-              <p class="eyebrow">Speech to text</p>
-              <h1 id="voice-title">Voice that understands the task</h1>
-              <p>Tap once to toggle recording, or hold the shortcut and release to send.</p>
+              <p class="eyebrow">Voice</p>
+              <h1 id="voice-title">Speak, and it lands where you were typing.</h1>
+              <p>Hold the shortcut and release to send, or tap once to start and again to stop.</p>
             </div>
           </header>
 
@@ -314,7 +334,7 @@
 
           <section class="settings-section">
             <div class="section-heading">
-              <div><h2>Interaction</h2><p>Three modes share one base shortcut.</p></div>
+              <div><h2>Modes and shortcut</h2><p>Three modes share one base shortcut. Choose what happens when each one is ready.</p></div>
               <span class="save-state" id="voice-interaction-save-state" aria-live="polite"></span>
             </div>
             <div class="setting-rows">
@@ -337,42 +357,47 @@
                 <button class="shortcut-input" id="voice-hotkey" type="button" aria-label="Base voice shortcut" aria-live="polite" aria-pressed="false">Not set</button>
               </div>
               <label class="setting-row">
-                <span><strong>Dictation delivery</strong><small>Fast everyday speech-to-text.</small></span>
-                <select id="voice-dictation-delivery">
-                  <option value="instant_insert">Instant insert</option>
-                  <option value="editable_preview">Editable preview</option>
-                  <option value="copy_only">Copy only</option>
-                </select>
-              </label>
-              <label class="setting-row">
-                <span><strong>Summary delivery</strong><small>Where compact notes should go after transformation.</small></span>
-                <select id="voice-summary-delivery">
-                  <option value="instant_insert">Instant insert</option>
-                  <option value="editable_preview">Editable preview</option>
-                  <option value="copy_only">Copy only</option>
-                </select>
-              </label>
-              <label class="setting-row">
-                <span><strong>Prompt delivery</strong><small>Review detailed agent instructions before inserting by default.</small></span>
-                <select id="voice-prompt-delivery">
-                  <option value="instant_insert">Instant insert</option>
-                  <option value="editable_preview">Editable preview</option>
-                  <option value="copy_only">Copy only</option>
-                </select>
-              </label>
-              <label class="setting-row">
-                <span><strong>Samlu appears while recording</strong><small>Samlu replaces the waveform, reacts to your voice, and carries the result over.</small></span>
-                <input id="voice-pet-capsule" type="checkbox" />
-              </label>
-              <label class="setting-row">
                 <span><strong>Interface sounds</strong><small>Quiet cues for recording, delivery, and failure.</small></span>
                 <input id="voice-interface-sounds" type="checkbox" />
               </label>
             </div>
-            <div class="mode-guide">
-              <div><kbd id="voice-normal-key">⌥V</kbd><strong>Dictate</strong><span>Transcript</span></div>
-              <div><kbd id="voice-summary-key">⌥⇧V</kbd><strong>Summarize</strong><span>Compact notes</span></div>
-              <div><kbd id="voice-prompt-key">⌥⌘V</kbd><strong>Prompt</strong><span>Detailed agent brief</span></div>
+            <div class="mode-guide" aria-label="Voice modes">
+              <div class="mode-card">
+                <span class="keys" id="voice-normal-key">⌥V</span>
+                <strong>Dictate</strong>
+                <span>Everyday speech to text, inserted as you said it.</span>
+                <label class="mode-delivery"><small>When it’s ready</small>
+                  <select id="voice-dictation-delivery" data-variant="segmented" aria-label="Dictate delivery">
+                  <option value="instant_insert" data-short="Insert">Instant insert</option>
+                  <option value="editable_preview" data-short="Preview">Editable preview</option>
+                  <option value="copy_only" data-short="Copy">Copy only</option>
+                  </select>
+                </label>
+              </div>
+              <div class="mode-card">
+                <span class="keys" id="voice-summary-key">⌥⇧V</span>
+                <strong>Summarize</strong>
+                <span>Rambling thoughts become compact notes.</span>
+                <label class="mode-delivery"><small>When it’s ready</small>
+                  <select id="voice-summary-delivery" data-variant="segmented" aria-label="Summarize delivery">
+                  <option value="instant_insert" data-short="Insert">Instant insert</option>
+                  <option value="editable_preview" data-short="Preview">Editable preview</option>
+                  <option value="copy_only" data-short="Copy">Copy only</option>
+                  </select>
+                </label>
+              </div>
+              <div class="mode-card">
+                <span class="keys" id="voice-prompt-key">⌥⌘V</span>
+                <strong>Prompt</strong>
+                <span>A detailed brief for Claude Code or Codex.</span>
+                <label class="mode-delivery"><small>When it’s ready</small>
+                  <select id="voice-prompt-delivery" data-variant="segmented" aria-label="Prompt delivery">
+                  <option value="instant_insert" data-short="Insert">Instant insert</option>
+                  <option value="editable_preview" data-short="Preview">Editable preview</option>
+                  <option value="copy_only" data-short="Copy">Copy only</option>
+                  </select>
+                </label>
+              </div>
             </div>
           </section>
 
@@ -499,6 +524,7 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./samlu-select.js"></script>
     <script src="./settings.js"></script>
   </body>
 </html>

@@ -5,12 +5,6 @@ use tauri::WebviewWindow;
 
 extern "C" {
     fn samlu_configure_overlay_window(window: *mut std::ffi::c_void);
-    fn samlu_present_overlay_at_cursor(
-        window: *mut std::ffi::c_void,
-        width: f64,
-        height: f64,
-        bottom_margin: f64,
-    );
     fn samlu_present_focusable_overlay_at_cursor(
         window: *mut std::ffi::c_void,
         width: f64,
@@ -20,6 +14,16 @@ extern "C" {
     fn samlu_focus_overlay(window: *mut std::ffi::c_void);
     fn samlu_resize_overlay_keeping_top(window: *mut std::ffi::c_void, height: f64);
     fn samlu_active_display_has_notch() -> bool;
+    fn samlu_active_screen_frame(out: *mut f64) -> bool;
+    fn samlu_set_overlay_frame(
+        window: *mut std::ffi::c_void,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        present: bool,
+    );
+    fn samlu_center_overlay_at_top(window: *mut std::ffi::c_void);
     fn samlu_order_front_without_activating(window: *mut std::ffi::c_void);
     fn samlu_set_ignores_mouse_events(window: *mut std::ffi::c_void, ignores: bool);
     fn samlu_set_background_mode(background_mode: bool);
@@ -114,19 +118,53 @@ pub fn configure_overlay(window: &WebviewWindow) {
     }
 }
 
-/// Presents an overlay on the display and fullscreen Space under the pointer.
-/// Returns `false` only when AppKit's native window handle is unavailable.
-pub fn present_overlay_at_cursor(
+/// A display frame in AppKit points: bottom-left origin on the primary
+/// display, y growing upward.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenFrame {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// The display holding the frontmost app's frontmost window, falling back to
+/// the one under the pointer.
+pub fn active_screen_frame() -> Option<ScreenFrame> {
+    let mut out = [0.0f64; 4];
+    if !unsafe { samlu_active_screen_frame(out.as_mut_ptr()) } {
+        return None;
+    }
+    Some(ScreenFrame {
+        x: out[0],
+        y: out[1],
+        width: out[2],
+        height: out[3],
+    })
+}
+
+/// Places an overlay's content rect in AppKit points, and with `present`
+/// orders it in on the current Space without activating Samlu.
+pub fn set_overlay_frame(
     window: &WebviewWindow,
+    x: f64,
+    y: f64,
     width: f64,
     height: f64,
-    bottom_margin: f64,
+    present: bool,
 ) -> bool {
     let Ok(pointer) = window.ns_window() else {
         return false;
     };
-    unsafe { samlu_present_overlay_at_cursor(pointer, width, height, bottom_margin) };
+    unsafe { samlu_set_overlay_frame(pointer, x, y, width, height, present) };
     true
+}
+
+/// Hangs an overlay from the top centre of the active display.
+pub fn center_overlay_at_top(window: &WebviewWindow) {
+    if let Ok(pointer) = window.ns_window() {
+        unsafe { samlu_center_overlay_at_top(pointer) };
+    }
 }
 
 /// Presents and focuses a keyboard-driven overlay on the current Space without
@@ -165,8 +203,8 @@ pub fn resize_overlay_keeping_top(window: &WebviewWindow, height: f64) {
     }
 }
 
-/// While `true` the window is transparent to clicks. The pet overlay covers a
-/// whole display, so it must stay click-through except when its card is up.
+/// While `true` the window is transparent to clicks, so a floating surface
+/// that only reports status never swallows a click meant for the app below.
 pub fn set_ignores_mouse_events(window: &WebviewWindow, ignores: bool) {
     if let Ok(pointer) = window.ns_window() {
         unsafe { samlu_set_ignores_mouse_events(pointer, ignores) };

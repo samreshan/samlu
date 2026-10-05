@@ -16,8 +16,9 @@ struct Data {
     notify_turn_finished: bool,
     include_agent_summary: bool,
     show_agent_island: bool,
-    /// `pet` | `island` | `system`. Absent in configs written before delivery
-    /// became a three-way choice, and derived from `show_agent_island` then.
+    /// `island` | `system`. Absent in configs written before delivery became a
+    /// choice, and derived from `show_agent_island` then. Configs from the pet
+    /// era may still hold `pet`; it now reads as `island`.
     delivery: Option<String>,
     clipboard_history_enabled: bool,
     onboarding_completed: bool,
@@ -26,13 +27,14 @@ struct Data {
     close_behavior: String,
 }
 
-pub const DELIVERY_PET: &str = "pet";
+/// Retired with the pet overlay. Kept only so older configs migrate cleanly.
+const LEGACY_DELIVERY_PET: &str = "pet";
 pub const DELIVERY_ISLAND: &str = "island";
 pub const DELIVERY_SYSTEM: &str = "system";
 
 fn normalize_delivery(value: &str) -> Option<&'static str> {
     match value {
-        DELIVERY_PET => Some(DELIVERY_PET),
+        LEGACY_DELIVERY_PET => Some(DELIVERY_ISLAND),
         DELIVERY_ISLAND => Some(DELIVERY_ISLAND),
         DELIVERY_SYSTEM => Some(DELIVERY_SYSTEM),
         _ => None,

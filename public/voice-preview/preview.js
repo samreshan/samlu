@@ -3,39 +3,54 @@ const listen = window.__TAURI__?.event?.listen || (async () => () => {});
 
 const el = {
   presence: document.getElementById("presence"),
-  title: document.getElementById("title"),
-  detail: document.getElementById("detail"),
+  announce: document.getElementById("announce"),
+  bead: document.getElementById("bead"),
+  beads: [...document.querySelectorAll("#beads i")],
+  modeChip: document.getElementById("mode-chip"),
   elapsed: document.getElementById("elapsed"),
-  waveform: document.getElementById("waveform"),
+  workingLabel: document.getElementById("working-label"),
   capsule: document.getElementById("capsule"),
+  landed: document.getElementById("landed"),
+  landedLabel: document.getElementById("landed-label"),
+  landedNote: document.getElementById("landed-note"),
+  notice: document.getElementById("notice"),
+  noticeTitle: document.getElementById("notice-title"),
+  noticeDetail: document.getElementById("notice-detail"),
   recovery: document.getElementById("recovery"),
   recoveryTitle: document.getElementById("recovery-title"),
   recoveryDetail: document.getElementById("recovery-detail"),
-  recoverySymbol: document.getElementById("recovery-symbol"),
   recoveryDiscard: document.getElementById("recovery-discard"),
   recoveryCopy: document.getElementById("recovery-copy"),
   recoveryPreview: document.getElementById("recovery-preview"),
   editor: document.getElementById("editor"),
   editorKicker: document.getElementById("editor-kicker"),
   editorTitle: document.getElementById("editor-title"),
+  editorStatus: document.getElementById("editor-status"),
   text: document.getElementById("text"),
-  petCapsule: document.getElementById("pet-capsule"),
-  petLevel: document.getElementById("pet-level"),
-  petStatus: document.getElementById("pet-status"),
-};
-
-// States where Samlu itself stands in for the waveform capsule.
-const PET_STATES = new Set(["listening", "processing", "delivering", "copied"]);
-const PET_STATUS = {
-  listening: "Listening",
-  processing: "Transcribing",
-  delivering: "Inserting",
-  copied: "Couldn’t insert\nCopied — paste with ⌘V",
 };
 
 // The window is inset by body padding on every side; the surface fills what
 // is left. Rust owns the window size and sends it with each state.
 const BODY_INSET = 8;
+
+// Mode titles from Rust, as the short chip shown while recording. Plain
+// dictation needs no label.
+const MODE_CHIPS = { Summarize: "Summary", "Prompt mode": "Prompt" };
+
+// Rust names the step; the capsule says it in a friendlier voice. Steps after
+// transcription also show "Heard" so the two phases read as progress.
+const WORKING_LABELS = {
+  Transcribing: "Writing it down",
+  "Cleaning up": "Tidying",
+  Structuring: null,
+  "Trying insertion again": "Trying again",
+};
+const AFTER_TRANSCRIPT = new Set(["Cleaning up", "Structuring"]);
+
+// Bead profile: tallest in the middle, tapering to the edges, so speech reads
+// as a soft swell rather than a meter.
+const BEAD_PROFILE = [0.3, 0.5, 0.72, 0.9, 1, 0.9, 0.72, 0.5, 0.3];
+const BEAD_PHASE = BEAD_PROFILE.map((_, index) => index * 1.7);
 
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -76,16 +91,23 @@ function startElapsed() {
 function stopElapsed() {
   clearInterval(elapsedTimer);
   elapsedTimer = null;
-  el.elapsed.textContent = "";
 }
 
-function animateLevel() {
+/** Eases toward the latest microphone level and shapes it across the beads.
+ * A slow per-bead wobble keeps steady speech from looking like a flat bar;
+ * under Reduce Motion the beads follow the level alone. */
+function animateLevel(now = 0) {
   levelCurrent += (levelTarget - levelCurrent) * 0.28;
-  const level = levelCurrent.toFixed(3);
-  el.waveform.style.setProperty("--voice-level", level);
-  // Samlu swells with your voice rather than drawing bars for it.
-  el.petLevel.style.setProperty("--voice-level", level);
   levelTarget *= 0.9;
+  if (currentState === "listening") {
+    const t = now / 1000;
+    el.beads.forEach((bead, index) => {
+      const wobble = reducedMotion.matches ? 1 : 0.78 + 0.22 * Math.sin(t * 7 + BEAD_PHASE[index]);
+      const amount = Math.min(1, levelCurrent * 1.6) * BEAD_PROFILE[index] * wobble;
+      bead.style.setProperty("--h", `${(4 + amount * 14).toFixed(1)}px`);
+      bead.style.setProperty("--o", (0.42 + amount * 0.58).toFixed(2));
+    });
+  }
   animationFrame = requestAnimationFrame(animateLevel);
 }
 
@@ -123,7 +145,7 @@ function playStateSound(state, enabled) {
 /** Exactly one content layer is live at a time; the rest fade out in place
  * rather than being pulled out of the layout, so the surface never jumps. */
 function setActiveLayer(active) {
-  [el.petCapsule, el.capsule, el.recovery, el.editor].forEach((layer) => {
+  [el.capsule, el.landed, el.notice, el.recovery, el.editor].forEach((layer) => {
     layer.dataset.active = String(layer === active);
   });
 }
@@ -135,6 +157,19 @@ function resizeSurface(payload) {
   if (!payload.width || !payload.height) return;
   el.presence.style.width = `${payload.width - BODY_INSET * 2}px`;
   el.presence.style.height = `${payload.height - BODY_INSET * 2}px`;
+}
+
+function workingLabel(detail, mode) {
+  if (detail in WORKING_LABELS) {
+    return WORKING_LABELS[detail] || `Shaping ${mode === "Summarize" ? "summary" : "prompt"}`;
+  }
+  return detail || "Working";
+}
+
+/** Words for screen readers: the capsule's look carries the state visually,
+ * this carries it for VoiceOver. Only changes are announced. */
+function announce(text) {
+  if (el.announce.textContent !== text) el.announce.textContent = text;
 }
 
 function render(payload) {
@@ -155,39 +190,70 @@ function render(payload) {
     visible = true;
   }
 
+  const wasListening = currentState === "listening" && !arriving;
   currentState = state;
   document.body.dataset.state = state;
+  document.body.dataset.controls = String(Boolean(payload.controls));
+  document.body.dataset.heard = String(AFTER_TRANSCRIPT.has(payload.detail));
 
-  // The pet only stands in for the recording capsule; preview, recovery and
-  // error states always use their full-size presentations.
-  const pet = Boolean(payload.pet) && PET_STATES.has(state);
-  document.body.dataset.pet = String(pet);
+  const chip = MODE_CHIPS[payload.mode];
+  el.modeChip.hidden = !chip;
+  el.modeChip.textContent = chip || "";
+  el.bead.dataset.resting = String(state !== "listening");
 
-  el.title.textContent = payload.title || "Voice";
-  el.detail.textContent = payload.detail || "";
-  if (pet) el.petStatus.textContent = payload.detail || PET_STATUS[state] || "";
+  if (state === "listening") {
+    announce(chip ? `Listening, ${chip.toLowerCase()} mode` : "Listening");
+  }
+
+  if (state === "processing" || state === "delivering") {
+    const label = workingLabel(payload.detail, payload.mode);
+    el.workingLabel.textContent = label;
+    announce(label);
+  }
+
+  if (state === "success") {
+    const [result, ...rest] = (payload.detail || "Done").split(" · ");
+    el.landedLabel.textContent = result;
+    el.landedNote.textContent = rest.join(" · ");
+    announce(payload.detail || "Done");
+  }
+
+  if (state === "copied") {
+    el.noticeTitle.textContent = "Copied instead";
+    el.noticeDetail.textContent = "Paste it with ⌘V.";
+    announce("Copied instead. Paste with Command V.");
+  }
+
+  if (state === "error") {
+    el.noticeTitle.textContent = payload.title || "Voice unavailable";
+    el.noticeDetail.textContent = payload.detail || "";
+    el.noticeDetail.title = payload.detail || "";
+    announce(`${el.noticeTitle.textContent}. ${payload.detail || ""}`);
+  }
 
   if (state === "recovery" || state === "failed") {
     // A failed dictation can always be retried, but only has text to copy
     // or edit once transcription itself succeeded.
     const failed = state === "failed";
     const hasText = !failed || Boolean(payload.text);
-    el.recoveryTitle.textContent = payload.title || "Result is safe";
-    el.recoveryDetail.textContent = payload.detail || "Samlu could not insert into the original field.";
+    el.recoveryTitle.textContent = failed ? payload.title || "Recording is safe" : "Kept safe";
+    el.recoveryDetail.textContent = payload.detail || "Samlu couldn’t reach the original field.";
     el.recoveryDetail.title = payload.detail || "";
-    el.recoverySymbol.textContent = failed ? "!" : "↗";
     el.recoveryDiscard.hidden = !failed;
     el.recoveryCopy.hidden = !hasText;
     el.recoveryPreview.hidden = !hasText;
+    announce(`${el.recoveryTitle.textContent}. ${el.recoveryDetail.textContent}`);
   }
 
   if (state === "preview") {
-    el.editorKicker.textContent = payload.mode || "Voice";
+    el.editorKicker.textContent = MODE_CHIPS[payload.mode] || payload.mode || "Voice";
     el.editorTitle.textContent = payload.title || "Voice result";
     el.text.value = payload.text || "";
+    updateWordCount();
   }
 
-  if (pet) setActiveLayer(el.petCapsule);
+  if (state === "success") setActiveLayer(el.landed);
+  else if (state === "copied" || state === "error") setActiveLayer(el.notice);
   else if (state === "recovery" || state === "failed") setActiveLayer(el.recovery);
   else if (state === "preview") setActiveLayer(el.editor);
   else setActiveLayer(el.capsule);
@@ -200,8 +266,13 @@ function render(payload) {
     delete el.presence.dataset.instant;
   }
 
-  if (state === "listening") startElapsed();
-  else stopElapsed();
+  // A tap re-sends "listening" to reveal Cancel and Stop; the clock keeps
+  // running through that rather than starting over.
+  if (state === "listening") {
+    if (!wasListening) startElapsed();
+  } else {
+    stopElapsed();
+  }
 
   if (state === "preview") {
     requestAnimationFrame(() => {
@@ -210,6 +281,13 @@ function render(payload) {
     });
   }
 }
+
+function updateWordCount() {
+  const words = el.text.value.trim().split(/\s+/).filter(Boolean).length;
+  el.editorStatus.lastChild.textContent = words === 1 ? "Ready · 1 word" : `Ready · ${words} words`;
+}
+
+el.text.addEventListener("input", updateWordCount);
 
 /** Rust asks for the exit, waits out its duration, then hides the window. */
 function playExit() {
@@ -365,7 +443,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 cancelAnimationFrame(animationFrame);
-animateLevel();
+animationFrame = requestAnimationFrame(animateLevel);
 
 async function boot() {
   await Promise.all([

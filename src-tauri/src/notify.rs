@@ -9,10 +9,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use tauri::{
-    utils::config::Color, AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
-};
+use tauri::{utils::config::Color, AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_notification::NotificationExt;
 
 const ISLAND_LABEL: &str = "agent-island";
@@ -153,7 +150,6 @@ fn show(app: &AppHandle, event: &AgentEvent, include_summary: bool, delivery: &s
     // Notification Center always keeps the record; delivery only decides which
     // extra on-screen presentation runs alongside it.
     match delivery {
-        crate::settings::DELIVERY_PET => crate::pet::deliver(app, event, body),
         crate::settings::DELIVERY_ISLAND => show_island_update(app, event, body),
         _ => {}
     }
@@ -169,7 +165,8 @@ fn show_island_update(app: &AppHandle, event: &AgentEvent, summary: String) {
     let Some(window) = app.get_webview_window(ISLAND_LABEL) else {
         return;
     };
-    center_at_active_display_top(&window);
+    // Follows the display you are working on, not the one under the pointer.
+    crate::macos::center_overlay_at_top(&window);
     let kind = match event.kind {
         AgentEventKind::NeedsInput => "needs_input",
         AgentEventKind::Completed => "completed",
@@ -201,29 +198,6 @@ fn emit_island(app: &AppHandle, payload: IslandPayload) {
     if let Err(error) = app.emit_to(ISLAND_LABEL, "island://show", payload) {
         log::warn!("failed to present Samlu Island: {error}");
     }
-}
-
-fn center_at_active_display_top(window: &WebviewWindow) {
-    let monitor = window
-        .cursor_position()
-        .ok()
-        .and_then(|position| {
-            window
-                .monitor_from_point(position.x, position.y)
-                .ok()
-                .flatten()
-        })
-        .or_else(|| window.primary_monitor().ok().flatten());
-    let Some(monitor) = monitor else {
-        return;
-    };
-    let scale = monitor.scale_factor();
-    let size = monitor.size();
-    let position = monitor.position();
-    let width = ISLAND_WIDTH * scale;
-    let x = position.x as f64 + (size.width as f64 - width) / 2.0;
-    let y = position.y as f64;
-    let _ = window.set_position(PhysicalPosition::new(x, y));
 }
 
 #[tauri::command]
