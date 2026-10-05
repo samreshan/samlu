@@ -1,10 +1,19 @@
 //! Global voice dictation for macOS. A short tap starts toggle recording; a
 //! press held for at least 350 ms records until release.
 
+mod audio;
 mod cloud;
 pub mod config;
+mod download;
+mod engines;
+pub mod history;
+pub mod model_commands;
+mod models;
 mod paste;
 mod recorder;
+mod vocabulary;
+
+pub use download::Downloads;
 
 use config::{DeliveryBehavior, VoiceConfig};
 use serde::Serialize;
@@ -85,6 +94,22 @@ enum Runtime {
         text: String,
         mode: Mode,
     },
+    /// Processing failed after audio was captured. The capture is held until
+    /// the user retries or discards it, so a provider failure never costs
+    /// them what they said.
+    Failed {
+        target: TargetContext,
+        capture: Capture,
+        mode: Mode,
+    },
+}
+
+/// One dictation's audio, kept until it has produced text.
+struct Capture {
+    audio: engines::PreparedAudio,
+    /// Set once transcription succeeds, so a retry after a failed transform
+    /// does not pay for (or risk) transcribing again.
+    transcript: Option<String>,
 }
 
 pub struct VoiceState {
@@ -98,6 +123,7 @@ pub struct VoiceState {
     /// its default bottom-center anchor. Reset per session so a one-off nudge
     /// never becomes a permanent, forgotten position.
     drag_offset: Mutex<(f64, f64)>,
+    last_history_id: Mutex<Option<String>>,
 }
 
 impl VoiceState {
@@ -110,6 +136,7 @@ impl VoiceState {
             presentation_ready: std::sync::atomic::AtomicBool::new(false),
             pending_presentation: Mutex::new(None),
             drag_offset: Mutex::new((0.0, 0.0)),
+            last_history_id: Mutex::new(None),
         }
     }
 
@@ -169,6 +196,24 @@ pub fn voice_preview_init(app: &AppHandle) -> Result<(), String> {
         crate::macos::configure_overlay(&window);
     })
     .map_err(|error| error.to_string())
+}
+
+pub fn engines_init() {
+    engines::whisper::init();
+}
+
+/// Releases the resident whisper model before process exit; ggml-metal
+/// asserts if a context is still alive during its static teardown.
+pub fn engines_shutdown() {
+    engines::whisper::unload();
+}
+
+pub fn apple_available() -> bool {
+    engines::apple::available()
+}
+
+pub fn recommended_model() -> &'static str {
+    models::recommended_id()
 }
 
 fn derive_shortcuts(base: &str) -> (String, String, String) {
@@ -246,24 +291,106 @@ pub fn unregister_hotkeys(app: &AppHandle, hotkey: &str) {
     let _ = app.global_shortcut().unregister(prompt.as_str());
 }
 
+const OPENAI_STT_MODEL: &str = "gpt-4o-transcribe";
+
+/// The single picker value the settings UI uses for engine + preset.
+fn stt_choice(stt: &config::SttSettings) -> &'static str {
+    use config::SttEngine::*;
+    match stt.engine {
+        OpenaiCompat => match stt.preset.as_deref() {
+            Some("groq") => "groq",
+            Some("openai") => "openai",
+            _ => "custom",
+        },
+        Deepgram => "deepgram",
+        Elevenlabs => "elevenlabs",
+        WhisperCpp => "whisper_cpp",
+        Apple => "apple",
+    }
+}
+
+/// Builds settings for a picker choice. An empty `model` falls back to the
+/// choice's default; the language carries over from `current`.
+fn stt_from_choice(
+    choice: &str,
+    base_url: &str,
+    model: &str,
+    current: &config::SttSettings,
+) -> Result<config::SttSettings, String> {
+    use config::SttEngine::*;
+    let model = model.trim();
+    let pick = |default: &str| {
+        if model.is_empty() {
+            default.to_string()
+        } else {
+            model.to_string()
+        }
+    };
+    let (engine, preset, base_url, model) = match choice {
+        "groq" => (
+            OpenaiCompat,
+            Some("groq"),
+            Some(config::DEFAULT_BASE_URL.to_string()),
+            pick(config::DEFAULT_STT_MODEL),
+        ),
+        "openai" => (
+            OpenaiCompat,
+            Some("openai"),
+            Some(config::OPENAI_BASE_URL.to_string()),
+            pick(OPENAI_STT_MODEL),
+        ),
+        "custom" => (
+            OpenaiCompat,
+            Some("custom"),
+            Some(normalize_endpoint_url(base_url)?),
+            pick(config::DEFAULT_STT_MODEL),
+        ),
+        "deepgram" => (Deepgram, None, None, pick(config::DEEPGRAM_DEFAULT_MODEL)),
+        "elevenlabs" => (
+            Elevenlabs,
+            None,
+            None,
+            pick(config::ELEVENLABS_DEFAULT_MODEL),
+        ),
+        "whisper_cpp" => (WhisperCpp, None, None, model.to_string()),
+        "apple" => (Apple, None, None, String::new()),
+        _ => return Err("Choose a supported speech engine.".to_string()),
+    };
+    Ok(config::SttSettings {
+        engine,
+        preset: preset.map(str::to_string),
+        model,
+        base_url,
+        language: current.language.clone(),
+    })
+}
+
 #[tauri::command]
 pub fn get_voice_settings(config: tauri::State<'_, Arc<VoiceConfig>>) -> serde_json::Value {
-    let transcription = config.transcription_config();
+    let stt = config.stt();
     let transformation = config.transformation_config();
     serde_json::json!({
-        "separateProviders": config.separate_providers(),
-        "transcription": {
-            "provider": transcription.provider,
-            "baseUrl": transcription.base_url,
-            "model": transcription.model,
-            "hasApiKey": config.has_api_key("transcription"),
+        "stt": {
+            "choice": stt_choice(&stt),
+            "engine": stt.engine,
+            "preset": stt.preset,
+            "baseUrl": stt.base_url,
+            "model": stt.model,
+            "language": stt.language,
+            "needsApiKey": stt.engine.needs_api_key(),
+            "hasApiKey": stt.engine.needs_api_key() && config.has_api_key("transcription"),
         },
+        "appleAvailable": engines::apple::available(),
         "transformation": {
             "provider": transformation.provider,
             "baseUrl": transformation.base_url,
             "model": transformation.model,
+            "needsApiKey": config::transform_needs_key(&transformation.provider),
             "hasApiKey": config.has_api_key("transformation"),
         },
+        "cleanupDictation": config.cleanup_dictation(),
+        "vocabulary": config.vocabulary(),
+        "keepHistory": config.keep_history(),
         "hotkey": config.hotkey(),
         "delivery": {
             "dictation": config.delivery(Mode::Normal),
@@ -286,41 +413,70 @@ pub fn set_voice_api_key(
 }
 
 #[tauri::command]
-pub fn set_voice_endpoint(
-    role: String,
+pub fn set_voice_stt(
+    choice: String,
+    base_url: String,
+    model: String,
+    config: tauri::State<'_, Arc<VoiceConfig>>,
+) -> Result<(), String> {
+    let current = config.stt();
+    let next = stt_from_choice(&choice, &base_url, &model, &current)?;
+    if current.engine == config::SttEngine::WhisperCpp && current.model != next.model {
+        engines::whisper::unload();
+    }
+    config.set_stt(next);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_voice_language(language: String, config: tauri::State<'_, Arc<VoiceConfig>>) {
+    let mut stt = config.stt();
+    stt.language = match language.trim() {
+        "" => "auto".to_string(),
+        other => other.to_string(),
+    };
+    config.set_stt(stt);
+}
+
+#[tauri::command]
+pub fn set_voice_transformation(
     provider: String,
     base_url: String,
     config: tauri::State<'_, Arc<VoiceConfig>>,
 ) -> Result<(), String> {
-    validate_role(&role)?;
-    if provider != "groq" && provider != "custom" {
-        return Err("Provider must be Groq or OpenAI-compatible.".to_string());
-    }
-    let base_url = if provider == "groq" {
-        config::DEFAULT_BASE_URL.to_string()
-    } else {
-        normalize_endpoint_url(&base_url)?
+    let base_url = match config::transform_preset_base_url(&provider) {
+        Some(preset) => preset.to_string(),
+        None if provider == "custom" => normalize_endpoint_url(&base_url)?,
+        None => return Err("Choose a supported text provider.".to_string()),
     };
-    config.set_endpoint(&role, provider, base_url);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn set_voice_separate_providers(enabled: bool, config: tauri::State<'_, Arc<VoiceConfig>>) {
-    config.set_separate_providers(enabled);
-}
-
-#[tauri::command]
-pub fn set_voice_stt_model(
-    model: String,
-    config: tauri::State<'_, Arc<VoiceConfig>>,
-) -> Result<(), String> {
-    let model = model.trim();
-    if model.is_empty() {
-        return Err("Speech model cannot be empty.".to_string());
+    let provider_changed = config.transformation_config().provider != provider;
+    let default_model = if provider_changed {
+        config::transform_default_model(&provider)
+    } else {
+        None
+    };
+    config.set_transform_endpoint(provider, base_url);
+    if let Some(model) = default_model {
+        config.set_transform_model(model.to_string());
     }
-    config.set_stt_model(model.to_string());
     Ok(())
+}
+
+#[tauri::command]
+pub fn set_voice_cleanup(enabled: bool, config: tauri::State<'_, Arc<VoiceConfig>>) {
+    config.set_cleanup_dictation(enabled);
+}
+
+/// One term per line; returns the normalized list so the UI can show what
+/// was kept.
+#[tauri::command]
+pub fn set_voice_vocabulary(
+    text: String,
+    config: tauri::State<'_, Arc<VoiceConfig>>,
+) -> Vec<String> {
+    let terms = vocabulary::normalize(text.lines().map(str::to_string));
+    config.set_vocabulary(terms.clone());
+    terms
 }
 
 #[tauri::command]
@@ -353,6 +509,13 @@ pub fn set_voice_interface_sounds(enabled: bool, config: tauri::State<'_, Arc<Vo
 #[tauri::command]
 pub fn set_voice_pet_capsule(enabled: bool, config: tauri::State<'_, Arc<VoiceConfig>>) {
     config.set_pet_capsule(enabled);
+}
+
+#[tauri::command]
+pub async fn voice_apple_install(language: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || engines::apple::install(&language))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -462,7 +625,12 @@ fn voice_pressed(app: &AppHandle, mode: Mode) {
     }
     let mut runtime = state.runtime.lock().unwrap();
     match &*runtime {
-        Runtime::Idle => {
+        // A new dictation replaces a failed one: blocking the shortcut until
+        // the failure is dismissed would read as voice being broken.
+        Runtime::Idle | Runtime::Failed { .. } => {
+            if matches!(&*runtime, Runtime::Failed { .. }) {
+                log::info!("[voice] discarding failed dictation for a new recording");
+            }
             let pressed_at = Instant::now();
             let target = capture_target(app);
             *runtime = Runtime::Starting {
@@ -472,6 +640,10 @@ fn voice_pressed(app: &AppHandle, mode: Mode) {
                 target: target.clone(),
             };
             drop(runtime);
+            let stt = app.state::<Arc<VoiceConfig>>().stt();
+            if stt.engine == config::SttEngine::WhisperCpp {
+                engines::whisper::preload(std::path::PathBuf::from(stt.model));
+            }
             show_status(
                 app,
                 &target,
@@ -617,99 +789,23 @@ fn spawn_processing(
         false,
     );
     tauri::async_runtime::spawn(async move {
-        match process(&app, recording, mode, &target).await {
-            Ok(text) => {
-                // The setup guide shows the transcript itself rather than
-                // relying on insertion landing in its own window.
-                let _ = app.emit_to(crate::onboarding::LABEL, "voice://result", text.clone());
-                let delivery = app.state::<Arc<VoiceConfig>>().delivery(mode);
-                match delivery {
-                    DeliveryBehavior::EditablePreview => {
-                        let state = app.state::<Arc<VoiceState>>();
-                        *state.runtime.lock().unwrap() = Runtime::Previewing {
-                            target: target.clone(),
-                            text: text.clone(),
-                            mode,
-                        };
-                        show_status(
-                            &app,
-                            &target,
-                            "preview",
-                            mode_output_label(mode),
-                            "Review before inserting",
-                            &text,
-                            true,
-                        );
-                    }
-                    DeliveryBehavior::CopyOnly => match paste::copy(&app, &text) {
-                        Ok(()) => {
-                            *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
-                            show_success(&app, &target, mode, "Copied");
-                        }
-                        Err(error) => show_recovery(&app, target, text, error, mode),
-                    },
-                    DeliveryBehavior::InstantInsert => {
-                        // Avoid an animation and app switch that cannot
-                        // succeed. Preserve the result, explain the fallback,
-                        // then immediately release the runtime for another
-                        // dictation.
-                        if !paste::accessibility_trusted() {
-                            match paste::copy(&app, &text) {
-                                Ok(()) => show_clipboard_fallback(&app, &target, mode),
-                                Err(error) => show_recovery(&app, target, text, error, mode),
-                            }
-                            return;
-                        }
-                        // Samlu ferries the result to the pointer before it
-                        // lands. Short by design — this delay sits between
-                        // releasing the hotkey and seeing the text.
-                        if app.state::<Arc<VoiceConfig>>().pet_capsule() {
-                            show_status(
-                                &app,
-                                &target,
-                                "delivering",
-                                mode_label(mode),
-                                "Inserting",
-                                "",
-                                false,
-                            );
-                            if crate::pet::carry(&app) {
-                                // The travelling pet is now the presentation;
-                                // avoid leaving a duplicate capsule behind.
-                                hide_preview(&app);
-                                let _ = tauri::async_runtime::spawn_blocking(|| {
-                                    std::thread::sleep(Duration::from_millis(
-                                        crate::pet::CARRY_DURATION_MS,
-                                    ));
-                                })
-                                .await;
-                            }
-                        }
-                        match inject_without_blocking(&app, &text, &target.app).await {
-                            Ok(()) => {
-                                *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() =
-                                    Runtime::Idle;
-                                show_success(&app, &target, mode, "Inserted");
-                            }
-                            Err(error) => handle_delivery_error(&app, target, text, error, mode),
-                        }
-                    }
-                }
+        match finish_recording(recording).await {
+            Ok(wav) => {
+                let capture = Capture {
+                    audio: engines::PreparedAudio::new(wav),
+                    transcript: None,
+                };
+                process_capture(app, capture, mode, target).await;
             }
             Err(error) => {
                 let _ = app.emit_to(crate::onboarding::LABEL, "voice://error", error.clone());
-                fail(&app, &error)
+                fail(&app, &error);
             }
         }
     });
 }
 
-async fn process(
-    app: &AppHandle,
-    recording: recorder::Recording,
-    mode: Mode,
-    target: &TargetContext,
-) -> Result<String, String> {
+async fn finish_recording(recording: recorder::Recording) -> Result<Vec<u8>, String> {
     let wav = tauri::async_runtime::spawn_blocking(move || recording.stop())
         .await
         .map_err(|error| format!("recording task failed: {error}"))??;
@@ -719,30 +815,206 @@ async fn process(
     if wav.len() > 24 * 1024 * 1024 {
         return Err("Recording is too large for the configured provider.".to_string());
     }
+    Ok(wav)
+}
+
+/// Turns a capture into text and delivers it. Any failure from here on keeps
+/// the capture so the user can retry it.
+async fn process_capture(app: AppHandle, mut capture: Capture, mode: Mode, target: TargetContext) {
+    match produce_text(&app, &mut capture, mode, &target).await {
+        Ok(produced) if produced.text.trim().is_empty() => {
+            let error = "No speech was recognized. Try again a little closer to the microphone."
+                .to_string();
+            let _ = app.emit_to(crate::onboarding::LABEL, "voice://error", error.clone());
+            fail(&app, &error);
+        }
+        Ok(produced) => deliver(app, produced, mode, target).await,
+        Err(error) => {
+            let _ = app.emit_to(crate::onboarding::LABEL, "voice://error", error.clone());
+            show_failed(&app, target, capture, mode, &error);
+        }
+    }
+}
+
+/// Text ready for delivery, plus what history needs to know about it.
+struct Produced {
+    text: String,
+    raw: Option<String>,
+    cleanup_skipped: bool,
+}
+
+async fn produce_text(
+    app: &AppHandle,
+    capture: &mut Capture,
+    mode: Mode,
+    target: &TargetContext,
+) -> Result<Produced, String> {
     let config = app.state::<Arc<VoiceConfig>>();
-    let transcription = config.transcription_config();
-    let transcription_key = config.api_key("transcription")?;
-    let transcript = cloud::transcribe(wav, &transcription, &transcription_key).await?;
-    let output = if mode == Mode::Normal {
-        transcript
-    } else {
+    let show_retry = |attempt: u32| {
         show_status(
             app,
             target,
             "processing",
             mode_label(mode),
-            "Structuring",
+            &format!("Retrying ({attempt}/{})", cloud::MAX_ATTEMPTS),
             "",
             false,
         );
-        let transformation = config.transformation_config();
-        let transformation_key = config.api_key("transformation")?;
-        cloud::transform(&transcript, mode, &transformation, &transformation_key).await?
     };
-    if output.trim().is_empty() {
-        Err("The provider returned an empty transcript.".to_string())
-    } else {
-        Ok(output)
+    let transcript = match &capture.transcript {
+        Some(transcript) => transcript.clone(),
+        None => {
+            let settings = config.stt();
+            let api_key = if settings.engine.needs_api_key() {
+                Some(config.api_key("transcription")?)
+            } else {
+                None
+            };
+            let options = engines::SttOptions {
+                settings,
+                vocabulary: config.vocabulary(),
+                api_key,
+            };
+            let audio = &capture.audio;
+            let transcript =
+                cloud::with_retries(|| engines::transcribe(audio, &options), show_retry).await?;
+            capture.transcript = Some(transcript.clone());
+            transcript
+        }
+    };
+    if transcript.trim().is_empty() || (mode == Mode::Normal && !config.cleanup_dictation()) {
+        return Ok(Produced {
+            text: transcript,
+            raw: None,
+            cleanup_skipped: false,
+        });
+    }
+    show_status(
+        app,
+        target,
+        "processing",
+        mode_label(mode),
+        if mode == Mode::Normal {
+            "Cleaning up"
+        } else {
+            "Structuring"
+        },
+        "",
+        false,
+    );
+    let transformation = config.transformation_config();
+    let vocabulary = config.vocabulary();
+    let transformed = match config.api_key("transformation") {
+        Ok(key) => {
+            cloud::with_retries(
+                || cloud::transform(&transcript, mode, &vocabulary, &transformation, &key),
+                show_retry,
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    match transformed {
+        Ok(text) => Ok(Produced {
+            raw: (text != transcript).then(|| transcript.clone()),
+            text,
+            cleanup_skipped: false,
+        }),
+        // Cleanup is polish: losing it must never cost the user their words.
+        Err(error) if mode == Mode::Normal => {
+            log::warn!("[voice] cleanup skipped: {error}");
+            Ok(Produced {
+                text: transcript,
+                raw: None,
+                cleanup_skipped: true,
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn deliver(app: AppHandle, produced: Produced, mode: Mode, target: TargetContext) {
+    let text = produced.text.clone();
+    let cleanup_skipped = produced.cleanup_skipped;
+    let success = |base: &'static str| -> String {
+        if cleanup_skipped {
+            format!("{base} · cleanup skipped")
+        } else {
+            base.to_string()
+        }
+    };
+    // The setup guide shows the transcript itself rather than relying on
+    // insertion landing in its own window.
+    let _ = app.emit_to(crate::onboarding::LABEL, "voice://result", text.clone());
+    let delivery = app.state::<Arc<VoiceConfig>>().delivery(mode);
+    record_history(&app, &produced, mode, &target, delivery);
+    match delivery {
+        DeliveryBehavior::EditablePreview => {
+            let state = app.state::<Arc<VoiceState>>();
+            *state.runtime.lock().unwrap() = Runtime::Previewing {
+                target: target.clone(),
+                text: text.clone(),
+                mode,
+            };
+            show_status(
+                &app,
+                &target,
+                "preview",
+                mode_output_label(mode),
+                "Review before inserting",
+                &text,
+                true,
+            );
+        }
+        DeliveryBehavior::CopyOnly => match paste::copy(&app, &text) {
+            Ok(()) => {
+                *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
+                show_success(&app, &target, mode, &success("Copied"));
+            }
+            Err(error) => show_recovery(&app, target, text, error, mode),
+        },
+        DeliveryBehavior::InstantInsert => {
+            // Avoid an animation and app switch that cannot succeed. Preserve
+            // the result, explain the fallback, then immediately release the
+            // runtime for another dictation.
+            if !paste::accessibility_trusted() {
+                match paste::copy(&app, &text) {
+                    Ok(()) => show_clipboard_fallback(&app, &target, mode),
+                    Err(error) => show_recovery(&app, target, text, error, mode),
+                }
+                return;
+            }
+            // Samlu ferries the result to the pointer before it lands. Short
+            // by design — this delay sits between releasing the hotkey and
+            // seeing the text.
+            if app.state::<Arc<VoiceConfig>>().pet_capsule() {
+                show_status(
+                    &app,
+                    &target,
+                    "delivering",
+                    mode_label(mode),
+                    "Inserting",
+                    "",
+                    false,
+                );
+                if crate::pet::carry(&app) {
+                    // The travelling pet is now the presentation; avoid
+                    // leaving a duplicate capsule behind.
+                    hide_preview(&app);
+                    let _ = tauri::async_runtime::spawn_blocking(|| {
+                        std::thread::sleep(Duration::from_millis(crate::pet::CARRY_DURATION_MS));
+                    })
+                    .await;
+                }
+            }
+            match inject_without_blocking(&app, &text, &target.app).await {
+                Ok(()) => {
+                    *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
+                    show_success(&app, &target, mode, &success("Inserted"));
+                }
+                Err(error) => handle_delivery_error(&app, target, text, error, mode),
+            }
+        }
     }
 }
 
@@ -771,6 +1043,7 @@ pub async fn voice_preview_accept(
     match inject_without_blocking(&app, &final_text, &target.app).await {
         Ok(()) => {
             *state.runtime.lock().unwrap() = Runtime::Idle;
+            update_last_history(&app, history::Outcome::Inserted);
             show_success(&app, &target, mode, "Inserted");
             Ok(())
         }
@@ -788,6 +1061,7 @@ pub fn voice_preview_cancel(app: AppHandle, state: tauri::State<'_, Arc<VoiceSta
         std::mem::replace(&mut *runtime, Runtime::Idle)
     };
     if let Runtime::Previewing { text, .. } = previous {
+        update_last_history(&app, history::Outcome::PreviewCancelled);
         let _ = paste::copy(&app, &text);
     }
     hide_preview(&app);
@@ -826,16 +1100,45 @@ pub fn voice_cancel(app: AppHandle) {
         Runtime::Recording { recording, .. } => {
             std::thread::spawn(move || recording.cancel());
         }
-        Runtime::Previewing { text, .. } | Runtime::Recovering { text, .. } => {
+        Runtime::Previewing { text, .. } => {
+            let _ = paste::copy(&app, &text);
+            update_last_history(&app, history::Outcome::PreviewCancelled);
+        }
+        Runtime::Recovering { text, .. } => {
             let _ = paste::copy(&app, &text);
         }
         Runtime::Processing => {
             *state.runtime.lock().unwrap() = Runtime::Processing;
             return;
         }
-        Runtime::Idle | Runtime::Starting { .. } => {}
+        Runtime::Idle | Runtime::Starting { .. } | Runtime::Failed { .. } => {}
     }
     hide_preview(&app);
+}
+
+/// Takes the text a recovery action can work with: an undelivered result, or
+/// the transcript of a dictation whose transform failed.
+fn take_recoverable_text(
+    state: &VoiceState,
+    next: Runtime,
+) -> Result<(TargetContext, String, Mode), String> {
+    let mut runtime = state.runtime.lock().unwrap();
+    match std::mem::replace(&mut *runtime, next) {
+        Runtime::Recovering { target, text, mode } => Ok((target, text, mode)),
+        Runtime::Failed {
+            target,
+            capture:
+                Capture {
+                    transcript: Some(text),
+                    ..
+                },
+            mode,
+        } => Ok((target, text, mode)),
+        other => {
+            *runtime = other;
+            Err("No voice result is waiting for delivery.".to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -845,9 +1148,34 @@ pub async fn voice_recovery_retry(app: AppHandle) -> Result<(), String> {
         let mut runtime = state.runtime.lock().unwrap();
         std::mem::replace(&mut *runtime, Runtime::Processing)
     };
-    let Runtime::Recovering { target, text, mode } = previous else {
-        *state.runtime.lock().unwrap() = previous;
-        return Err("No voice result is waiting for delivery.".to_string());
+    let (target, text, mode) = match previous {
+        Runtime::Recovering { target, text, mode } => (target, text, mode),
+        Runtime::Failed {
+            target,
+            capture,
+            mode,
+        } => {
+            let detail = if capture.transcript.is_some() {
+                "Structuring"
+            } else {
+                "Transcribing"
+            };
+            show_status(
+                &app,
+                &target,
+                "processing",
+                mode_label(mode),
+                detail,
+                "",
+                false,
+            );
+            process_capture(app.clone(), capture, mode, target).await;
+            return Ok(());
+        }
+        other => {
+            *state.runtime.lock().unwrap() = other;
+            return Err("No voice result is waiting for delivery.".to_string());
+        }
     };
 
     show_status(
@@ -875,17 +1203,7 @@ pub async fn voice_recovery_retry(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn voice_recovery_copy(app: AppHandle) -> Result<(), String> {
     let state = app.state::<Arc<VoiceState>>();
-    let previous = {
-        let mut runtime = state.runtime.lock().unwrap();
-        std::mem::replace(&mut *runtime, Runtime::Idle)
-    };
-    let Runtime::Recovering {
-        target, text, mode, ..
-    } = previous
-    else {
-        *state.runtime.lock().unwrap() = previous;
-        return Err("No voice result is waiting for delivery.".to_string());
-    };
+    let (target, text, mode) = take_recoverable_text(&state, Runtime::Idle)?;
     paste::copy(&app, &text)?;
     show_success(&app, &target, mode, "Copied");
     Ok(())
@@ -894,17 +1212,7 @@ pub fn voice_recovery_copy(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn voice_recovery_preview(app: AppHandle) -> Result<(), String> {
     let state = app.state::<Arc<VoiceState>>();
-    let previous = {
-        let mut runtime = state.runtime.lock().unwrap();
-        std::mem::replace(&mut *runtime, Runtime::Processing)
-    };
-    let Runtime::Recovering {
-        target, text, mode, ..
-    } = previous
-    else {
-        *state.runtime.lock().unwrap() = previous;
-        return Err("No voice result is waiting for delivery.".to_string());
-    };
+    let (target, text, mode) = take_recoverable_text(&state, Runtime::Processing)?;
     *state.runtime.lock().unwrap() = Runtime::Previewing {
         target: target.clone(),
         text: text.clone(),
@@ -962,8 +1270,9 @@ fn show_status(
     if let Some(window) = app.get_webview_window(PREVIEW_LABEL) {
         let already_visible = window.is_visible().unwrap_or(false);
         position_window(&window, target, width, height);
-        let interactive =
-            editable || state_name == "recovery" || (state_name == "listening" && !pet);
+        let interactive = editable
+            || matches!(state_name, "recovery" | "failed")
+            || (state_name == "listening" && !pet);
         crate::macos::set_ignores_mouse_events(&window, !interactive);
         // Re-presenting orders the window out and back in, which reads as a
         // flicker mid-session. Only do it for a genuine arrival; while the
@@ -1123,6 +1432,25 @@ fn show_recovery(app: &AppHandle, target: TargetContext, text: String, error: St
     );
 }
 
+/// Unlike `fail`, this stays up until the user acts: auto-dismissing would
+/// silently drop the recording it is holding.
+fn show_failed(app: &AppHandle, target: TargetContext, capture: Capture, mode: Mode, error: &str) {
+    log::warn!("[voice] processing failed; keeping the recording for retry: {error}");
+    let title = if capture.transcript.is_some() {
+        "Transcript is safe"
+    } else {
+        "Recording is safe"
+    };
+    // The transcript tells the presentation whether Copy and Preview apply.
+    let transcript = capture.transcript.clone().unwrap_or_default();
+    *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Failed {
+        target: target.clone(),
+        capture,
+        mode,
+    };
+    show_status(app, &target, "failed", title, error, &transcript, false);
+}
+
 fn fail(app: &AppHandle, error: &str) {
     log::error!("[voice] {error}");
     if let Some(state) = app.try_state::<Arc<VoiceState>>() {
@@ -1166,7 +1494,7 @@ fn capture_target(app: &AppHandle) -> TargetContext {
 fn state_size(state_name: &str, pet: bool) -> (f64, f64) {
     match state_name {
         "preview" => (EDITOR_WIDTH, EDITOR_HEIGHT),
-        "recovery" => (RECOVERY_WIDTH, RECOVERY_HEIGHT),
+        "recovery" | "failed" => (RECOVERY_WIDTH, RECOVERY_HEIGHT),
         "copied" if pet => (PET_FALLBACK_WIDTH, PET_FALLBACK_HEIGHT),
         "listening" | "processing" | "delivering" if pet => (PET_CAPSULE_WIDTH, PET_CAPSULE_HEIGHT),
         _ => (CAPSULE_WIDTH, CAPSULE_HEIGHT),
@@ -1188,10 +1516,9 @@ fn position_window(window: &tauri::WebviewWindow, target: &TargetContext, width:
         .map(|state| *state.drag_offset.lock().unwrap())
         .unwrap_or((0.0, 0.0));
     let x = display.x as f64 + (display.width as f64 - physical_width) / 2.0 + offset_x;
-    let y = display.y as f64 + display.height as f64
-        - physical_height
-        - BOTTOM_MARGIN * display.scale
-        + offset_y;
+    let y =
+        display.y as f64 + display.height as f64 - physical_height - BOTTOM_MARGIN * display.scale
+            + offset_y;
     let (x, y) = clamp_to_display(
         x,
         y,
@@ -1286,6 +1613,87 @@ fn mode_output_label(mode: Mode) -> &'static str {
     }
 }
 
+fn history_mode(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Normal => "dictation",
+        Mode::Summarize => "summary",
+        Mode::Prompt => "prompt",
+    }
+}
+
+fn record_history(
+    app: &AppHandle,
+    produced: &Produced,
+    mode: Mode,
+    target: &TargetContext,
+    delivery: DeliveryBehavior,
+) {
+    let config = app.state::<Arc<VoiceConfig>>();
+    if !config.keep_history() {
+        return;
+    }
+    let outcome = if produced.cleanup_skipped {
+        history::Outcome::CleanupSkipped
+    } else {
+        match delivery {
+            DeliveryBehavior::InstantInsert => history::Outcome::Inserted,
+            DeliveryBehavior::CopyOnly => history::Outcome::Copied,
+            DeliveryBehavior::EditablePreview => history::Outcome::Previewing,
+        }
+    };
+    let entry = history::HistoryEntry::new(
+        history_mode(mode),
+        produced.text.clone(),
+        produced.raw.clone(),
+        config.engine_label(),
+        target.app.bundle_id.clone().unwrap_or_default(),
+        outcome,
+    );
+    *app.state::<Arc<VoiceState>>()
+        .last_history_id
+        .lock()
+        .unwrap() = Some(entry.id.clone());
+    app.state::<Arc<history::VoiceHistory>>().record(entry);
+}
+
+fn update_last_history(app: &AppHandle, outcome: history::Outcome) {
+    let id = app
+        .state::<Arc<VoiceState>>()
+        .last_history_id
+        .lock()
+        .unwrap()
+        .take();
+    if let Some(id) = id {
+        app.state::<Arc<history::VoiceHistory>>()
+            .set_outcome(&id, outcome);
+    }
+}
+
+#[tauri::command]
+pub fn get_voice_history(
+    query: String,
+    history: tauri::State<'_, Arc<history::VoiceHistory>>,
+) -> Vec<history::HistoryEntry> {
+    history.search(&query, history::CAPACITY)
+}
+
+#[tauri::command]
+pub fn clear_voice_history(history: tauri::State<'_, Arc<history::VoiceHistory>>) {
+    history.clear();
+}
+
+#[tauri::command]
+pub fn set_voice_keep_history(
+    enabled: bool,
+    config: tauri::State<'_, Arc<VoiceConfig>>,
+    history: tauri::State<'_, Arc<history::VoiceHistory>>,
+) {
+    config.set_keep_history(enabled);
+    if !enabled {
+        history.clear();
+    }
+}
+
 fn validate_role(role: &str) -> Result<(), String> {
     if matches!(role, "transcription" | "transformation") {
         Ok(())
@@ -1296,7 +1704,50 @@ fn validate_role(role: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_shortcuts, normalize_endpoint_url};
+    use super::*;
+    use config::{SttEngine, SttSettings};
+
+    #[test]
+    fn choices_map_to_engine_settings_and_back() {
+        let current = SttSettings::default();
+        for (choice, engine) in [
+            ("groq", SttEngine::OpenaiCompat),
+            ("openai", SttEngine::OpenaiCompat),
+            ("deepgram", SttEngine::Deepgram),
+            ("elevenlabs", SttEngine::Elevenlabs),
+            ("whisper_cpp", SttEngine::WhisperCpp),
+            ("apple", SttEngine::Apple),
+        ] {
+            let settings = stt_from_choice(choice, "", "", &current).unwrap();
+            assert_eq!(settings.engine, engine, "{choice}");
+            assert_eq!(stt_choice(&settings), choice);
+            assert_eq!(settings.language, "auto");
+        }
+        let custom = stt_from_choice("custom", "https://stt.example/v1/", "m", &current).unwrap();
+        assert_eq!(custom.base_url.as_deref(), Some("https://stt.example/v1"));
+        assert_eq!(stt_choice(&custom), "custom");
+        assert!(stt_from_choice("custom", "ftp://x", "m", &current).is_err());
+        assert!(stt_from_choice("nope", "", "", &current).is_err());
+    }
+
+    #[test]
+    fn switching_cloud_presets_uses_their_default_model() {
+        let current = SttSettings::default();
+        assert_eq!(
+            stt_from_choice("openai", "", "", &current).unwrap().model,
+            "gpt-4o-transcribe"
+        );
+        assert_eq!(
+            stt_from_choice("deepgram", "", "", &current).unwrap().model,
+            "nova-3"
+        );
+        assert_eq!(
+            stt_from_choice("groq", "", "my-model", &current)
+                .unwrap()
+                .model,
+            "my-model"
+        );
+    }
 
     #[test]
     fn derives_mode_shortcuts_from_a_simple_base() {

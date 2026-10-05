@@ -1,6 +1,7 @@
 mod adapters;
 mod events;
 mod launcher;
+mod lifecycle;
 mod macos;
 mod notify;
 mod onboarding;
@@ -17,6 +18,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+/// Some macOS/Tauri runtimes request process exit as the last visible normal
+/// window closes. A background close is deliberate, so suppress only that
+/// immediate request; explicit Quit still carries an exit code and proceeds.
+static BACKGROUND_CLOSE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Frees Samlu's own global shortcuts while the settings window is recording a
 /// replacement. Without this, pressing a chord that is already bound fires its
@@ -45,11 +51,6 @@ fn resume_global_shortcuts(app: tauri::AppHandle) {
         log::error!("failed to restore voice hotkeys ({voice_hotkey}): {error}");
     }
 }
-
-/// A short-lived guard for runtimes that also emit an app exit request after
-/// the final visible settings window is closed. It does not interfere with a
-/// later explicit Quit from the menu bar or application menu.
-static BACKGROUND_CLOSE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[tauri::command]
 fn get_app_status(state: tauri::State<'_, Arc<AppState>>) -> serde_json::Value {
@@ -103,6 +104,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
@@ -159,7 +161,10 @@ pub fn run() {
             let voice_config = Arc::new(voice::config::VoiceConfig::load(&app_data_dir));
             let voice_hotkey = voice_config.hotkey();
             app.manage(voice_config);
+            app.manage(Arc::new(voice::history::VoiceHistory::load(&app_data_dir)));
             app.manage(Arc::new(voice::VoiceState::new()));
+            app.manage(Arc::new(voice::Downloads::new()));
+            voice::engines_init();
             if let Err(error) = voice::voice_preview_init(app.handle()) {
                 log::error!("failed to create voice preview window: {error}");
             }
@@ -202,10 +207,7 @@ pub fn run() {
                     }
                     Err(error) => log::warn!("ignored Codex notification: {error}"),
                 }
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                    macos::set_background_mode(true);
-                }
+                lifecycle::hide_to_background(app.handle());
             }
 
             Ok(())
@@ -253,14 +255,17 @@ pub fn run() {
             launcher::clipboard::clear_clipboard_history,
             voice::get_voice_settings,
             voice::set_voice_api_key,
-            voice::set_voice_stt_model,
+            voice::set_voice_stt,
+            voice::set_voice_language,
+            voice::set_voice_transformation,
+            voice::set_voice_cleanup,
+            voice::set_voice_vocabulary,
             voice::set_voice_transform_model,
             voice::set_voice_hotkey,
-            voice::set_voice_endpoint,
-            voice::set_voice_separate_providers,
             voice::set_voice_delivery,
             voice::set_voice_interface_sounds,
             voice::set_voice_pet_capsule,
+            voice::voice_apple_install,
             voice::get_voice_microphone_status,
             voice::request_voice_microphone,
             voice::open_voice_microphone_settings,
@@ -276,6 +281,15 @@ pub fn run() {
             voice::voice_recovery_retry,
             voice::voice_recovery_copy,
             voice::voice_recovery_preview,
+            voice::get_voice_history,
+            voice::clear_voice_history,
+            voice::set_voice_keep_history,
+            voice::model_commands::get_voice_models,
+            voice::model_commands::voice_download_model,
+            voice::model_commands::voice_cancel_model_download,
+            voice::model_commands::voice_add_model,
+            voice::model_commands::voice_remove_model,
+            voice::model_commands::voice_delete_model,
             setup::get_hook_status,
             setup::preview_hook_merge,
             setup::apply_hook_merge,
@@ -283,25 +297,36 @@ pub fn run() {
             setup::codex_notify::get_codex_status,
             setup::codex_notify::preview_codex_config,
             setup::codex_notify::apply_codex_config,
+            setup::integrations::get_agent_integrations,
+            setup::integrations::preview_agent_integration,
+            setup::integrations::apply_agent_integration,
+            setup::integrations::remove_agent_integration,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 match window.label() {
                     "main" => {
                         api.prevent_close();
-                        let generation =
-                            BACKGROUND_CLOSE_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
-                        let _ = window.hide();
-                        macos::set_background_mode(true);
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_secs(2));
-                            let _ = BACKGROUND_CLOSE_GENERATION.compare_exchange(
-                                generation,
-                                0,
-                                Ordering::AcqRel,
-                                Ordering::Acquire,
-                            );
-                        });
+                        let close_behavior = window
+                            .app_handle()
+                            .state::<Arc<settings::AppConfig>>()
+                            .close_behavior();
+                        if close_behavior == "quit" {
+                            window.app_handle().exit(0);
+                        } else {
+                            let generation =
+                                BACKGROUND_CLOSE_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+                            lifecycle::hide_to_background(window.app_handle());
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_secs(2));
+                                let _ = BACKGROUND_CLOSE_GENERATION.compare_exchange(
+                                    generation,
+                                    0,
+                                    Ordering::AcqRel,
+                                    Ordering::Acquire,
+                                );
+                            });
+                        }
                     }
                     // Dismissing the setup guide counts as finishing it, so it
                     // does not reappear on every launch. The tray reopens it.
@@ -316,12 +341,15 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running Samlu");
 
-    app.run(|_app, event| match event {
+    app.run(|app, event| match event {
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => tray::show_main(app),
         tauri::RunEvent::ExitRequested {
             code: None, api, ..
         } if BACKGROUND_CLOSE_GENERATION.swap(0, Ordering::AcqRel) != 0 => {
             api.prevent_exit();
         }
+        tauri::RunEvent::Exit => voice::engines_shutdown(),
         _ => {}
     });
 }

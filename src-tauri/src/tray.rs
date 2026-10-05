@@ -3,7 +3,7 @@
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 pub fn build(app: &tauri::App) -> tauri::Result<()> {
     let show_item = MenuItemBuilder::with_id("show", "Show Samlu").build(app)?;
@@ -48,9 +48,7 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
 /// Shows and focuses the settings window. Also reused by the launcher's
 /// "Open Samlu settings" quick action.
 pub(crate) fn show_main(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        crate::macos::set_background_mode(false);
-        let _ = win.show();
-        let _ = win.set_focus();
+    if let Err(error) = crate::lifecycle::present_settings(app) {
+        log::error!("failed to present Settings: {error}");
     }
 }

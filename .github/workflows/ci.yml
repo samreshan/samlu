@@ -7,7 +7,7 @@ on:
 
 jobs:
   check:
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -15,6 +15,13 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+
+      - name: Add Intel target
+        run: rustup target add x86_64-apple-darwin
+
+      - name: cargo check (Intel)
+        working-directory: src-tauri
+        run: cargo check --target x86_64-apple-darwin
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

@@ -21,6 +21,13 @@ impl AgentEvent {
     /// "claude-code" -> "Claude Code" — every adapter's `name()` is a
     /// kebab-case registry key, not user-facing copy.
     pub fn agent_label(&self) -> String {
+        match self.agent.as_str() {
+            "claude-code" => return "Claude Code".to_string(),
+            "codex" => return "Codex".to_string(),
+            "antigravity" => return "Antigravity".to_string(),
+            "gemini-cli" => return "Gemini CLI".to_string(),
+            _ => {}
+        }
         self.agent
             .split('-')
             .map(|word| {

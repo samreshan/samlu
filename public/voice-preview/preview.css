@@ -77,7 +77,8 @@ button {
   animation: depart var(--duration-exit) var(--ease-in) both;
 }
 
-body[data-state="recovery"] .presence {
+body[data-state="recovery"] .presence,
+body[data-state="failed"] .presence {
   border-radius: 20px;
 }
 
@@ -375,6 +376,19 @@ body[data-state="error"] .error-mark {
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Provider errors run longer than delivery failures; give them two lines. */
+body[data-state="failed"] .recovery-copy p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
+body[data-state="failed"] .recovery-symbol {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .recovery-actions,

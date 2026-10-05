@@ -18,7 +18,9 @@ let step = 0;
 let state = {
   microphone: "not_determined",
   accessibility: false,
-  hasVoiceKey: false,
+  voiceReady: false,
+  appleAvailable: false,
+  recommendedModel: "",
   voiceHotkey: "Alt+V",
   delivery: "island",
 };
@@ -113,8 +115,8 @@ function renderAccessibility() {
 }
 
 function renderTryStep() {
-  byId("key-setup").hidden = state.hasVoiceKey;
-  if (!state.hasVoiceKey && !tryDone) {
+  byId("key-setup").hidden = state.voiceReady;
+  if (!state.voiceReady && !tryDone) {
     byId("try-hint").textContent = "Add a transcription key first, then hold the shortcut.";
   }
 }
@@ -241,6 +243,59 @@ byId("skip").addEventListener("click", () => goTo(step + 1));
 byId("grant-mic").addEventListener("click", grantMicrophone);
 byId("grant-acc").addEventListener("click", grantAccessibility);
 
+function showVoiceSetup(kind) {
+  byId("voice-local-setup").hidden = kind !== "local";
+  byId("voice-cloud-setup").hidden = kind !== "cloud";
+  if (kind !== "local") return;
+  const note = byId("voice-local-note");
+  const go = byId("voice-local-go");
+  if (state.appleAvailable) {
+    note.textContent = "Uses Apple's on-device speech. macOS downloads the language once.";
+    go.textContent = "Use Apple speech";
+  } else {
+    note.textContent = "Downloads an open Whisper model once. Nothing leaves this Mac.";
+    go.textContent = "Download model";
+  }
+}
+
+byId("voice-local").addEventListener("click", () => showVoiceSetup("local"));
+byId("voice-cloud").addEventListener("click", () => showVoiceSetup("cloud"));
+
+byId("voice-local-go").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const progress = byId("voice-local-progress");
+  button.disabled = true;
+  try {
+    if (state.appleAvailable) {
+      await invoke("set_voice_stt", { choice: "apple", baseUrl: "", model: "" });
+      progress.textContent = "Installing language…";
+      await invoke("voice_apple_install", { language: "auto" });
+    } else {
+      const models = await invoke("get_voice_models");
+      let path = models.models.find((model) => !model.missing)?.path;
+      if (!path) {
+        const stop = await listen("voice://model-download", ({ payload }) => {
+          progress.textContent = `Downloading ${Math.floor((payload.received / payload.total) * 100)}%`;
+        });
+        try {
+          path = await invoke("voice_download_model", { id: state.recommendedModel });
+        } finally {
+          stop();
+        }
+      }
+      await invoke("set_voice_stt", { choice: "whisper_cpp", baseUrl: "", model: path });
+    }
+    progress.textContent = "Ready.";
+    await refresh();
+    byId("try-hint").textContent = "Hold the shortcut, then let go.";
+  } catch (error) {
+    toast(errorMessage(error), true);
+    progress.textContent = "";
+  } finally {
+    button.disabled = false;
+  }
+});
+
 byId("save-voice-key").addEventListener("click", async () => {
   const input = byId("voice-key");
   const key = input.value.trim();
@@ -249,6 +304,11 @@ byId("save-voice-key").addEventListener("click", async () => {
     return;
   }
   try {
+    await invoke("set_voice_stt", {
+      choice: byId("voice-cloud-provider").value,
+      baseUrl: "",
+      model: "",
+    });
     await invoke("set_voice_api_key", { role: "transcription", key });
     input.value = "";
     toast("Key saved to Keychain.");

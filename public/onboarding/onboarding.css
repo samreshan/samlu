@@ -307,6 +307,12 @@ kbd.inline {
   border: 1px solid rgba(154, 98, 27, 0.24);
 }
 
+.choice-row {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
 .compound-field {
   margin-top: 11px;
   display: flex;

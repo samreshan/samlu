@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-26
     env:
       TARGET: universal-apple-darwin
     steps:
@@ -241,7 +241,7 @@ jobs:
             echo
             echo "| Permission | Why |"
             echo "| --- | --- |"
-            echo "| Microphone | Recording dictation. Audio goes only to the speech provider you configure. |"
+            echo "| Microphone | Recording dictation. Audio stays on the Mac with on-device engines (Whisper, Apple) or goes only to the chosen cloud provider. |"
             echo "| Accessibility | Inserting the result back into the field you were typing in. |"
             echo
             echo "Both are requested on first use and can be revoked in System Settings -> Privacy & Security."
@@ -249,7 +249,7 @@ jobs:
             echo "## Requirements"
             echo
             echo "- macOS 11 Big Sur or later"
-            echo "- A Groq or other OpenAI-compatible API key for voice features (stored in your Keychain)"
+            echo "- An API key is needed only for cloud engines (stored in your Keychain)"
           } > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
 

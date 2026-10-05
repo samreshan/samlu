@@ -803,6 +803,83 @@ kbd {
   font-size: 0.6875rem;
 }
 
+.history-tools {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.history-tools input[type="search"] {
+  flex: 1;
+}
+
+.history-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.history-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.history-row p {
+  margin: 0 0 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.history-row small {
+  color: var(--muted);
+}
+
+.model-list {
+  display: grid;
+  gap: 8px;
+}
+
+.model-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.model-row small {
+  display: block;
+  color: var(--muted);
+}
+
+.model-row-actions,
+.model-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.model-actions {
+  margin: 10px 0 18px;
+}
+
+.model-catalog-title {
+  margin: 0 0 8px;
+}
+
+#voice-vocabulary {
+  width: 100%;
+  font: inherit;
+}
+
 .tool-index {
   margin-bottom: 28px;
   display: grid;

@@ -91,6 +91,13 @@
                   <option value="dark">Dark</option>
                 </select>
               </label>
+              <label class="setting-row">
+                <span><strong>When Settings closes</strong><small>Keep Samlu active in the menu bar for shortcuts and agent notifications, or quit it completely.</small></span>
+                <select id="close-behavior">
+                  <option value="background">Keep running in menu bar</option>
+                  <option value="quit">Quit Samlu</option>
+                </select>
+              </label>
             </div>
           </section>
 
@@ -160,32 +167,9 @@
             </div>
           </header>
 
-          <section class="integration">
-            <div class="integration-head">
-              <div class="integration-logo claude-logo" aria-hidden="true">C</div>
-              <div><h2>Claude Code</h2><p id="claude-path">~/.claude/settings.json</p></div>
-              <span class="status-pill" id="claude-pill">Checking</span>
-            </div>
-            <p>Installs HTTP hooks for permission prompts, stopped turns, and completed tasks. The local authentication token remains stable across app restarts.</p>
-            <div class="button-row">
-              <button class="primary-button" id="install-claude" type="button">Install hooks</button>
-              <button class="secondary-button" id="preview-claude" type="button">Preview changes</button>
-              <button class="secondary-button" id="copy-claude" type="button">Copy snippet</button>
-            </div>
-          </section>
-
-          <section class="integration">
-            <div class="integration-head">
-              <div class="integration-logo codex-logo" aria-hidden="true">X</div>
-              <div><h2>Codex CLI</h2><p id="codex-path">~/.codex/config.toml</p></div>
-              <span class="status-pill" id="codex-pill">Checking</span>
-            </div>
-            <p>Configures Codex's external notify command for completed agent turns while preserving your model, profile, sandbox, and project settings.</p>
-            <div class="button-row">
-              <button class="primary-button" id="install-codex" type="button">Install notifier</button>
-              <button class="secondary-button" id="preview-codex" type="button">Preview changes</button>
-            </div>
-          </section>
+          <div id="agent-integrations" aria-live="polite">
+            <div class="empty-state">Checking supported agent integrations…</div>
+          </div>
 
           <section class="code-preview" id="agent-preview" hidden>
             <div class="section-heading">
@@ -205,74 +189,127 @@
             </div>
           </header>
 
-          <section class="settings-section">
+          <section class="settings-section" aria-labelledby="voice-engine-title">
             <div class="section-heading">
-              <div><h2>Cloud providers</h2><p>Use one endpoint by default, or split speech and prompt transformation.</p></div>
+              <div><h2 id="voice-engine-title">Speech engine</h2><p>Transcribe on this Mac, or send audio to a provider you choose.</p></div>
               <span class="save-state" id="voice-provider-save-state" aria-live="polite"></span>
             </div>
-            <div class="setting-rows provider-mode">
+            <div class="form-grid">
+              <label class="field"><span>Engine</span>
+                <select id="voice-stt-choice">
+                  <optgroup label="On this Mac">
+                    <option value="whisper_cpp">Whisper (on-device)</option>
+                    <option value="apple" id="voice-apple-option">Apple (on-device)</option>
+                  </optgroup>
+                  <optgroup label="Cloud">
+                    <option value="groq">Groq</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="deepgram">Deepgram</option>
+                    <option value="elevenlabs">ElevenLabs</option>
+                    <option value="custom">OpenAI-compatible URL</option>
+                  </optgroup>
+                </select>
+              </label>
+              <label class="field"><span>Language</span>
+                <select id="voice-language">
+                  <option value="auto">Detect automatically</option>
+                  <option value="en">English</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="it">Italian</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="nl">Dutch</option>
+                  <option value="hi">Hindi</option>
+                  <option value="ne">Nepali</option>
+                  <option value="ja">Japanese</option>
+                  <option value="ko">Korean</option>
+                  <option value="zh">Chinese</option>
+                  <option value="ru">Russian</option>
+                  <option value="ar">Arabic</option>
+                </select>
+              </label>
+              <p class="field-note full" id="voice-language-note" hidden></p>
+
+              <div class="full" id="voice-cloud-fields">
+                <div class="form-grid">
+                  <label class="field full" id="voice-stt-base-url-row" hidden><span>API base URL</span>
+                    <input id="voice-stt-base-url" type="url" spellcheck="false" placeholder="https://api.provider.com/v1" />
+                  </label>
+                  <label class="field"><span>Model</span>
+                    <input id="voice-stt-model" type="text" spellcheck="false" />
+                  </label>
+                  <label class="field full"><span>API key <span class="status-pill" id="voice-stt-key-status">Checking</span></span>
+                    <div class="compound-field">
+                      <input id="voice-stt-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a key to replace the saved key" />
+                      <button class="secondary-button" id="save-voice-stt-key" type="button">Save to Keychain</button>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div class="full" id="voice-apple-fields" hidden>
+                <div class="setting-row">
+                  <span><strong>Language assets</strong><small id="voice-apple-help">macOS downloads speech assets once per language.</small></span>
+                  <button class="secondary-button" id="voice-apple-install" type="button">Install language</button>
+                </div>
+              </div>
+
+              <div class="full" id="voice-whisper-fields" hidden>
+                <div class="model-list" id="voice-model-list"></div>
+                <div class="model-actions">
+                  <button class="secondary-button" id="voice-add-model" type="button">Add model file…</button>
+                  <button class="secondary-button" id="voice-rescan-models" type="button">Rescan</button>
+                </div>
+                <h3 class="model-catalog-title">Download a model</h3>
+                <div class="model-list" id="voice-model-catalog"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-section" aria-labelledby="voice-text-title">
+            <div class="section-heading">
+              <div><h2 id="voice-text-title">Text processing</h2><p>Cleanup, summaries, and prompts send the transcript text (never audio) to the provider below. Choose Ollama or LM Studio to keep it on this Mac.</p></div>
+              <span class="save-state" id="voice-text-save-state" aria-live="polite"></span>
+            </div>
+            <div class="setting-rows">
               <label class="setting-row">
-                <span><strong>Separate transformation provider</strong><small>Useful when one service handles speech and another handles prompt generation.</small></span>
-                <input id="voice-separate-providers" type="checkbox" />
+                <span><strong>Clean up dictation</strong><small>Removes filler words, fixes punctuation, and applies "no, I mean…" corrections. Off pastes exactly what was heard.</small></span>
+                <input id="voice-cleanup" type="checkbox" />
               </label>
             </div>
-
-            <div class="provider-block">
-              <div class="provider-heading">
-                <div><h3>Speech transcription</h3><p id="voice-stt-provider-note">Also used for summaries and prompt transformation.</p></div>
-                <span class="status-pill" id="voice-stt-key-status">Checking</span>
-              </div>
-              <div class="form-grid">
-                <label class="field"><span>Provider</span>
-                  <select id="voice-stt-provider">
-                    <option value="groq">Groq</option>
-                    <option value="custom">OpenAI-compatible</option>
-                  </select>
-                </label>
-                <label class="field full" id="voice-stt-base-url-row" hidden><span>API base URL</span>
-                  <input id="voice-stt-base-url" type="url" spellcheck="false" placeholder="https://api.provider.com/v1" />
-                </label>
-                <label class="field full"><span>API key</span>
-                  <div class="compound-field">
-                    <input id="voice-stt-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a key to replace the saved key" />
-                    <button class="secondary-button" id="save-voice-stt-key" type="button">Save to Keychain</button>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            <div class="provider-block" id="voice-transform-provider-block" hidden>
-              <div class="provider-heading">
-                <div><h3>Prompt transformation</h3><p>Used for summary and detailed prompt modes.</p></div>
-                <span class="status-pill" id="voice-transform-key-status">Checking</span>
-              </div>
-              <div class="form-grid">
-                <label class="field"><span>Provider</span>
-                  <select id="voice-transform-provider">
-                    <option value="groq">Groq</option>
-                    <option value="custom">OpenAI-compatible</option>
-                  </select>
-                </label>
-                <label class="field full" id="voice-transform-base-url-row" hidden><span>API base URL</span>
-                  <input id="voice-transform-base-url" type="url" spellcheck="false" placeholder="https://api.provider.com/v1" />
-                </label>
-                <label class="field full"><span>API key</span>
-                  <div class="compound-field">
-                    <input id="voice-transform-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a key to replace the saved key" />
-                    <button class="secondary-button" id="save-voice-transform-key" type="button">Save to Keychain</button>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            <div class="form-grid voice-models">
-              <label class="field"><span>Speech model</span>
-                <input id="voice-stt-model" type="text" spellcheck="false" />
+            <div class="form-grid">
+              <label class="field"><span>Provider</span>
+                <select id="voice-transform-provider">
+                  <option value="groq">Groq</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="ollama">Ollama (this Mac)</option>
+                  <option value="lmstudio">LM Studio (this Mac)</option>
+                  <option value="custom">OpenAI-compatible URL</option>
+                </select>
               </label>
-              <label class="field"><span>Transform model</span>
+              <label class="field"><span>Model</span>
                 <input id="voice-transform-model" type="text" spellcheck="false" />
+                <small class="field-note" id="voice-transform-model-hint" hidden>Use a model name your server lists, for example from <code>ollama list</code> or LM Studio's loaded model.</small>
+              </label>
+              <label class="field full" id="voice-transform-base-url-row" hidden><span>API base URL</span>
+                <input id="voice-transform-base-url" type="url" spellcheck="false" placeholder="https://api.provider.com/v1" />
+              </label>
+              <label class="field full" id="voice-transform-key-row"><span>API key <span class="status-pill" id="voice-transform-key-status">Checking</span></span>
+                <div class="compound-field">
+                  <input id="voice-transform-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste a key to replace the saved key" />
+                  <button class="secondary-button" id="save-voice-transform-key" type="button">Save to Keychain</button>
+                </div>
               </label>
             </div>
+          </section>
+
+          <section class="settings-section" aria-labelledby="voice-vocabulary-title">
+            <div class="section-heading">
+              <div><h2 id="voice-vocabulary-title">Vocabulary</h2><p>Names and terms to spell exactly. One per line.</p></div>
+              <span class="save-state" id="voice-vocabulary-save-state" aria-live="polite"></span>
+            </div>
+            <textarea id="voice-vocabulary" rows="5" spellcheck="false" placeholder="Samlu&#10;Claude Code&#10;Kubernetes"></textarea>
           </section>
 
           <section class="settings-section">
@@ -333,10 +370,29 @@
               </label>
             </div>
             <div class="mode-guide">
-              <div><kbd id="voice-normal-key">⌥V</kbd><strong>Dictate</strong><span>Clean transcript</span></div>
+              <div><kbd id="voice-normal-key">⌥V</kbd><strong>Dictate</strong><span>Transcript</span></div>
               <div><kbd id="voice-summary-key">⌥⇧V</kbd><strong>Summarize</strong><span>Compact notes</span></div>
               <div><kbd id="voice-prompt-key">⌥⌘V</kbd><strong>Prompt</strong><span>Detailed agent brief</span></div>
             </div>
+          </section>
+
+          <section class="settings-section" aria-labelledby="voice-history-title">
+            <div class="section-heading">
+              <div><h2 id="voice-history-title">History</h2><p>Recent dictations, stored only on this Mac. Audio is never kept.</p></div>
+              <span class="save-state" id="voice-history-save-state" aria-live="polite"></span>
+            </div>
+            <div class="setting-rows">
+              <label class="setting-row">
+                <span><strong>Keep transcript history</strong><small>The last 200 results. Turning this off deletes the history.</small></span>
+                <input id="voice-keep-history" type="checkbox" />
+              </label>
+            </div>
+            <div class="history-tools">
+              <input id="voice-history-search" type="search" placeholder="Search history" spellcheck="false" />
+              <label class="inline-toggle"><input id="voice-history-raw" type="checkbox" /> Show original transcript</label>
+              <button class="secondary-button" id="clear-voice-history" type="button">Clear history</button>
+            </div>
+            <div class="history-list" id="voice-history-list" aria-live="polite"></div>
           </section>
         </section>
 
@@ -436,7 +492,7 @@
             <h2>Planned companion</h2>
             <p>The iPhone companion and hosted APNs relay come after the Mac build is stable. The planned protocol uses end-to-end encrypted notification content, configurable summaries, and one paired Mac per iPhone.</p>
             <h2>Privacy</h2>
-            <p>Agent history, snippets, and optional clipboard history remain local. Voice audio is sent only to the cloud provider you configure. API keys are stored in macOS Keychain.</p>
+            <p>Agent history, snippets, and optional clipboard history remain local. Voice audio stays on this Mac with on-device engines, or goes only to the cloud provider you choose. Transcript history and API keys stay local; keys are stored in macOS Keychain.</p>
           </section>
         </section>
       </main>

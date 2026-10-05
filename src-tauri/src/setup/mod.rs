@@ -1,8 +1,12 @@
 //! Tauri commands the Status/Setup UI (public/index.html + settings.js)
 //! calls to detect, preview, and apply the Claude Code hook config.
 
+pub mod antigravity;
 pub mod claude_hooks;
 pub mod codex_notify;
+pub mod gemini_cli;
+pub mod integrations;
+mod json_config;
 
 use crate::state::AppState;
 use serde::Serialize;

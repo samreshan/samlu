@@ -110,6 +110,25 @@ pub fn apply_codex_config(app: AppHandle) -> Result<(), String> {
     std::fs::write(path, merged.to_string()).map_err(|error| error.to_string())
 }
 
+/// Removes Samlu's notify command when it is still the active value. Codex
+/// supports one notify command, so a previous value cannot be safely inferred;
+/// the timestamped backup remains available for manual restoration.
+pub fn uninstall(app: AppHandle) -> Result<(), String> {
+    let path = config_path()?;
+    let expected = command(&app)?;
+    let mut document = read(&path)?;
+    if installed_command(&document) != expected {
+        return Ok(());
+    }
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    backup(&path, &app_data_dir)?;
+    document.remove("notify");
+    std::fs::write(path, document.to_string()).map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{installed_command, merged};

@@ -254,3 +254,20 @@ void samlu_set_background_mode(bool backgroundMode) {
     }
   });
 }
+
+/// Brings the regular Settings window forward as one AppKit transaction. The
+/// old sequence changed activation policy asynchronously and immediately asked
+/// Tauri to show/focus, which could leave Samlu active but invisible.
+bool samlu_present_application_window(void *windowPointer) {
+  if (windowPointer == NULL) {
+    return false;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow *window = (__bridge NSWindow *)windowPointer;
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    [NSApp activateIgnoringOtherApps:YES];
+    [window deminiaturize:nil];
+    [window makeKeyAndOrderFront:nil];
+  });
+  return true;
+}

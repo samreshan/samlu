@@ -14,13 +14,15 @@ const HEIGHT: f64 = 610.0;
 
 /// Opens the setup guide, creating the window the first time it is needed.
 pub fn show(app: &AppHandle) -> Result<(), String> {
-    crate::macos::set_background_mode(false);
     if let Some(window) = app.get_webview_window(LABEL) {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
+        window
+            .unminimize()
+            .map_err(|error| format!("could not restore the setup guide: {error}"))?;
+        return crate::macos::present_application_window(&window)
+            .then_some(())
+            .ok_or_else(|| "could not access the native setup-guide window".to_string());
     }
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         app,
         LABEL,
         WebviewUrl::App("onboarding/onboarding.html".into()),
@@ -31,8 +33,10 @@ pub fn show(app: &AppHandle) -> Result<(), String> {
     .maximizable(false)
     .center()
     .build()
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    crate::macos::present_application_window(&window)
+        .then_some(())
+        .ok_or_else(|| "could not access the native setup-guide window".to_string())
 }
 
 /// Everything the setup guide polls for: it re-reads this each time the window
@@ -45,7 +49,9 @@ pub fn onboarding_state(
     serde_json::json!({
         "microphone": crate::macos::microphone_access().as_str(),
         "accessibility": crate::voice::get_voice_accessibility_status(),
-        "hasVoiceKey": voice.has_api_key("transcription"),
+        "voiceReady": voice.stt_ready(),
+        "appleAvailable": crate::voice::apple_available(),
+        "recommendedModel": crate::voice::recommended_model(),
         "voiceHotkey": voice.hotkey(),
         "delivery": config.delivery(),
         "completed": config.onboarding_completed(),
@@ -96,8 +102,7 @@ pub(crate) fn finish(app: &AppHandle, open_agents: bool) {
     if open_agents {
         crate::tray::show_main(app);
         let _ = app.emit_to("main", "settings://tab", "agents");
-    } else if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-        crate::macos::set_background_mode(true);
+    } else {
+        crate::lifecycle::hide_to_background(app);
     }
 }

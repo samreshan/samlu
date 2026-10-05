@@ -55,7 +55,7 @@ System Settings → Privacy & Security:
 
 | Permission | Why |
 | --- | --- |
-| Microphone | Recording dictation. Audio goes only to the speech provider you configure. |
+| Microphone | Recording dictation. Audio stays on this Mac with on-device engines, or goes only to the speech provider you configure. |
 | Accessibility | Returning the result to the field you were typing in. |
 
 ## What works
@@ -66,11 +66,18 @@ System Settings → Privacy & Security:
 - Hold `Option+V`, speak, and release to process.
 - Add `Shift` for a concise summary.
 - Add `Command` for a detailed coding-agent prompt.
+- Transcribe on this Mac with Whisper (whisper.cpp, Metal) or Apple's
+  on-device speech (macOS 26+), with no account and no network.
+- Use Whisper models you already have (MacWhisper, Superwhisper, Hugging Face
+  cache, or any `.bin` file), or download one from Settings.
+- Or use a cloud provider: Groq, OpenAI, Deepgram, ElevenLabs, or any
+  OpenAI-compatible endpoint.
+- Optional AI cleanup removes filler words and applies spoken corrections,
+  using a cloud model or a local one through Ollama or LM Studio.
+- Custom vocabulary and language selection.
+- Searchable local transcript history (text only, last 200 results).
 - Review the result in an optional compact editable preview before pasting.
-- Use Groq or another OpenAI-compatible cloud endpoint.
-- Use one shared endpoint by default, or configure separate speech and text
-  transformation providers.
-- Store endpoint-specific API keys in macOS Keychain.
+- Store API keys in macOS Keychain.
 
 The shortcut, models, provider layout, and preview behavior are configurable
 in the Voice settings tab.
@@ -151,7 +158,10 @@ Apple notarization credentials to Tauri.
 - Cloud provider API keys are stored in macOS Keychain, not Samlu JSON files.
 - Snippets, launcher history, event history, and optional clipboard history are
   local to the Mac.
-- Voice audio is sent only to the cloud endpoint configured by the user.
+- With on-device engines, voice audio never leaves the Mac. With a cloud
+  engine, audio goes only to the provider you configure.
+- Transcript history is stored locally as text and can be turned off, which
+  deletes it. Audio is never stored.
 
 The source Icon Composer package is preserved at
 `src-tauri/icons/samlu.icon`. The unsigned Tauri beta uses an `.icns` generated
