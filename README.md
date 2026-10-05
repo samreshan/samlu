@@ -135,6 +135,15 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+### Releases
+
+Every push to `main` runs CI and, if it passes, publishes a universal release
+(`.github/workflows/release.yml`). The version in `src-tauri/tauri.conf.json`
+ships first; later pushes bump the patch number (0.2.0, 0.2.1, …). Raise that
+version to start a new minor or major series.
+
+### Local build
+
 Create an Apple Silicon app and DMG:
 
 ```bash

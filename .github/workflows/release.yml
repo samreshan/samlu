@@ -1,32 +1,51 @@
 name: Release
 
-# Publishes a downloadable macOS build. Signing is optional: with no secrets
-# configured this produces an ad-hoc signed universal build that anyone can
-# download and run after clearing quarantine (see the generated release notes).
-# Adding the APPLE_* secrets upgrades the same workflow to a Developer ID
-# signed, notarized, stapled build with no other changes.
+# Every push to main publishes a downloadable macOS build once CI passes.
+# Signing is optional: with no secrets configured this produces an ad-hoc
+# signed universal build that anyone can download and run after clearing
+# quarantine (see the generated release notes). Adding the APPLE_* secrets
+# upgrades the same workflow to a Developer ID signed, notarized, stapled
+# build with no other changes.
+#
+# Versioning: the version in tauri.conf.json is released as-is the first time;
+# later pushes in that series bump the patch number past the newest existing
+# tag (0.2.0, 0.2.1, 0.2.2, ...). Raise the version in tauri.conf.json to start
+# a new minor or major series. Pushing a v* tag releases exactly that tag.
 
 on:
   push:
+    branches: [main]
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to publish (defaults to the version in tauri.conf.json)"
+        description: "Tag to publish (defaults to the next version)"
         required: false
         type: string
 
 permissions:
   contents: write
 
+# Releases are serialized so two quick pushes never compute the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: ci
     runs-on: macos-26
     env:
       TARGET: universal-apple-darwin
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Resolve release tag
         id: meta
@@ -40,8 +59,21 @@ jobs:
             tag="${GITHUB_REF_NAME}"
           elif [ -n "${INPUT_TAG:-}" ]; then
             tag="${INPUT_TAG}"
+          elif existing="$(git tag --points-at HEAD --list 'v*' | sort -V | tail -1)" \
+            && [ -n "$existing" ]; then
+            # A re-run of a commit that already shipped updates that release
+            # instead of minting a second version for the same code.
+            tag="$existing"
           else
-            tag="v$(jq -r .version src-tauri/tauri.conf.json)"
+            base="$(jq -r .version src-tauri/tauri.conf.json)"
+            if ! git rev-parse -q --verify "refs/tags/v${base}" >/dev/null; then
+              tag="v${base}"
+            else
+              series="${base%.*}"
+              last="$(git tag --list "v${series}.*" | sed 's/^v//' \
+                | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+              tag="v${series}.$(( ${last##*.} + 1 ))"
+            fi
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
@@ -118,6 +150,7 @@ jobs:
       - name: Build universal app bundle
         working-directory: src-tauri
         env:
+          VERSION: ${{ steps.meta.outputs.version }}
           SIGNED: ${{ steps.signing.outputs.signed }}
           NOTARIZE: ${{ steps.signing.outputs.notarize }}
           SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -145,7 +178,10 @@ jobs:
             echo "Building ad-hoc signed (no notarization credentials)."
           fi
 
-          cargo tauri build --target "$TARGET" --bundles app
+          # The computed version is stamped into the bundle, so the app reports
+          # the release it shipped in even when tauri.conf.json lags behind.
+          cargo tauri build --target "$TARGET" --bundles app \
+            --config "{\"version\":\"${VERSION}\"}"
 
       - name: Package disk image and archive
         id: package
@@ -257,8 +293,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: Samlu ${{ steps.meta.outputs.version }}
           body_path: RELEASE_NOTES.md
+          generate_release_notes: true
           draft: false
           make_latest: true
           fail_on_unmatched_files: true

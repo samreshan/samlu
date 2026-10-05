@@ -1,9 +1,10 @@
 name: CI
 
+# Pushes to main run these checks through release.yml, which calls this
+# workflow before building, so they are not triggered here a second time.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
 
 jobs:
   check:

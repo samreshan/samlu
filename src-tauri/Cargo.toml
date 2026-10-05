@@ -1,6 +1,6 @@
 [package]
 name = "samlu"
-version = "0.1.0"
+version = "0.2.0"
 description = "Samlu - a macOS AI development kit for voice, agent notifications, and developer commands"
 authors = ["Samlu contributors"]
 license = "Apache-2.0"
