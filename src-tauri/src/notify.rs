@@ -149,9 +149,8 @@ fn show(app: &AppHandle, event: &AgentEvent, include_summary: bool, delivery: &s
     }
     // Notification Center always keeps the record; delivery only decides which
     // extra on-screen presentation runs alongside it.
-    match delivery {
-        crate::settings::DELIVERY_ISLAND => show_island_update(app, event, body),
-        _ => {}
+    if delivery == crate::settings::DELIVERY_ISLAND {
+        show_island_update(app, event, body);
     }
 }
 

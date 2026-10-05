@@ -1550,36 +1550,23 @@ fn capsule_origin(
 ) -> (f64, f64) {
     let base_x = display.x + (display.width - width) / 2.0;
     let base_y = display.y + BOTTOM_MARGIN;
-    let (x, y) = clamp_to_display(
-        base_x + offset.0,
-        base_y - offset.1,
-        width,
-        height,
-        display.x,
-        display.y,
-        display.width,
-        display.height,
-    );
+    let (x, y) = clamp_to_display(base_x + offset.0, base_y - offset.1, width, height, display);
     *offset = (x - base_x, base_y - y);
     (x, y)
 }
 
+/// Keeps the capsule wholly on its display, so a drag can never strand it
+/// half off an edge where its buttons are unreachable.
 fn clamp_to_display(
     x: f64,
     y: f64,
     width: f64,
     height: f64,
-    display_x: f64,
-    display_y: f64,
-    display_width: f64,
-    display_height: f64,
+    display: &crate::macos::ScreenFrame,
 ) -> (f64, f64) {
-    let max_x = display_x + (display_width - width).max(0.0);
-    let max_y = display_y + (display_height - height).max(0.0);
-    (
-        x.clamp(display_x, max_x.max(display_x)),
-        y.clamp(display_y, max_y.max(display_y)),
-    )
+    let max_x = display.x + (display.width - width).max(0.0);
+    let max_y = display.y + (display.height - height).max(0.0);
+    (x.clamp(display.x, max_x), y.clamp(display.y, max_y))
 }
 
 /// Moves the capsule by a pointer delta in logical pixels. The webview tracks
