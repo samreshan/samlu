@@ -107,6 +107,44 @@ Project discovery starts with common existing development folders. Launcher
 settings can add or remove indexed roots, exclude folders, and trigger a manual
 reindex without running a permanent file-system watcher.
 
+#### Descriptive Find (optional add-on)
+
+Descriptive Find searches inside your files by what they say. Turn it on in
+Launcher settings, choose the folders to search (Documents and Desktop to
+start), then type `?` and describe what you're looking for: `? can I keep a
+pet in the flat` finds the clause in the lease, `? bill from the branding
+agency` finds the invoice. The result names the page or line and quotes the
+passage. Strong matches also join the end of ordinary searches.
+
+- Reads text, Markdown, Word (`.docx`), OpenDocument (`.odt`), RTF, HTML and
+  PDF files, plus source code if you turn on code search. Keys, password files,
+  hidden folders, `~/Library` and dependency folders are never read.
+- Meaning and exact words are ranked together, so a description finds the
+  passage and an invoice number or error code is still matched as written.
+  Words match while you type; meaning results take over once you pause.
+- Choose the model that supplies meaning in Launcher settings:
+  - **Large: EmbeddingGemma 2**, Google DeepMind's multilingual embedding
+    model, the one DigUp uses (about 865 MB with its image and audio
+    encoders, downloaded once and verified). It runs on the GPU through
+    llama.cpp's official `llama-server` build (Metal on macOS, Vulkan or CPU
+    on Windows), in a helper process that starts when you search and quits
+    after ten minutes unused. A query takes about 20 ms.
+  - **Small: Model2Vec `potion-retrieval-32M`** (about 125 MB). A query embeds
+    in microseconds on any CPU.
+  - **None**: exact words only, nothing to download.
+- A folder watcher keeps the index current; a saved file is searchable a
+  moment later. The index is one SQLite file in Samlu's app data folder, and
+  **Remove…** deletes it and the model.
+- The engine is portable Rust (SQLite FTS5, Model2Vec, `notify`) and builds for
+  macOS and Windows.
+
+The search design (hybrid scoring, a per-query meaning scale with an honest
+"nothing found", words-then-meaning while typing) follows
+[DigUp](https://github.com/ARahim3/DigUp), an on-device file
+search app built on EmbeddingGemma 2. Samlu uses its own implementation, offers
+EmbeddingGemma 2 or a lighter model, and searches text-bearing files rather
+than photos, audio or video.
+
 ### Updates
 
 Samlu checks the latest GitHub release every few hours (Settings → General →
@@ -199,6 +237,8 @@ Apple notarization credentials to Tauri.
 - Cloud provider API keys are stored in macOS Keychain, not Samlu JSON files.
 - Snippets, launcher history, event history, and optional clipboard history are
   local to the Mac.
+- Descriptive Find reads only the folders you choose, and its index stays on
+  this computer. It goes online only to download the model you choose, once.
 - With on-device engines, voice audio never leaves the Mac. With a cloud
   engine, audio goes only to the provider you configure.
 - Transcript history is stored locally as text and can be turned off, which

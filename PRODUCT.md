@@ -10,7 +10,9 @@ The current release has three surfaces:
 
 1. Speech to text on this Mac (Whisper, Apple) or through a chosen cloud provider, with normal dictation, optional cleanup, summary, and detailed prompt modes.
 2. A developer-focused launcher for apps, projects, source files, calculator
-   expressions, snippets, clipboard history, commands, and screen colors.
+   expressions, snippets, clipboard history, commands, and screen colors,
+   with Descriptive Find as an optional add-on that searches inside files by
+   description (portable Rust, built to run on macOS and Windows).
 3. Configurable native macOS notifications for agent input and completion.
 
 ## Deferred work

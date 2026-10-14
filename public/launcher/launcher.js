@@ -19,6 +19,7 @@ const el = {
   results: document.getElementById("results"),
   hotkey: document.getElementById("hotkey"),
   action: document.getElementById("action"),
+  legendDescribe: document.getElementById("legend-describe"),
 };
 
 // Geometry, mirrored from launcher.css: search field with its divider, the
@@ -32,6 +33,13 @@ const STAGE_TOP = 16;
 const STAGE_BOTTOM = 76;
 // Long enough for the height spring (--launcher-resize) to settle.
 const RESIZE_SETTLE_MS = 300;
+// Descriptive Find, after DigUp's panel: words match while you type, and
+// once typing pauses this long the meaning results take over.
+const TYPING_PAUSE_MS = 120;
+// In an ordinary search, at most this many strong in-file matches join the
+// end of the list; `?` searches inside files only.
+const MAX_BLENDED_CONTENT = 4;
+const DESCRIBE_PREFIX = "?";
 
 const KINDS = {
   app: { label: "Application", verb: "Open" },
@@ -41,14 +49,17 @@ const KINDS = {
   snippet: { label: "Snippet", verb: "Copy" },
   clipboard: { label: "Clipboard", verb: "Copy" },
   calculation: { label: "Calculator", verb: "Copy Result" },
+  content: { label: "In File", verb: "Open" },
 };
-const REVEALABLE = new Set(["app", "file", "project"]);
+const REVEALABLE = new Set(["app", "file", "project", "content"]);
 
 const SVG = (body) => `<svg viewBox="0 0 16 16" aria-hidden="true">${body}</svg>`;
 const ICONS = {
   app: SVG('<rect x="2.5" y="2.5" width="11" height="11" rx="3"/><path d="M5.5 8h5M8 5.5v5"/>'),
   project: SVG('<path d="M2 4.6c0-.9.7-1.6 1.6-1.6h2.6l1.4 1.5h4.8c.9 0 1.6.7 1.6 1.6v5.3c0 .9-.7 1.6-1.6 1.6H3.6c-.9 0-1.6-.7-1.6-1.6Z"/>'),
   file: SVG('<path d="M4 2h5l3 3v8.4c0 .3-.3.6-.6.6H4.6a.6.6 0 0 1-.6-.6V2.6c0-.3.3-.6.6-.6Z"/><path d="M9 2v3h3"/>'),
+  content: SVG('<path d="M4 2h5l3 3v8.4c0 .3-.3.6-.6.6H4.6a.6.6 0 0 1-.6-.6V2.6c0-.3.3-.6.6-.6Z"/><path d="M6 8h4M6 10.5h3"/>'),
+  open_launcher_settings: SVG('<circle cx="7" cy="7" r="3.5"/><path d="m9.6 9.6 3.4 3.4"/>'),
   snippet: SVG('<path d="M6 3.5 3.5 8 6 12.5M10 3.5 12.5 8 10 12.5"/>'),
   clipboard: SVG('<rect x="3.5" y="3" width="9" height="11" rx="1.5"/><path d="M6 3V2h4v1"/>'),
   open_settings: SVG('<circle cx="8" cy="8" r="2"/><path d="M8 1.8v1.6M8 12.6v1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M1.8 8h1.6M12.6 8h1.6M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1"/>'),
@@ -76,6 +87,14 @@ let results = [];
 let selectedIndex = 0;
 let generation = 0;
 let slowTimer = null;
+let findTimer = null;
+// Whether Descriptive Find is on, from its last answer; the `?` legend shows
+// only then.
+let describeEnabled = false;
+// Set while `?` mode is waiting on its first answer, so the empty state
+// doesn't flash "no results" before anything could arrive.
+let describePending = false;
+let describeWarming = false;
 let openTimer = null;
 let panelHeight = 0;
 let windowHeight = 0;
@@ -119,11 +138,96 @@ function refreshHotkey() {
 function scheduleSearch(query) {
   const current = ++generation;
   clearTimeout(slowTimer);
-  runFastSearch(query, current);
+  clearTimeout(findTimer);
   const trimmed = query.trim();
+  if (trimmed.startsWith(DESCRIBE_PREFIX)) {
+    scheduleDescribe(trimmed.slice(DESCRIBE_PREFIX.length).trim(), current);
+    return;
+  }
+  describePending = false;
+  runFastSearch(query, current);
   if (trimmed.length >= 2 && !/^[=;@>]/.test(trimmed)) {
     slowTimer = setTimeout(() => runSlowSearch(query, current), 160);
   }
+  if (trimmed.length >= 3 && !/^[=;@>]/.test(trimmed)) {
+    findTimer = setTimeout(() => runBlendedFind(trimmed, current), 160 + TYPING_PAUSE_MS);
+  }
+}
+
+/* ------------------------------------------------------ descriptive find */
+
+async function findInFiles(query, meaning, limit) {
+  try {
+    const reply = await invoke("launcher_find_in_files", { query, meaning, limit });
+    if (reply) {
+      describeEnabled = reply.enabled;
+      el.legendDescribe.hidden = !describeEnabled;
+    }
+    return reply;
+  } catch (error) {
+    console.error("[launcher] launcher_find_in_files failed", error);
+    return null;
+  }
+}
+
+/** `?` mode: every keystroke gets the word matches at once (the last word as
+ * a prefix), and the meaning results replace them once typing pauses. */
+function scheduleDescribe(query, current) {
+  if (!query) {
+    describePending = false;
+    results = [];
+    selectedIndex = 0;
+    render();
+    return;
+  }
+  describePending = true;
+  findInFiles(query, false, 24).then((reply) => {
+    if (current !== generation || !reply) return;
+    showDescribe(reply, current, false);
+  });
+  findTimer = setTimeout(async () => {
+    const reply = await findInFiles(query, true, 24);
+    if (current !== generation || !reply) return;
+    describePending = false;
+    showDescribe(reply, current, true);
+  }, TYPING_PAUSE_MS);
+}
+
+function showDescribe(reply, current, final) {
+  if (!reply.enabled) {
+    describePending = false;
+    results = [
+      {
+        id: "action:open_launcher_settings",
+        kind: "action",
+        title: "Turn On Descriptive Find",
+        subtitle: "Search inside your files by describing them, in Launcher settings",
+        target: "open_launcher_settings",
+      },
+    ];
+  } else {
+    // Keyword results never replace meaning results that already arrived.
+    if (!final && !describePending) return;
+    describeWarming = final && reply.warming;
+    results = reply.results.slice(0, MAX_RESULTS);
+  }
+  selectedIndex = 0;
+  render();
+}
+
+/** An ordinary search: a few strong in-file matches join the end. */
+async function runBlendedFind(query, current) {
+  const reply = await findInFiles(query, true, 12);
+  if (current !== generation || !reply?.results?.length) return;
+  const strong = reply.results.slice(0, Math.min(reply.strong, MAX_BLENDED_CONTENT));
+  if (!strong.length) return;
+  const selectedId = results[selectedIndex]?.id;
+  // A file already listed by name stays where it is.
+  const listed = new Set(results.map((result) => result.target));
+  results = results.concat(strong.filter((result) => !listed.has(result.target))).slice(0, MAX_RESULTS);
+  const kept = results.findIndex((result) => result.id === selectedId);
+  selectedIndex = kept >= 0 ? kept : 0;
+  render({ keepScroll: true });
 }
 
 async function runFastSearch(query, current) {
@@ -218,6 +322,22 @@ function loadAppIcon(result) {
     .catch(() => iconCache.delete(result.target));
 }
 
+/** A passage's matched words arrive wrapped in « »; they're shown as <mark>
+ * without ever parsing the file's text as HTML. */
+function appendMarked(target, value) {
+  value.split(/(«[^»]*»)/).forEach((part) => {
+    if (!part) return;
+    if (part.startsWith("«") && part.endsWith("»")) {
+      const mark = document.createElement("mark");
+      mark.textContent = part.slice(1, -1);
+      target.append(mark);
+    } else {
+      // A marker cut off at the end of the excerpt is dropped.
+      target.append(document.createTextNode(part.replace(/[«»]/g, "")));
+    }
+  });
+}
+
 function renderRow(result, index) {
   const row = document.createElement("li");
   row.id = `result-${index}`;
@@ -237,7 +357,12 @@ function renderRow(result, index) {
   if (result.subtitle) {
     const subtitle = document.createElement("span");
     subtitle.className = "result-subtitle";
-    subtitle.textContent = result.subtitle;
+    if (result.kind === "content") {
+      appendMarked(subtitle, result.subtitle);
+      subtitle.title = result.subtitle.replace(/[«»]/g, "");
+    } else {
+      subtitle.textContent = result.subtitle;
+    }
     text.append(subtitle);
   }
   const kind = document.createElement("span");
@@ -267,12 +392,28 @@ function renderEmpty() {
   } else if (query.startsWith(";")) {
     headline.textContent = "No snippets yet";
     hint.textContent = "Create one with the Manage Snippets command.";
+  } else if (query.startsWith(DESCRIBE_PREFIX)) {
+    const description = query.slice(DESCRIBE_PREFIX.length).trim();
+    if (!description) {
+      headline.textContent = "Describe what you’re looking for";
+      hint.textContent = "For example ? the clause about pets in the lease. Searches inside your files.";
+    } else if (describePending) {
+      headline.textContent = "Searching inside your files…";
+      hint.textContent = "Matching words now; meaning follows when you pause.";
+    } else {
+      headline.textContent = `Nothing in your files matches “${description}”`;
+      hint.textContent = describeWarming
+        ? "Matched words only while meaning search warms up. Pause again in a moment."
+        : "Try other words, or add folders in Launcher settings.";
+    }
   } else if (query.startsWith("@")) {
     headline.textContent = "Nothing in clipboard history";
     hint.textContent = "Text you copy appears here while clipboard history is on.";
   } else if (query) {
     headline.textContent = `No results for “${query}”`;
-    hint.textContent = "Search apps, projects, and files by name, or start with = ; @ or > for tools.";
+    hint.textContent = describeEnabled
+      ? "Search apps, projects, and files by name, start with ? to describe a file’s contents, or = ; @ > for tools."
+      : "Search apps, projects, and files by name, or start with = ; @ or > for tools.";
   } else {
     headline.textContent = "Start typing to search";
     hint.textContent = "Apps, projects, and files, plus = ; @ and > for tools.";
@@ -480,6 +621,8 @@ function present() {
   el.query.value = "";
   refreshHotkey();
   scheduleSearch("");
+  // Learns whether Descriptive Find is on, for the `?` legend.
+  findInFiles("", false, 1);
   if (document.hasFocus()) {
     // The window took focus before this event arrived.
     requestAnimationFrame(open);

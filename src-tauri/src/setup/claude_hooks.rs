@@ -113,7 +113,7 @@ pub fn merge_hooks(existing: &Value, port: u16, token: &str) -> Result<Value, St
             entry
                 .get("hooks")
                 .and_then(Value::as_array)
-                .map_or(true, |handlers| !handlers.is_empty())
+                .is_none_or(|handlers| !handlers.is_empty())
         });
 
         let url = hook_url(port, token, route);
@@ -205,7 +205,7 @@ pub fn uninstall(path: &Path, app_data_dir: &Path) -> Result<(), String> {
                     entry
                         .get("hooks")
                         .and_then(Value::as_array)
-                        .map_or(true, |handlers| !handlers.is_empty())
+                        .is_none_or(|handlers| !handlers.is_empty())
                 });
             }
         }
