@@ -9,6 +9,7 @@ pub mod config;
 pub mod history;
 pub mod icons;
 pub mod projects;
+pub mod rank;
 pub mod search;
 pub mod snippets;
 
@@ -32,19 +33,29 @@ use crate::settings::AppConfig;
 use crate::state::AppState;
 
 pub const LAUNCHER_LABEL: &str = "launcher";
-pub const LAUNCHER_W: f64 = 560.0;
-pub const LAUNCHER_H: f64 = 420.0;
+/// The panel's height animates in CSS, where the motion is smooth and
+/// interruptible. The window only follows behind it: it grows before the
+/// panel does and shrinks once the panel has settled, always out of sight in
+/// the transparent margin that holds the panel's shadow. Keeping the window
+/// that tight matters because its transparent area still takes clicks. Keep
+/// in step with the stage margins and panel width in launcher.css.
+pub const LAUNCHER_W: f64 = 672.0;
+/// Tallest the window gets: the tallest panel plus its margins.
+pub const LAUNCHER_MAX_H: f64 = 552.0;
+/// Where the window's top edge sits, as a fraction of the display height.
+const LAUNCHER_TOP_FRACTION: f64 = 0.2;
 /// Long enough for the panel's exit to finish. Keep in step with
-/// --duration-exit in presence.css.
-const LAUNCHER_EXIT_MS: u64 = 170;
+/// --launcher-exit in launcher.css.
+const LAUNCHER_EXIT_MS: u64 = 150;
 static LAUNCHER_SHORTCUT_DOWN: AtomicBool = AtomicBool::new(false);
 /// Guards a delayed hide against a launcher that has been reopened in the
 /// meantime — double-tapping the hotkey must not hide the fresh window.
 static LAUNCHER_GENERATION: AtomicU64 = AtomicU64::new(0);
-/// Height the panel settles at with an empty query. The launcher always opens
-/// on an empty query, so presenting at this height means it never flashes at
-/// full size before collapsing to fit.
-static LAUNCHER_REST_H: AtomicU64 = AtomicU64::new(320);
+/// Set while the exit plays, before the window is actually hidden.
+static LAUNCHER_CLOSING: AtomicBool = AtomicBool::new(false);
+/// Window height for the empty query, which every presentation starts from,
+/// so the window appears at the size it is about to settle at.
+static LAUNCHER_REST_H: AtomicU64 = AtomicU64::new(360);
 
 /// Build the launcher overlay window, hidden, on the main thread.
 pub fn launcher_init(app: &AppHandle) -> Result<(), String> {
@@ -58,7 +69,7 @@ pub fn launcher_init(app: &AppHandle) -> Result<(), String> {
         WebviewUrl::App("launcher/launcher.html".into()),
     )
     .title("Samlu Launcher")
-    .inner_size(LAUNCHER_W, LAUNCHER_H)
+    .inner_size(LAUNCHER_W, LAUNCHER_MAX_H)
     .decorations(false)
     .transparent(true)
     .background_color(Color(0, 0, 0, 0))
@@ -75,8 +86,8 @@ pub fn launcher_init(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Show (centered on whichever display the cursor is on) if hidden, hide if
-/// visible — the global hotkey's toggle behavior.
+/// Show on the display you are working on if hidden, hide if visible — the
+/// global hotkey's toggle behavior.
 #[tauri::command]
 pub fn launcher_toggle(app: AppHandle) -> Result<(), String> {
     if app.get_webview_window(LAUNCHER_LABEL).is_none() {
@@ -92,13 +103,29 @@ pub fn launcher_toggle(app: AppHandle) -> Result<(), String> {
     };
 
     if win.is_visible().unwrap_or(false) {
-        hide_launcher(&app);
+        if LAUNCHER_CLOSING.swap(false, Ordering::SeqCst) {
+            // Pressed again while the panel was leaving: cancel the pending
+            // hide and let the panel turn back around where it is.
+            LAUNCHER_GENERATION.fetch_add(1, Ordering::SeqCst);
+            let _ = app.emit_to(LAUNCHER_LABEL, "launcher://reopen", ());
+            let _ = win.set_focus();
+        } else {
+            hide_launcher(&app);
+        }
     } else {
+        LAUNCHER_CLOSING.store(false, Ordering::SeqCst);
         // Cancels any exit still in flight from a very recent dismissal.
         LAUNCHER_GENERATION.fetch_add(1, Ordering::SeqCst);
+        // The page resets to a fresh, closed panel while the window is still
+        // hidden, then plays its entrance once the window has focus.
         let _ = app.emit_to(LAUNCHER_LABEL, "launcher://present", ());
         let rest = LAUNCHER_REST_H.load(Ordering::Relaxed) as f64;
-        if !crate::macos::present_focusable_overlay_at_cursor(&win, LAUNCHER_W, rest, 0.22) {
+        if !crate::macos::present_focusable_overlay_at_cursor(
+            &win,
+            LAUNCHER_W,
+            rest,
+            LAUNCHER_TOP_FRACTION,
+        ) {
             center_on_active_monitor(&win);
             win.show().map_err(|e| e.to_string())?;
             let _ = win.set_focus();
@@ -120,13 +147,18 @@ pub fn launcher_hide(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Lets the panel retrace its entrance before the window goes away. Hiding
-/// first would make every dismissal a hard cut.
+/// Lets the panel play its exit before the window goes away. Hiding first
+/// would make every dismissal a hard cut.
 fn hide_launcher(app: &AppHandle) {
     let Some(win) = app.get_webview_window(LAUNCHER_LABEL) else {
         return;
     };
     if !win.is_visible().unwrap_or(false) {
+        return;
+    }
+    // Escape, blur and activating a result can all ask at once; the first
+    // starts the exit and the rest have nothing to add.
+    if LAUNCHER_CLOSING.swap(true, Ordering::SeqCst) {
         return;
     }
     let generation = LAUNCHER_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
@@ -140,26 +172,26 @@ fn hide_launcher(app: &AppHandle) {
         if let Some(win) = app.get_webview_window(LAUNCHER_LABEL) {
             let _ = win.hide();
         }
+        LAUNCHER_CLOSING.store(false, Ordering::SeqCst);
     });
 }
 
-/// Fits the window to the result list. The panel keeps its top edge so the
-/// query field never moves while you type. `resting` marks the height of the
-/// empty-query state, which is what the next presentation opens at.
+/// Sets the window's height, top edge fixed. A synchronous command, so it runs
+/// on the main thread and the window has its new size when the page's call
+/// returns. `resting` marks the empty-query size the next presentation uses.
 #[tauri::command]
 pub fn launcher_resize(app: AppHandle, height: f64, resting: bool) {
-    let clamped = height.clamp(120.0, LAUNCHER_H);
+    let clamped = height.clamp(120.0, LAUNCHER_MAX_H);
     if resting {
         LAUNCHER_REST_H.store(clamped.round() as u64, Ordering::Relaxed);
     }
-    let Some(win) = app.get_webview_window(LAUNCHER_LABEL) else {
-        return;
-    };
-    crate::macos::resize_overlay_keeping_top(&win, clamped);
+    if let Some(win) = app.get_webview_window(LAUNCHER_LABEL) {
+        crate::macos::resize_overlay_keeping_top(&win, clamped);
+    }
 }
 
-/// Fast path (apps + Samlu's own actions/recent projects) — called on every
-/// keystroke, no subprocess involved.
+/// Fast path (apps, projects, snippets and Samlu's own commands, all in
+/// memory) — called on every keystroke, no subprocess involved.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn launcher_search(
@@ -208,28 +240,54 @@ pub async fn launcher_app_icon(app: AppHandle, path: String) -> Option<String> {
 }
 
 /// Runs whatever `id`/`kind`/`target` describes (open an app/file/project, or
-/// dispatch a quick action) and records it for future frecency ranking.
+/// dispatch a quick action) and records it for future frecency ranking and
+/// the empty-query suggestions.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn launcher_activate(
     app: AppHandle,
     id: String,
     kind: String,
     target: String,
+    title: Option<String>,
+    subtitle: Option<String>,
     history: tauri::State<'_, Arc<LauncherHistory>>,
 ) -> Result<(), String> {
     let result = match kind.as_str() {
         "app" | "file" | "project" => crate::open_path(&target),
         "snippet" | "clipboard" | "calculation" => app
             .clipboard()
-            .write_text(target)
+            .write_text(target.clone())
             .map_err(|error| error.to_string()),
         "action" => run_action(&app, &target),
         other => Err(format!("unknown launcher result kind: {other}")),
     };
     if result.is_ok() {
-        history.record_selection(&id);
+        history.record_selection(&search::LauncherResult {
+            id,
+            kind,
+            title: title.unwrap_or_default(),
+            subtitle: subtitle.unwrap_or_default(),
+            target,
+            section: None,
+        });
     }
     result
+}
+
+/// Command-Return: show an app, file or project in Finder instead of opening
+/// it.
+#[tauri::command]
+pub fn launcher_reveal(kind: String, target: String) -> Result<(), String> {
+    if !matches!(kind.as_str(), "app" | "file" | "project") {
+        return Err("Only apps, files and projects can be shown in Finder.".to_string());
+    }
+    std::process::Command::new("/usr/bin/open")
+        .arg("-R")
+        .arg(&target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 /// Binds `hotkey` (e.g. "Alt+Space", "Cmd+Shift+K") to toggle the launcher.
@@ -393,6 +451,10 @@ fn run_action(app: &AppHandle, action: &str) -> Result<(), String> {
         "manage_snippets" => {
             crate::tray::show_main(app);
             let _ = app.emit_to("main", "settings://tab", "launcher");
+            Ok(())
+        }
+        "check_for_updates" => {
+            crate::updater::check_from_menu(app);
             Ok(())
         }
         "open_terminal" => std::process::Command::new("/usr/bin/open")

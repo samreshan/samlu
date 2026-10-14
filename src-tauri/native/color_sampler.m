@@ -278,14 +278,15 @@ void samlu_present_focusable_overlay_at_cursor(
   });
 }
 
-/// Grows or shrinks an overlay downward, holding its top edge still. A
-/// launcher list that changes length should extend below the field the user is
-/// typing in, not shove that field up and down the screen.
+/// Grows or shrinks an overlay downward, holding its top edge still. Runs
+/// inline when called on the main thread (Tauri runs synchronous commands
+/// there), so the caller knows the window has its new size on return — the
+/// launcher grows its window before its panel and relies on that order.
 void samlu_resize_overlay_keeping_top(void *windowPointer, double height) {
   if (windowPointer == NULL) {
     return;
   }
-  dispatch_async(dispatch_get_main_queue(), ^{
+  void (^resize)(void) = ^{
     NSWindow *window = (__bridge NSWindow *)windowPointer;
     NSRect frame = window.frame;
     NSRect content = [window contentRectForFrameRect:frame];
@@ -298,7 +299,12 @@ void samlu_resize_overlay_keeping_top(void *windowPointer, double height) {
     frame.origin.y = top - target;
     frame.size.height = target;
     [window setFrame:frame display:YES animate:NO];
-  });
+  };
+  if ([NSThread isMainThread]) {
+    resize();
+  } else {
+    dispatch_async(dispatch_get_main_queue(), resize);
+  }
 }
 
 void samlu_focus_overlay(void *windowPointer) {

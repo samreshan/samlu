@@ -8,15 +8,24 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder}
 
 pub const MAIN_LABEL: &str = "main";
 
+/// Mirrors the "main" window in tauri.conf.json: a full-height sidebar under
+/// the window controls, as in System Settings.
 fn create_main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
-    WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("index.html".into()))
+    let window = WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("index.html".into()))
         .title("Samlu")
-        .inner_size(820.0, 680.0)
-        .min_inner_size(720.0, 540.0)
+        .inner_size(820.0, 640.0)
+        .min_inner_size(720.0, 520.0)
         .resizable(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(20.0, 24.0))
         .center()
         .build()
-        .map_err(|error| format!("could not recreate Settings: {error}"))
+        .map_err(|error| format!("could not recreate Settings: {error}"))?;
+    if let Some(config) = app.try_state::<std::sync::Arc<crate::settings::AppConfig>>() {
+        crate::settings::apply_window_theme(app, &config.appearance());
+    }
+    Ok(window)
 }
 
 /// Makes Settings visible and key in one AppKit main-thread operation. This

@@ -37,16 +37,9 @@ impl ProjectIndex {
         self.projects.lock().unwrap().len()
     }
 
-    pub fn search(&self, query: &str, limit: usize) -> Vec<ProjectEntry> {
-        let query = query.to_lowercase();
-        self.projects
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|project| project.name.to_lowercase().contains(&query))
-            .take(limit)
-            .cloned()
-            .collect()
+    /// Every indexed project; the launcher scores them itself.
+    pub fn entries(&self) -> Vec<ProjectEntry> {
+        self.projects.lock().unwrap().clone()
     }
 }
 
@@ -111,7 +104,7 @@ mod tests {
             &[root.to_string_lossy().to_string()],
             &[excluded.to_string_lossy().to_string()],
         );
-        let matches = index.search("", 10);
+        let matches = index.entries();
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].name, "included");

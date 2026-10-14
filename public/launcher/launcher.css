@@ -1,287 +1,436 @@
-/* Samlu launcher - Spotlight-style global search overlay, inside a
- * transparent, frameless, always-on-top window (see LAUNCHER_W/H in
- * src-tauri/src/launcher/mod.rs). Same glass-surface token values as the
- * other Samlu utility windows for visual consistency - windows
- * can't share a stylesheet, so the values are duplicated intentionally.
- */
+/* Samlu launcher: a Spotlight-style search panel inside a transparent,
+ * always-on-top window (LAUNCHER_W and LAUNCHER_MAX_H in
+ * src-tauri/src/launcher/mod.rs). The panel's height follows its results
+ * here, as a spring, so typing never makes the surface jump; the window only
+ * catches up out of sight, in the margin that holds the shadow.
+ *
+ * Motion, by frequency of use: the panel opens and closes many times a day,
+ * so both are short and soft, and typing works from the first frame. Moving
+ * the selection and swapping results happen on every keystroke, so they do
+ * not animate at all. */
 
 :root {
-  --font: var(--samlu-font);
-  --border-glass: var(--line);
-  --surface-glass: var(--surface);
-  --row-hover: var(--brand-soft);
-  --text-highlight: var(--ink);
-  --text-muted: var(--ink-secondary);
-  --radius: var(--radius-float);
+  --panel-width: 600px;
+  --panel-radius: 16px;
+  --stage-top: 16px;
+  --stage-side: 36px;
+  --row-height: 44px;
+
+  --launcher-open: 433ms;
+  --launcher-fade: 160ms;
+  --launcher-resize: 261ms;
+  /* Keep in step with LAUNCHER_EXIT_MS in launcher/mod.rs. */
+  --launcher-exit: 140ms;
+  /* Still an ease-out, but gentler than --ease-out: that curve is nearly
+   * done in the first 40ms, which turns a 140ms fade into a hard cut. */
+  --ease-exit: cubic-bezier(0.33, 1, 0.68, 1);
+
+  --panel-bg: rgba(251, 249, 243, 0.985);
+  --panel-edge: rgba(41, 37, 15, 0.12);
+  --panel-highlight: rgba(255, 255, 255, 0.92);
+  --panel-shadow:
+    0 1px 2px rgba(41, 37, 15, 0.06),
+    0 8px 20px -6px rgba(41, 37, 15, 0.16),
+    0 24px 48px -12px rgba(41, 37, 15, 0.3);
+  --row-selected: rgba(41, 37, 15, 0.07);
+  --tile-bg: rgba(41, 37, 15, 0.06);
+  --bar-bg: rgba(41, 37, 15, 0.025);
+  --key-bg: rgba(41, 37, 15, 0.065);
 }
 
-* { box-sizing: border-box; }
+/* Written twice like presence.css: the explicit Dark choice, then System. */
+:root[data-theme="dark"] {
+  --panel-bg: rgba(31, 30, 24, 0.985);
+  --panel-edge: rgba(255, 248, 219, 0.11);
+  --panel-highlight: rgba(255, 255, 255, 0.07);
+  --panel-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 10px 24px -6px rgba(0, 0, 0, 0.45),
+    0 24px 48px -12px rgba(0, 0, 0, 0.6);
+  --row-selected: rgba(255, 248, 219, 0.085);
+  --tile-bg: rgba(255, 248, 219, 0.07);
+  --bar-bg: rgba(255, 248, 219, 0.025);
+  --key-bg: rgba(255, 248, 219, 0.085);
+}
 
-html, body {
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --panel-bg: rgba(31, 30, 24, 0.985);
+    --panel-edge: rgba(255, 248, 219, 0.11);
+    --panel-highlight: rgba(255, 255, 255, 0.07);
+    --panel-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.3),
+      0 10px 24px -6px rgba(0, 0, 0, 0.45),
+      0 24px 48px -12px rgba(0, 0, 0, 0.6);
+    --row-selected: rgba(255, 248, 219, 0.085);
+    --tile-bg: rgba(255, 248, 219, 0.07);
+    --bar-bg: rgba(255, 248, 219, 0.025);
+    --key-bg: rgba(255, 248, 219, 0.085);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
   width: 100%;
   height: 100%;
   margin: 0;
   overflow: hidden;
   background: transparent;
   -webkit-font-smoothing: antialiased;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
 }
 
-body { font-family: var(--font); }
+body {
+  font-family: var(--samlu-font);
+}
 
-.shell {
-  display: flex;
-  flex-direction: column;
+.stage {
   width: 100%;
   height: 100%;
-  background:
-    radial-gradient(circle at 12% 0%, var(--brand-faint), transparent 38%),
-    var(--surface-glass);
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-float);
-  backdrop-filter: blur(28px) saturate(1.18);
-  -webkit-backdrop-filter: blur(28px) saturate(1.18);
+  padding: var(--stage-top) var(--stage-side) 0;
+}
+
+/* ------------------------------------------------------------------ panel */
+
+.panel {
+  position: relative;
+  width: var(--panel-width);
+  height: 220px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  /* Arrives as a material rather than a hard cut: the blur builds while the
-   * panel settles, and it leaves the same way it came. */
-  transform-origin: 50% 12%;
-  animation: summon var(--duration-state) var(--ease-out) both;
+  border-radius: var(--panel-radius);
+  background: var(--panel-bg);
+  box-shadow: var(--panel-shadow);
+  /* Grows from the search field, which is where the eye already is. */
+  transform-origin: 50% 0;
+  transition:
+    opacity var(--launcher-fade) var(--ease-out),
+    transform var(--launcher-open) var(--ease-spring),
+    height var(--launcher-resize) var(--ease-smooth);
 }
 
-.shell[data-leaving="true"] {
-  animation: dismiss var(--duration-exit) var(--ease-in) both;
+/* The hairline edge and top highlight sit above the content so rows that
+ * scroll under them stay framed. */
+.panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px var(--panel-edge),
+    inset 0 1px 0 var(--panel-highlight);
+  pointer-events: none;
 }
 
-@keyframes summon {
-  from {
-    opacity: 0;
-    transform: translateY(-6px) scale(0.972);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+.panel[data-state="closed"] {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
 }
 
-@keyframes dismiss {
-  from {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(-5px) scale(0.978);
-  }
+/* Leaving is quicker than arriving and settles slightly less far, so a fast
+ * close-then-open never looks like the panel is bouncing. */
+.panel[data-state="leaving"] {
+  opacity: 0;
+  transform: translateY(-3px) scale(0.985);
+  transition:
+    opacity var(--launcher-exit) var(--ease-exit),
+    transform var(--launcher-exit) var(--ease-exit),
+    height var(--launcher-resize) var(--ease-smooth);
 }
 
-.query-bar {
+/* State changes made while the window is hidden must not animate. */
+.panel.instant {
+  transition: none !important;
+}
+
+/* ----------------------------------------------------------------- search */
+
+.search {
   flex: none;
+  height: 57px;
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 56px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--border-glass);
+  padding: 0 16px 0 18px;
+  border-bottom: 1px solid var(--line);
 }
 
-/* Samlu breathing in the search bar. Anchored at its feet so the squash reads
- * as weight rather than a scale-in-place pulse. */
-.brand-bee {
-  display: block;
+/* The mark sits still. It is seen every time the launcher opens, which is far
+ * too often for it to keep moving. */
+.search-mark {
+  width: 20px;
+  height: 20px;
   flex: none;
-  width: 19px;
-  height: 19px;
-  transform-origin: 50% 100%;
-  animation: breathe 1.25s var(--ease-standard) infinite;
 }
 
-.brand-bee svg {
+.search-mark svg {
   display: block;
   width: 100%;
   height: 100%;
-}
-
-@keyframes breathe {
-  0%, 100% { transform: scale(1, 1); }
-  42% { transform: scale(1.07, 0.93); }
-  70% { transform: scale(0.96, 1.05); }
 }
 
 .query {
   flex: 1;
   min-width: 0;
+  height: 100%;
   padding: 0;
-  border: none;
+  border: 0;
+  outline: none;
   background: transparent;
-  color: var(--text-highlight);
-  font: inherit;
-  font-size: 16px;
-  font-weight: 500;
+  color: var(--ink);
+  caret-color: var(--brand-ink);
+  font: 400 19px/1.2 var(--samlu-display);
+  letter-spacing: -0.012em;
 }
 
-.query-hint {
-  flex: none;
-  font: 11px/1 var(--samlu-mono);
+.query::placeholder {
   color: var(--ink-muted);
 }
 
-.query:focus { outline: none; }
-/* The whole bar reads as the field, so the shared focus ring would draw a box
- * around something that is already obviously focused. */
-.query:focus-visible { box-shadow: none; }
-.query::placeholder { color: var(--text-muted); }
+.query:focus,
+.query:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.hotkey {
+  flex: none;
+  display: inline-flex;
+  gap: 3px;
+}
+
+/* ------------------------------------------------------------------- list */
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.body::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background: var(--line-strong);
+  background-clip: content-box;
+}
 
 .results {
-  flex: 1;
-  list-style: none;
   margin: 0;
   padding: 6px;
-  overflow-y: auto;
+  list-style: none;
 }
 
-.query-help {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  height: 34px;
-  padding: 0 16px;
+.section {
+  height: 28px;
+  padding: 11px 12px 0;
   color: var(--ink-muted);
   font-size: 11px;
-  background: var(--surface-muted);
-  border-top: 1px solid var(--line);
-}
-
-.query-help span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-}
-
-.query-help kbd {
-  display: inline-grid;
-  min-width: 17px;
-  height: 17px;
-  place-items: center;
-  color: var(--ink-muted);
-  font: inherit;
-  border: 1px solid var(--line);
-  border-radius: 4px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .result {
+  height: var(--row-height);
+  padding: 0 12px 0 10px;
   display: flex;
   align-items: center;
   gap: 11px;
-  height: 40px;
-  padding: 0 11px;
-  border-radius: 9px;
-  cursor: pointer;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    transform var(--duration-instant) var(--ease-out);
+  /* Concentric with the panel: its radius less the list's inset. */
+  border-radius: calc(var(--panel-radius) - 6px);
 }
 
+/* Selection is instant on purpose: it moves on every arrow key. */
 .result[aria-selected="true"] {
-  background: var(--row-hover);
+  background: var(--row-selected);
 }
 
-.result:active {
-  transform: scale(0.992);
-}
-
-/* Mono glyph standing in for the result type. Apps swap it for their real
- * icon once that has been extracted, at the same size so nothing shifts. */
-.result-kind {
+.result-icon,
+.result-tile {
   flex: none;
-  display: grid;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  border-radius: var(--radius-xs);
-  background: var(--surface-muted);
-  color: var(--brand-ink);
-  font: 11px/1 var(--samlu-mono);
+  width: 26px;
+  height: 26px;
 }
 
 .result-icon {
-  flex: none;
-  width: 22px;
-  height: 22px;
   object-fit: contain;
+  opacity: 1;
+  transition: opacity 120ms var(--ease-out);
 }
 
-.result-main {
-  display: flex;
+/* An icon arriving after its row fades up rather than popping in. */
+.result-icon[data-fresh="true"] {
+  opacity: 0;
+}
+
+.result-tile {
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--tile-bg);
+  color: var(--ink-secondary);
+}
+
+.result-tile svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.result-tile.glyph {
+  font: 600 13px/1 var(--samlu-mono);
+}
+
+.result-text {
   flex: 1;
-  align-items: baseline;
-  gap: 10px;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .result-title {
-  flex: 1;
-  font-size: 13px;
-  color: var(--text-highlight);
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .result-subtitle {
-  flex: none;
-  max-width: 45%;
-  font: 11px/1 var(--samlu-mono);
-  color: var(--text-muted);
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* An empty result set is a place the user has arrived at, not a dead end —
- * it says what happened and what to try next. */
-.results-empty {
-  padding: 16px 11px 18px;
-  color: var(--text-highlight);
-  font-size: 12.5px;
-}
-
-.results-empty p {
-  margin: 0;
-}
-
-.results-empty .suggestion {
-  display: block;
-  margin-top: 7px;
-  color: var(--text-muted);
+.result-kind {
+  flex: none;
+  color: var(--ink-muted);
   font-size: 11.5px;
-  line-height: 1.5;
 }
 
-.results-empty code {
-  padding: 1px 4px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--surface-muted);
-  font: 11px/1 var(--samlu-mono);
+.result[data-kind="calculation"] .result-title {
+  font: 600 15px/1 var(--samlu-mono);
+  font-variant-numeric: tabular-nums;
 }
 
+.empty {
+  padding: 16px 12px 18px;
+}
+
+.empty p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.empty span {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* ----------------------------------------------------------------- footer */
+
+.bar {
+  flex: none;
+  height: 36px;
+  padding: 0 12px 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--line);
+  background: var(--bar-bg);
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.legend {
+  display: flex;
+  gap: 14px;
+  overflow: hidden;
+}
+
+.legend span,
+.action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.action {
+  color: var(--ink-secondary);
+  font-weight: 500;
+}
+
+.bar kbd,
+.hotkey kbd {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--key-bg);
+  color: var(--ink-secondary);
+  font: 500 11px/1 var(--samlu-font);
+}
+
+.legend kbd {
+  font-family: var(--samlu-mono);
+}
+
+/* ------------------------------------------------------------ preferences */
+
+/* Reduced motion keeps the fade, which tells you the panel came and went,
+ * and drops the travel and the spring. */
 @media (prefers-reduced-motion: reduce) {
-  * { scroll-behavior: auto !important; }
-  .brand-bee { animation: none; }
-}
+  .panel,
+  .panel[data-state="closed"],
+  .panel[data-state="leaving"] {
+    transform: none !important;
+  }
 
-@media (hover: hover) and (pointer: fine) {
-  .result:hover {
-    background: var(--row-hover);
+  .panel {
+    transition: opacity 140ms linear !important;
   }
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  .shell {
-    background: var(--surface-solid);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+  :root {
+    --panel-bg: var(--surface-solid);
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --panel-edge: var(--line-strong);
+    --row-selected: var(--brand-soft);
   }
 }

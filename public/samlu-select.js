@@ -12,8 +12,9 @@
 (function () {
   const VALUE = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
   const INDEX = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "selectedIndex");
+  // Up-and-down chevrons, as on a standard macOS pop-up button.
   const CHEVRON =
-    '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.2 4.6 6 7.4l2.8-2.8"/></svg>';
+    '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.6 4.6 6 2.4l2.4 2.2M3.6 7.4 6 9.6l2.4-2.2"/></svg>';
   const CHECK =
     '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg>';
 
@@ -270,8 +271,29 @@
     const group = document.createElement("div");
     group.className = "samlu-segmented";
     group.setAttribute("role", "radiogroup");
+    // One thumb slides between segments instead of each segment lighting up
+    // on its own, so a change of choice reads as a single movement.
+    const thumb = document.createElement("span");
+    thumb.className = "samlu-segmented-thumb";
+    thumb.setAttribute("aria-hidden", "true");
 
-    function sync() {
+    function placeThumb(animate) {
+      const active = group.querySelector('button[aria-checked="true"]');
+      if (!active || !active.offsetWidth) {
+        thumb.style.opacity = "0";
+        return;
+      }
+      if (!animate) thumb.style.transition = "none";
+      thumb.style.opacity = "1";
+      thumb.style.width = `${active.offsetWidth}px`;
+      thumb.style.transform = `translateX(${active.offsetLeft}px)`;
+      if (!animate) {
+        void thumb.offsetWidth;
+        thumb.style.transition = "";
+      }
+    }
+
+    function sync(animate = true) {
       const current = VALUE.get.call(select);
       group.setAttribute("aria-label", labelFor(select));
       group.querySelectorAll("button").forEach((button) => {
@@ -284,10 +306,11 @@
         const first = group.querySelector("button:not(:disabled)");
         if (first) first.tabIndex = 0;
       }
+      placeThumb(animate);
     }
 
     function build() {
-      group.replaceChildren();
+      group.replaceChildren(thumb);
       readItems(select)
         .filter((item) => !item.heading)
         .forEach((item) => {
@@ -307,7 +330,7 @@
           });
           group.appendChild(button);
         });
-      sync();
+      sync(false);
     }
 
     group.addEventListener("keydown", (event) => {
@@ -322,6 +345,12 @@
       buttons[next].focus();
       buttons[next].click();
     });
+
+    // A control first laid out inside a hidden pane measures as zero; place
+    // the thumb, without animating, once it has a real size.
+    if ("ResizeObserver" in window) {
+      new ResizeObserver(() => placeThumb(false)).observe(group);
+    }
 
     return { element: group, control: { sync, build, close() {}, place() {} } };
   }
@@ -341,7 +370,8 @@
     control.build();
 
     // Mirror programmatic writes. Scripts set `.value` without an event, so
-    // the instance property forwards to the native one and then repaints.
+    // the instance property forwards to the native one and then repaints —
+    // without animating, since nobody just made that choice.
     Object.defineProperty(select, "value", {
       configurable: true,
       get() {
@@ -349,7 +379,7 @@
       },
       set(value) {
         VALUE.set.call(this, value);
-        control.sync();
+        control.sync(false);
       },
     });
     Object.defineProperty(select, "selectedIndex", {
@@ -359,7 +389,7 @@
       },
       set(index) {
         INDEX.set.call(this, index);
-        control.sync();
+        control.sync(false);
       },
     });
     select.addEventListener("change", () => control.sync());

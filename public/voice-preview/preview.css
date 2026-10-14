@@ -85,7 +85,7 @@ svg {
 
 /* Retraces the entrance: it rose from below, so it sinks back down. */
 .presence[data-leaving="true"] {
-  animation: depart var(--duration-exit) var(--ease-in) both;
+  animation: depart var(--duration-exit) var(--ease-out) both;
 }
 
 body[data-state="success"] .presence {

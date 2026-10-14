@@ -2,15 +2,201 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 const byId = (id) => document.getElementById(id);
-let notificationPreferences = null;
+const PANES = ["general", "agents", "voice", "launcher", "about"];
+
+let currentPane = "general";
+let prefs = null;
+let updateState = null;
+let voiceSettings = null;
+let voiceModels = { models: [], catalog: [], recommended: "", selected: "" };
+let voiceHistory = [];
 let snippets = [];
 let projectSettings = { roots: [], excludedPaths: [], projectCount: 0 };
 let agentIntegrations = [];
-let toastTimer = null;
-let saveTimer = null;
-const saveStateTimers = {};
 let voiceHotkeyRecorder = null;
 let launcherHotkeyRecorder = null;
+let toastTimer = null;
+let prefsTimer = null;
+const savedTimers = {};
+const swapTimers = new WeakMap();
+const downloadProgress = {};
+
+/* ----------------------------------------------------------------- helpers */
+
+function errorMessage(error) {
+  if (typeof error === "string") return error;
+  return error?.message || "Something went wrong.";
+}
+
+/** Errors, and results that land somewhere you are not looking. Routine saves
+ * confirm inline beside the group instead, so a toast always means "read me". */
+function toast(message, error = false) {
+  const element = byId("toast");
+  element.textContent = String(message);
+  element.classList.toggle("error", error);
+  element.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => element.classList.remove("show"), error ? 4200 : 2600);
+}
+
+const CHECK_SVG = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5"/></svg>';
+
+/** A small "Saved" beside a group's title: the check draws itself, then the
+ * whole thing fades once it has been seen. */
+function showSaved(id, label = "Saved") {
+  const element = byId(id);
+  if (!element) return;
+  clearTimeout(savedTimers[id]);
+  element.innerHTML = `${CHECK_SVG}<span></span>`;
+  element.lastChild.textContent = label;
+  element.classList.remove("show");
+  void element.offsetWidth;
+  element.classList.add("show");
+  savedTimers[id] = setTimeout(() => {
+    element.classList.remove("show");
+    // Cleared after the fade so the live region never announces nothing.
+    savedTimers[id] = setTimeout(() => element.replaceChildren(), 220);
+  }, 1800);
+}
+
+/** Asks before something that cannot be undone, as a native alert sheet on
+ * this window. `window.confirm` is replaced by the dialog plugin with an async
+ * function that never waits, so it must not be used here. */
+async function confirmAction(title, message, confirm) {
+  try {
+    return Boolean(await invoke("confirm_action", { title, message, confirm }));
+  } catch (error) {
+    toast(errorMessage(error), true);
+    return false;
+  }
+}
+
+/** Changes a button's content through a brief blur, so one control changing
+ * its label reads as a single morph rather than two labels swapping. */
+function swapButton(button, content, { disabled = false, primary = false } = {}) {
+  button.disabled = disabled;
+  button.classList.toggle("primary", primary);
+  if (button.dataset.content === content) return;
+  button.dataset.content = content;
+  clearTimeout(swapTimers.get(button));
+  if (!button.textContent) {
+    button.innerHTML = content;
+    return;
+  }
+  button.dataset.swapping = "true";
+  swapTimers.set(
+    button,
+    setTimeout(() => {
+      button.innerHTML = content;
+      requestAnimationFrame(() => delete button.dataset.swapping);
+    }, 90),
+  );
+}
+
+async function runButton(button, busyLabel, operation) {
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.innerHTML = `<span class="spinner" aria-hidden="true"></span>${busyLabel}`;
+  try {
+    return await operation();
+  } finally {
+    button.disabled = false;
+    button.innerHTML = original;
+  }
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`;
+}
+
+const relativeFormat = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+
+function timeAgo(iso) {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const seconds = Math.round((then - Date.now()) / 1000);
+  const steps = [
+    [60, "second"],
+    [60, "minute"],
+    [24, "hour"],
+    [7, "day"],
+    [Infinity, "week"],
+  ];
+  let value = seconds;
+  for (const [size, unit] of steps) {
+    if (Math.abs(value) < size) {
+      return unit === "second" ? "just now" : relativeFormat.format(value, unit);
+    }
+    value = Math.round(value / size);
+  }
+  return "";
+}
+
+/** Absolute paths under the home folder, written the way Finder abbreviates
+ * them. */
+function tildePath(path) {
+  return String(path || "").replace(/^\/Users\/[^/]+(?=\/|$)/, "~");
+}
+
+function emptyRow(text) {
+  const row = document.createElement("div");
+  row.className = "row empty-row";
+  row.textContent = text;
+  return row;
+}
+
+function setPill(id, text, state) {
+  const pill = byId(id);
+  pill.className = `pill${state ? ` ${state}` : ""}`;
+  pill.textContent = text;
+}
+
+/* ------------------------------------------------------------------- panes */
+
+function selectPane(name) {
+  if (!PANES.includes(name)) name = "general";
+  const changed = name !== currentPane;
+  currentPane = name;
+  document.querySelectorAll(".nav-item").forEach((item) => {
+    if (item.dataset.pane === name) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
+  });
+  document.querySelectorAll(".pane").forEach((pane) => {
+    const active = pane.id === `pane-${name}`;
+    pane.hidden = !active;
+    if (active) {
+      byId("pane-title").textContent = pane.dataset.title;
+      if (changed) {
+        pane.dataset.entering = "true";
+        pane.addEventListener("animationend", () => delete pane.dataset.entering, { once: true });
+      }
+    }
+  });
+  if (changed) {
+    byId("scroller").scrollTop = 0;
+    byId("pane-title").parentElement.dataset.scrolled = "false";
+  }
+  loadPane(name);
+}
+
+function loadPane(name) {
+  if (name === "general") return Promise.all([loadAppearance(), loadPrefs(), loadUpdateState()]);
+  if (name === "agents") return Promise.all([loadPrefs(), loadAgents(), loadActivity()]);
+  if (name === "voice") return loadVoiceSettings();
+  if (name === "launcher") return loadLauncherSettings();
+  if (name === "about") return loadUpdateState();
+  return Promise.resolve();
+}
+
+/* -------------------------------------------------------------- appearance */
 
 function applyAppearance(appearance) {
   const value = ["light", "dark"].includes(appearance) ? appearance : "";
@@ -19,252 +205,348 @@ function applyAppearance(appearance) {
 }
 
 async function loadAppearance() {
-  const appearance = await invoke("get_appearance");
-  byId("appearance").value = appearance;
-  applyAppearance(appearance);
-}
-
-function toast(message, error = false) {
-  const element = byId("toast");
-  element.textContent = String(message);
-  element.classList.toggle("error", error);
-  element.classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => element.classList.remove("show"), 2800);
-}
-
-// Routine saves confirm inline, next to the control that changed. The toast is
-// kept for errors and for results that land somewhere the user is not looking,
-// so a toast always means "read me".
-function setSaveState(id, label) {
-  const state = byId(id);
-  clearTimeout(saveStateTimers[id]);
-  state.textContent = label;
-  state.classList.toggle("show", Boolean(label));
-}
-
-function showSaveState(id, label = "Saved") {
-  setSaveState(id, label);
-  saveStateTimers[id] = setTimeout(() => {
-    byId(id).classList.remove("show");
-    // Text is cleared only after the fade so the live region does not announce
-    // an empty update mid-transition.
-    saveStateTimers[id] = setTimeout(() => setSaveState(id, ""), 240);
-  }, 2000);
-}
-
-function errorMessage(error) {
-  if (typeof error === "string") return error;
-  return error?.message || "Something went wrong.";
-}
-
-function setDot(id, state) {
-  byId(id).className = `status-dot ${state || ""}`.trim();
-}
-
-function selectTab(name) {
-  document.querySelectorAll(".nav-item").forEach((button) => {
-    const active = button.dataset.tab === name;
-    button.classList.toggle("active", active);
-    if (active) button.setAttribute("aria-current", "page");
-    else button.removeAttribute("aria-current");
-  });
-  document.querySelectorAll(".tab-view").forEach((view) => {
-    const active = view.id === `tab-${name}`;
-    view.classList.toggle("active", active);
-    view.hidden = !active;
-  });
-  if (name === "overview") loadOverview();
-  if (name === "agents") loadAgentStatus();
-  if (name === "voice") loadVoiceSettings();
-  if (name === "launcher") loadLauncherSettings();
-}
-
-async function loadAgentStatus() {
   try {
-    agentIntegrations = await invoke("get_agent_integrations");
-    renderAgentIntegrations();
-    ["claude-code", "codex"].forEach((id) => {
-      const integration = agentIntegrations.find((item) => item.id === id);
-      const prefix = id === "claude-code" ? "claude" : "codex";
-      const connected = Boolean(integration?.installed);
-      setDot(`${prefix}-dot`, connected ? "good" : "warn");
-      byId(`${prefix}-detail`).textContent = integration?.error
-        ? "Status unavailable"
-        : connected
-          ? "Connected"
-          : "Setup needed";
-    });
+    const appearance = await invoke("get_appearance");
+    byId("appearance").value = appearance;
+    applyAppearance(appearance);
   } catch (error) {
-    agentIntegrations = [];
-    byId("agent-integrations").replaceChildren();
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = `Agent status unavailable: ${errorMessage(error)}`;
-    byId("agent-integrations").append(empty);
-    ["claude", "codex"].forEach((prefix) => {
-      setDot(`${prefix}-dot`, "warn");
-      byId(`${prefix}-detail`).textContent = "Status unavailable";
-    });
+    toast(errorMessage(error), true);
   }
 }
 
-function renderAgentIntegrations() {
-  const container = byId("agent-integrations");
-  container.replaceChildren();
-  agentIntegrations.forEach((integration) => {
-    const section = document.createElement("section");
-    section.className = "integration";
-    const head = document.createElement("div");
-    head.className = "integration-head";
-    const logo = document.createElement("div");
-    logo.className = "integration-logo";
-    logo.setAttribute("aria-hidden", "true");
-    logo.textContent = integration.name.slice(0, 1);
-    const copy = document.createElement("div");
-    const title = document.createElement("h2");
-    title.textContent = integration.name;
-    const path = document.createElement("p");
-    path.textContent = integration.path;
-    path.title = integration.path;
-    copy.append(title, path);
-    const pill = document.createElement("span");
-    pill.className = `status-pill ${integration.installed ? "good" : "warn"}`;
-    pill.textContent = integration.installed ? "Connected" : "Setup needed";
-    head.append(logo, copy, pill);
+/* ------------------------------------------------------------- preferences */
 
-    const description = document.createElement("p");
-    description.textContent = integration.error || integration.description;
-    const actions = document.createElement("div");
-    actions.className = "button-row";
-    const install = document.createElement("button");
-    install.type = "button";
-    install.className = "primary-button";
-    install.dataset.integrationAction = "apply";
-    install.dataset.integrationId = integration.id;
-    install.textContent = integration.installed ? "Repair connection" : "Install integration";
-    const preview = document.createElement("button");
-    preview.type = "button";
-    preview.className = "secondary-button";
-    preview.dataset.integrationAction = "preview";
-    preview.dataset.integrationId = integration.id;
-    preview.textContent = "Preview changes";
-    actions.append(install, preview);
-    if (integration.installed) {
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "secondary-button danger-text";
-      remove.dataset.integrationAction = "remove";
-      remove.dataset.integrationId = integration.id;
-      remove.textContent = "Disconnect";
-      actions.append(remove);
-    }
-    section.append(head, description, actions);
-    container.append(section);
-  });
+// Notification, menu-bar and clipboard choices are one saved object in the
+// backend, edited from three panes.
+async function loadPrefs() {
+  try {
+    prefs = await invoke("get_notification_preferences");
+    renderPrefs();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
 }
 
-async function loadNotificationPreferences() {
-  notificationPreferences = await invoke("get_notification_preferences");
-  byId("notify-needs-input").checked = notificationPreferences.notifyNeedsInput;
-  byId("notify-task-completed").checked = notificationPreferences.notifyTaskCompleted;
-  byId("notify-turn-finished").checked = notificationPreferences.notifyTurnFinished;
-  byId("include-agent-summary").checked = notificationPreferences.includeAgentSummary;
-  byId("agent-delivery").value = notificationPreferences.delivery || "island";
-  byId("close-behavior").value = notificationPreferences.closeBehavior || "background";
-  byId("notification-debounce").value = notificationPreferences.debounceSecs;
-  byId("clipboard-history-enabled").checked = notificationPreferences.clipboardHistoryEnabled;
+function renderPrefs() {
+  if (!prefs) return;
+  byId("keep-running").checked = prefs.closeBehavior !== "quit";
+  byId("notify-needs-input").checked = prefs.notifyNeedsInput;
+  byId("notify-task-completed").checked = prefs.notifyTaskCompleted;
+  byId("notify-turn-finished").checked = prefs.notifyTurnFinished;
+  byId("include-agent-summary").checked = prefs.includeAgentSummary;
+  byId("agent-delivery").value = prefs.delivery || "island";
+  byId("notification-debounce").value = prefs.debounceSecs;
+  byId("clipboard-history-enabled").checked = prefs.clipboardHistoryEnabled;
 }
 
-async function saveNotificationPreferences(stateId) {
-  if (!notificationPreferences) return;
-  notificationPreferences = {
-    debounceSecs: Math.max(3, Math.min(300, Number(byId("notification-debounce").value) || 20)),
+function readPrefs() {
+  const debounce = Math.round(Number(byId("notification-debounce").value));
+  return {
+    debounceSecs: Math.max(3, Math.min(300, Number.isFinite(debounce) && debounce > 0 ? debounce : 20)),
     notifyNeedsInput: byId("notify-needs-input").checked,
     notifyTaskCompleted: byId("notify-task-completed").checked,
     notifyTurnFinished: byId("notify-turn-finished").checked,
     includeAgentSummary: byId("include-agent-summary").checked,
     delivery: byId("agent-delivery").value,
     clipboardHistoryEnabled: byId("clipboard-history-enabled").checked,
-    closeBehavior: byId("close-behavior").value,
+    closeBehavior: byId("keep-running").checked ? "background" : "quit",
   };
-  setSaveState(stateId, "Saving");
+}
+
+/** Saves shortly after the last change, so a run of quick toggles is one
+ * write, and confirms beside the group that changed. */
+function queuePrefsSave(savedId) {
+  if (!prefs) return;
+  clearTimeout(prefsTimer);
+  prefsTimer = setTimeout(async () => {
+    const next = readPrefs();
+    try {
+      await invoke("set_notification_preferences", { preferences: next });
+      prefs = next;
+      byId("notification-debounce").value = next.debounceSecs;
+      if (savedId) showSaved(savedId);
+    } catch (error) {
+      toast(errorMessage(error), true);
+      renderPrefs();
+    }
+  }, 200);
+}
+
+/* ----------------------------------------------------------------- updates */
+
+async function loadUpdateState() {
   try {
-    await invoke("set_notification_preferences", { preferences: notificationPreferences });
-    showSaveState(stateId);
+    renderUpdate(await invoke("get_update_state"));
   } catch (error) {
-    setSaveState(stateId, "");
     toast(errorMessage(error), true);
   }
 }
 
-// Clipboard history is one of these preferences but lives on the Launcher tab,
-// so the caller says which heading should show the confirmation.
-function queuePreferenceSave(stateId = "notification-save-state") {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => saveNotificationPreferences(stateId), 220);
+function renderUpdate(state) {
+  if (!state) return;
+  updateState = state;
+  const { status, available, progress } = state;
+  const current = state.currentVersion;
+  const next = available?.version;
+
+  byId("sidebar-version").textContent = `Version ${current}`;
+  byId("about-version").textContent = `Version ${current}`;
+  byId("update-dot").hidden = !["available", "ready"].includes(status);
+
+  const row = byId("update-row");
+  row.dataset.status = status;
+  const headline = byId("update-headline");
+  const detail = byId("update-detail");
+  const action = byId("update-action");
+  const checked = state.lastCheckedAt ? `Checked ${timeAgo(state.lastCheckedAt)}` : "Not checked yet";
+
+  let showProgress = false;
+  switch (status) {
+    case "checking":
+      headline.textContent = `Samlu ${current}`;
+      detail.textContent = "Checking for updates…";
+      swapButton(action, '<span class="spinner" aria-hidden="true"></span>Checking…', { disabled: true });
+      break;
+    case "up_to_date":
+      headline.textContent = `Samlu ${current}`;
+      detail.textContent = `Samlu is up to date · ${checked}`;
+      swapButton(action, "Check Now");
+      break;
+    case "available":
+      headline.textContent = `Samlu ${next} is available`;
+      detail.textContent = `You have version ${current}.`;
+      swapButton(action, "Install Update", {
+        primary: !state.installBlocker,
+        disabled: Boolean(state.installBlocker),
+      });
+      break;
+    case "downloading": {
+      headline.textContent = `Downloading Samlu ${next}…`;
+      const total = progress?.total;
+      const received = progress?.received || 0;
+      detail.textContent = total
+        ? `${formatBytes(received)} of ${formatBytes(total)}`
+        : formatBytes(received) || "Starting…";
+      setProgress(total ? received / total : null);
+      showProgress = true;
+      swapButton(action, "Downloading…", { disabled: true });
+      break;
+    }
+    case "installing":
+      headline.textContent = `Installing Samlu ${next}…`;
+      detail.textContent = "Verifying and replacing the app.";
+      showProgress = true;
+      swapButton(action, "Installing…", { disabled: true });
+      break;
+    case "ready":
+      headline.textContent = `Samlu ${next || ""} is ready`.replace("  ", " ");
+      detail.textContent = "Restart Samlu to finish updating.";
+      swapButton(action, "Restart Now", { primary: true });
+      break;
+    case "error":
+      headline.textContent = `Samlu ${current}`;
+      detail.textContent = state.error || "The update could not be completed.";
+      swapButton(action, "Try Again");
+      break;
+    default:
+      headline.textContent = `Samlu ${current}`;
+      detail.textContent = checked;
+      swapButton(action, "Check Now");
+  }
+  byId("update-progress").hidden = !showProgress;
+  if (status !== "downloading") setProgress(status === "installing" ? 1 : 0);
+
+  const notes = available?.notes;
+  byId("update-notes").hidden = !(notes && ["available", "downloading", "installing", "ready"].includes(status));
+  byId("update-notes-title").textContent = next ? `What’s new in ${next}` : "What’s new";
+  byId("update-notes-text").textContent = notes || "";
+
+  byId("update-auto-check").checked = state.autoCheck;
+  const install = byId("update-auto-install");
+  install.checked = state.autoCheck && state.autoInstall;
+  install.disabled = !state.autoCheck;
+
+  const note = byId("update-note");
+  if (state.installBlocker) {
+    note.textContent = state.installBlocker;
+    note.hidden = false;
+  } else if (!state.signedBuild) {
+    note.textContent =
+      "This build isn’t signed with an Apple Developer ID, so after each update macOS asks again for Microphone and Accessibility access.";
+    note.hidden = false;
+  } else {
+    note.hidden = true;
+  }
+
+  const aboutButton = byId("about-check-updates");
+  aboutButton.textContent = status === "ready" ? "Restart to Update" : "Check for Updates…";
+  aboutButton.disabled = ["checking", "downloading", "installing"].includes(status);
 }
+
+function setProgress(fraction) {
+  const fill = byId("update-progress-fill");
+  fill.style.transform = fraction == null ? "" : `scaleX(${Math.max(0.02, Math.min(1, fraction))})`;
+}
+
+async function updateAction() {
+  const status = updateState?.status;
+  try {
+    if (status === "ready") {
+      await invoke("restart_to_update");
+    } else if (status === "available" || (status === "error" && updateState?.available)) {
+      renderUpdate(await invoke("install_update"));
+    } else {
+      renderUpdate(await invoke("check_for_updates"));
+    }
+  } catch (error) {
+    toast(errorMessage(error), true);
+    loadUpdateState();
+  }
+}
+
+/** The install switch is shown off while checks are off, but the stored
+ * choice is kept, so each switch only ever changes its own setting. */
+async function saveUpdatePreferences({ autoCheck, autoInstall }) {
+  try {
+    renderUpdate(await invoke("set_update_preferences", { autoCheck, autoInstall }));
+    showSaved("updates-saved");
+  } catch (error) {
+    toast(errorMessage(error), true);
+    loadUpdateState();
+  }
+}
+
+/* ------------------------------------------------------------------ agents */
+
+async function loadAgents() {
+  try {
+    const [status, integrations] = await Promise.all([
+      invoke("get_app_status"),
+      invoke("get_agent_integrations"),
+    ]);
+    const listener = byId("listener-status");
+    listener.dataset.state = status?.serverRunning ? "good" : "warn";
+    byId("listener-text").textContent = status?.serverRunning
+      ? `Listening on port ${status.port}`
+      : "Listener not running";
+    agentIntegrations = integrations || [];
+    renderIntegrations();
+  } catch (error) {
+    agentIntegrations = [];
+    byId("agent-integrations").replaceChildren(emptyRow(`Agent status unavailable: ${errorMessage(error)}`));
+  }
+}
+
+function renderIntegrations() {
+  const container = byId("agent-integrations");
+  container.replaceChildren();
+  if (!agentIntegrations.length) {
+    container.append(emptyRow("No supported agents found."));
+    return;
+  }
+  agentIntegrations.forEach((integration) => {
+    const row = document.createElement("div");
+    row.className = "row integration";
+
+    const logo = document.createElement("span");
+    logo.className = "integration-logo";
+    logo.setAttribute("aria-hidden", "true");
+    logo.textContent = integration.name.slice(0, 1);
+
+    const text = document.createElement("span");
+    text.className = "row-text";
+    const label = document.createElement("span");
+    label.className = "row-label";
+    label.textContent = integration.name;
+    const detail = document.createElement("span");
+    detail.className = "row-detail";
+    detail.textContent = integration.error || tildePath(integration.path);
+    detail.title = integration.error || integration.path;
+    text.append(label, detail);
+
+    const control = document.createElement("span");
+    control.className = "row-control";
+    const pill = document.createElement("span");
+    if (integration.error) {
+      pill.className = "pill warn";
+      pill.textContent = "Unavailable";
+    } else if (integration.installed) {
+      pill.className = "pill good";
+      pill.textContent = "Connected";
+    } else {
+      pill.className = "pill";
+      pill.textContent = "Not connected";
+    }
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.className = "text-button";
+    preview.dataset.integrationAction = "preview";
+    preview.dataset.integrationId = integration.id;
+    preview.textContent = "Preview";
+    const primary = document.createElement("button");
+    primary.type = "button";
+    primary.className = "button";
+    primary.dataset.integrationAction = integration.installed ? "remove" : "apply";
+    primary.dataset.integrationId = integration.id;
+    primary.textContent = integration.installed ? "Disconnect" : "Connect";
+    primary.disabled = Boolean(integration.error);
+    preview.disabled = Boolean(integration.error);
+    control.append(pill, preview, primary);
+
+    row.append(logo, text, control);
+    container.append(row);
+  });
+}
+
+async function loadActivity() {
+  try {
+    renderActivity(await invoke("get_event_history"));
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+const activityTime = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+  month: "short",
+  day: "numeric",
+});
 
 function renderActivity(items) {
   const list = byId("activity-list");
   list.replaceChildren();
   if (!items?.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "No agent events received yet.";
-    list.append(empty);
+    list.append(emptyRow("No agent activity yet."));
     return;
   }
-  items.slice(0, 18).forEach((item) => {
+  items.slice(0, 20).forEach((item) => {
     const row = document.createElement("div");
-    row.className = "activity-item";
+    row.className = "row activity-item";
     const dot = document.createElement("span");
     dot.className = `status-dot ${item.kind_label === "needs your input" ? "warn" : "good"}`;
-    const copy = document.createElement("div");
-    copy.className = "activity-copy";
-    const title = document.createElement("strong");
+    dot.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    text.className = "row-text";
+    const title = document.createElement("span");
+    title.className = "row-label";
     title.textContent = `${item.agent_label} ${item.kind_label}`;
-    const detail = document.createElement("span");
+    text.append(title);
     const fullDetail = [item.project_label, item.summary].filter(Boolean).join(" · ");
-    detail.textContent =
-      fullDetail.length > 220 ? `${fullDetail.slice(0, 217).trimEnd()}…` : fullDetail;
-    if (fullDetail.length > 220) detail.title = fullDetail;
+    if (fullDetail) {
+      const detail = document.createElement("span");
+      detail.className = "row-detail";
+      detail.textContent = fullDetail;
+      detail.title = fullDetail;
+      text.append(detail);
+    }
     const time = document.createElement("time");
     time.className = "activity-time";
     time.dateTime = item.timestamp;
-    time.textContent = new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-      month: "short",
-      day: "numeric",
-    }).format(new Date(item.timestamp));
-    copy.append(title, detail);
-    row.append(dot, copy, time);
+    time.textContent = activityTime.format(new Date(item.timestamp));
+    row.append(dot, text, time);
     list.append(row);
   });
-}
-
-async function loadOverview() {
-  const results = await Promise.allSettled([
-    invoke("get_app_status"),
-    invoke("get_event_history"),
-    loadNotificationPreferences(),
-    loadAgentStatus(),
-    loadAppearance(),
-  ]);
-  const appStatus = results[0];
-  if (appStatus.status === "fulfilled" && appStatus.value.serverRunning) {
-    setDot("listener-dot", "good");
-    setDot("sidebar-status-dot", "good");
-    byId("listener-detail").textContent = `Listening on ${appStatus.value.port}`;
-    byId("sidebar-status").textContent = "Listener active";
-  } else {
-    setDot("listener-dot", "warn");
-    setDot("sidebar-status-dot", "warn");
-    byId("listener-detail").textContent = "Not running";
-    byId("sidebar-status").textContent = "Listener unavailable";
-  }
-  if (results[1].status === "fulfilled") renderActivity(results[1].value);
 }
 
 function showAgentPreview(title, code) {
@@ -274,67 +556,7 @@ function showAgentPreview(title, code) {
   byId("agent-preview").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-async function runButton(button, busyLabel, operation) {
-  const original = button.textContent;
-  button.disabled = true;
-  button.textContent = busyLabel;
-  try {
-    return await operation();
-  } finally {
-    button.disabled = false;
-    button.textContent = original;
-  }
-}
-
-let voiceHistory = [];
-
-function renderVoiceHistory() {
-  const list = byId("voice-history-list");
-  const showRaw = byId("voice-history-raw").checked;
-  list.replaceChildren();
-  if (!voiceHistory.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = byId("voice-keep-history").checked
-      ? "No dictations yet."
-      : "History is off.";
-    list.append(empty);
-    return;
-  }
-  voiceHistory.forEach((entry) => {
-    const row = document.createElement("div");
-    row.className = "history-row";
-    const body = document.createElement("div");
-    const text = document.createElement("p");
-    text.textContent = showRaw && entry.raw ? entry.raw : entry.text;
-    const meta = document.createElement("small");
-    const when = new Date(entry.timestamp).toLocaleString();
-    const outcome = entry.outcome.replace(/_/g, " ");
-    meta.textContent = `${when} · ${entry.mode} · ${entry.engine} · ${outcome}${entry.targetApp ? ` · ${entry.targetApp}` : ""}`;
-    body.append(text, meta);
-    const copy = document.createElement("button");
-    copy.className = "secondary-button";
-    copy.type = "button";
-    copy.textContent = "Copy";
-    copy.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(text.textContent);
-      showSaveState("voice-history-save-state", "Copied");
-    });
-    row.append(body, copy);
-    list.append(row);
-  });
-}
-
-async function loadVoiceHistory() {
-  try {
-    voiceHistory = await invoke("get_voice_history", {
-      query: byId("voice-history-search").value,
-    });
-    renderVoiceHistory();
-  } catch (error) {
-    toast(errorMessage(error), true);
-  }
-}
+/* ------------------------------------------------------------------- voice */
 
 async function loadVoiceSettings() {
   try {
@@ -348,57 +570,67 @@ async function loadVoiceSettings() {
     renderTextProcessing(settings.transformation, settings.cleanupDictation);
     byId("voice-vocabulary").value = (settings.vocabulary || []).join("\n");
     voiceHotkeyRecorder.set(settings.hotkey || "Alt+V");
+    updateVoiceShortcutGuide(settings.hotkey || "Alt+V");
     byId("voice-dictation-delivery").value = settings.delivery?.dictation || "instant_insert";
     byId("voice-summary-delivery").value = settings.delivery?.summary || "instant_insert";
     byId("voice-prompt-delivery").value = settings.delivery?.prompt || "editable_preview";
     byId("voice-interface-sounds").checked = settings.interfaceSounds !== false;
     byId("voice-keep-history").checked = settings.keepHistory !== false;
-    await loadVoiceHistory();
     renderMicrophonePermission(microphoneStatus);
-    const accessibility = byId("voice-accessibility-status");
-    accessibility.className = `status-pill ${accessibilityTrusted ? "good" : "warn"}`;
-    accessibility.textContent = accessibilityTrusted ? "Ready" : "Permission needed";
-    byId("voice-accessibility-help").textContent = accessibilityTrusted
-      ? "Ready to return text to the field where recording began."
-      : "Not active for this build. If Samlu is already enabled in System Settings, remove that old entry and add the running Samlu again.";
-    byId("open-voice-accessibility").textContent = accessibilityTrusted
-      ? "Open Settings"
-      : "Enable access";
-    updateVoiceShortcutGuide(settings.hotkey || "Alt+V");
+    renderAccessibility(accessibilityTrusted);
+    await loadVoiceHistory();
   } catch (error) {
     toast(errorMessage(error), true);
   }
 }
 
+/** Permissions are granted in System Settings, so returning to this window
+ * re-reads only them — without disturbing anything being typed here. */
+async function refreshPermissions() {
+  try {
+    const [microphoneStatus, accessibilityTrusted] = await Promise.all([
+      invoke("get_voice_microphone_status"),
+      invoke("get_voice_accessibility_status"),
+    ]);
+    renderMicrophonePermission(microphoneStatus);
+    renderAccessibility(accessibilityTrusted);
+  } catch (_) {
+    // The full load reports errors; a background refresh stays quiet.
+  }
+}
+
+function renderAccessibility(trusted) {
+  setPill("voice-accessibility-status", trusted ? "Allowed" : "Not allowed", trusted ? "good" : "warn");
+  byId("voice-accessibility-help").textContent = trusted
+    ? "Samlu can type the result into the field where you started."
+    : "Not active for this copy of Samlu. If Samlu is already listed in System Settings, remove it and add it again.";
+  byId("open-voice-accessibility").textContent = trusted ? "Open Settings…" : "Allow…";
+}
+
 function renderMicrophonePermission(status) {
-  const microphone = byId("voice-microphone-status");
   const help = byId("voice-microphone-help");
   const button = byId("open-voice-microphone");
-  const authorized = status === "authorized";
-  microphone.className = `status-pill ${authorized ? "good" : "warn"}`;
-
-  if (authorized) {
-    microphone.textContent = "Ready";
-    help.textContent = "Ready to record dictation in every app and Space.";
-    button.textContent = "Open Settings";
+  if (status === "authorized") {
+    setPill("voice-microphone-status", "Allowed", "good");
+    help.textContent = "Ready to record in every app and Space.";
+    button.textContent = "Open Settings…";
     return;
   }
   if (status === "not_determined") {
-    microphone.textContent = "Not requested";
-    help.textContent = "Grant access once so Samlu can record dictation.";
-    button.textContent = "Grant permission";
+    setPill("voice-microphone-status", "Not asked yet", "warn");
+    help.textContent = "Allow access once so Samlu can record dictation.";
+    button.textContent = "Allow…";
     return;
   }
   if (status === "restricted") {
-    microphone.textContent = "Restricted";
-    help.textContent = "Microphone access is restricted by this Mac’s privacy policy.";
-    button.textContent = "Open Settings";
+    setPill("voice-microphone-status", "Restricted", "warn");
+    help.textContent = "This Mac’s privacy policy restricts microphone access.";
+    button.textContent = "Open Settings…";
     return;
   }
-
-  microphone.textContent = "Permission needed";
-  help.textContent = "Microphone access is off. Enable Samlu in macOS Privacy & Security.";
-  button.textContent = "Open Settings";
+  setPill("voice-microphone-status", "Not allowed", "warn");
+  help.textContent = "Turn on Samlu in Privacy & Security to record dictation.";
+  button.textContent = "Open Settings…";
 }
 
 async function refreshMicrophonePermission(attempts = 1) {
@@ -413,53 +645,48 @@ async function refreshMicrophonePermission(attempts = 1) {
   return "not_determined";
 }
 
-let voiceSettings = null;
-let voiceModels = { models: [], catalog: [], recommended: "", selected: "" };
-const downloadProgress = {};
-
-function formatBytes(bytes) {
-  if (!bytes) return "";
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`;
-}
-
 function setKeyStatus(id, hasKey) {
-  const pill = byId(id);
-  pill.className = `status-pill ${hasKey ? "good" : "warn"}`;
-  pill.textContent = hasKey ? "Key saved" : "Key required";
+  setPill(id, hasKey ? "Saved" : "Needed", hasKey ? "good" : "warn");
 }
+
+const ENGINE_DETAILS = {
+  whisper_cpp: "Whisper runs on this Mac. No account, and audio never leaves it.",
+  apple: "Apple’s on-device speech. Audio never leaves this Mac.",
+  groq: "Audio is sent to Groq for transcription.",
+  openai: "Audio is sent to OpenAI for transcription.",
+  deepgram: "Audio is sent to Deepgram for transcription.",
+  elevenlabs: "Audio is sent to ElevenLabs for transcription.",
+  custom: "Audio is sent to the OpenAI-compatible server you enter.",
+};
 
 function renderSpeechEngine(settings) {
   const stt = settings.stt;
   const choice = stt.choice;
-  byId("voice-apple-option").disabled = !settings.appleAvailable;
-  byId("voice-apple-option").textContent = settings.appleAvailable
-    ? "Apple (on-device)"
-    : "Apple (on-device) — needs macOS 26";
+  const appleOption = byId("voice-apple-option");
+  appleOption.disabled = !settings.appleAvailable;
+  appleOption.textContent = settings.appleAvailable ? "Apple" : "Apple (macOS 26 or later)";
   byId("voice-stt-choice").value = choice;
   byId("voice-language").value = stt.language || "auto";
+  byId("voice-engine-detail").textContent = ENGINE_DETAILS[choice] || ENGINE_DETAILS.custom;
+
   const cloud = !["whisper_cpp", "apple"].includes(choice);
-  byId("voice-cloud-fields").hidden = !cloud;
-  byId("voice-whisper-fields").hidden = choice !== "whisper_cpp";
-  byId("voice-apple-fields").hidden = choice !== "apple";
+  byId("voice-cloud-model-row").hidden = !cloud;
+  byId("voice-cloud-key-row").hidden = !cloud;
   byId("voice-stt-base-url-row").hidden = choice !== "custom";
+  byId("voice-apple-row").hidden = choice !== "apple";
+  byId("voice-whisper-fields").hidden = choice !== "whisper_cpp";
   byId("voice-stt-base-url").value = stt.baseUrl || "";
   if (cloud) {
     byId("voice-stt-model").value = stt.model || "";
     setKeyStatus("voice-stt-key-status", stt.hasApiKey);
   }
+
   const englishOnly = choice === "whisper_cpp" && /\.en[.-]/i.test(stt.model || "");
   const note = byId("voice-language-note");
   note.hidden = !englishOnly && choice !== "apple";
   note.textContent = englishOnly
-    ? "This model only understands English."
-    : "Apple has no automatic detection; Detect automatically uses your Mac's language.";
+    ? "The selected model only understands English."
+    : "Apple has no automatic detection, so Detect automatically uses your Mac’s language.";
   if (choice === "whisper_cpp") loadVoiceModels();
 }
 
@@ -467,29 +694,43 @@ function renderTextProcessing(transformation, cleanup) {
   byId("voice-cleanup").checked = cleanup;
   byId("voice-transform-provider").value = transformation.provider;
   byId("voice-transform-model").value = transformation.model || "";
-  byId("voice-transform-model-hint").hidden = !["ollama", "lmstudio", "custom"].includes(transformation.provider);
+  byId("voice-transform-model-hint").hidden = !["ollama", "lmstudio", "custom"].includes(
+    transformation.provider,
+  );
   byId("voice-transform-base-url").value = transformation.baseUrl || "";
   byId("voice-transform-base-url-row").hidden = transformation.provider !== "custom";
   byId("voice-transform-key-row").hidden = !transformation.needsApiKey;
   setKeyStatus("voice-transform-key-status", transformation.hasApiKey);
 }
 
-function modelRow(title, detail, actions) {
+function modelRow(title, detail, actions, progress) {
   const row = document.createElement("div");
-  row.className = "model-row";
-  const text = document.createElement("div");
-  const strong = document.createElement("strong");
-  strong.textContent = title;
-  const small = document.createElement("small");
+  row.className = "row model";
+  const text = document.createElement("span");
+  text.className = "row-text";
+  const label = document.createElement("span");
+  label.className = "row-label";
+  label.textContent = title;
+  const small = document.createElement("span");
+  small.className = "row-detail";
   small.textContent = detail;
-  text.append(strong, small);
-  const buttons = document.createElement("div");
-  buttons.className = "model-row-actions";
-  actions.forEach(([label, handler, primary]) => {
+  text.append(label, small);
+  if (progress != null) {
+    const bar = document.createElement("span");
+    bar.className = "progress";
+    const fill = document.createElement("span");
+    fill.className = "progress-fill";
+    fill.style.transform = `scaleX(${Math.max(0.02, progress)})`;
+    bar.append(fill);
+    text.append(bar);
+  }
+  const control = document.createElement("span");
+  control.className = "row-control";
+  actions.forEach(([labelText, handler, primary]) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = primary ? "primary-button" : "secondary-button";
-    button.textContent = label;
+    button.className = primary ? "button primary" : "button";
+    button.textContent = labelText;
     button.addEventListener("click", async (event) => {
       try {
         await handler(event.currentTarget);
@@ -497,9 +738,9 @@ function modelRow(title, detail, actions) {
         toast(errorMessage(error), true);
       }
     });
-    buttons.append(button);
+    control.append(button);
   });
-  row.append(text, buttons);
+  row.append(text, control);
   return row;
 }
 
@@ -507,10 +748,7 @@ function renderVoiceModels() {
   const list = byId("voice-model-list");
   list.replaceChildren();
   if (!voiceModels.models.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "No whisper models yet. Download one below or add a file you already have.";
-    list.append(empty);
+    list.append(emptyRow("No Whisper models yet. Download one below, or add a file you already have."));
   }
   const sourceLabel = { downloaded: "Downloaded", discovered: "Found on this Mac", added: "Added" };
   voiceModels.models.forEach((model) => {
@@ -520,26 +758,42 @@ function renderVoiceModels() {
       sourceLabel[model.source],
       model.englishOnly ? "English only" : "",
       selected ? "In use" : "",
-    ].filter(Boolean).join(" · ");
+    ]
+      .filter(Boolean)
+      .join(" · ");
     const actions = [];
     if (!selected && !model.missing) {
-      actions.push(["Use", async () => {
-        await invoke("set_voice_stt", { choice: "whisper_cpp", baseUrl: "", model: model.path });
-        showSaveState("voice-provider-save-state");
-        await loadVoiceSettings();
-      }, true]);
+      actions.push([
+        "Use",
+        async () => {
+          await invoke("set_voice_stt", { choice: "whisper_cpp", baseUrl: "", model: model.path });
+          showSaved("voice-engine-saved");
+          await loadVoiceSettings();
+        },
+      ]);
     }
     if (model.source === "downloaded") {
-      actions.push(["Delete", async () => {
-        if (!confirm(`Delete ${model.name} from this Mac?`)) return;
-        await invoke("voice_delete_model", { path: model.path });
-        await loadVoiceModels();
-      }]);
+      actions.push([
+        "Delete…",
+        async () => {
+          const confirmed = await confirmAction(
+            `Delete ${model.name}?`,
+            "The model file is removed from this Mac. You can download it again later.",
+            "Delete",
+          );
+          if (!confirmed) return;
+          await invoke("voice_delete_model", { path: model.path });
+          await loadVoiceModels();
+        },
+      ]);
     } else if (model.source === "added") {
-      actions.push(["Remove", async () => {
-        await invoke("voice_remove_model", { path: model.path });
-        await loadVoiceModels();
-      }]);
+      actions.push([
+        "Remove",
+        async () => {
+          await invoke("voice_remove_model", { path: model.path });
+          await loadVoiceModels();
+        },
+      ]);
     }
     list.append(modelRow(model.name, detail, actions));
   });
@@ -551,32 +805,39 @@ function renderVoiceModels() {
     const recommended = entry.id === voiceModels.recommended ? " · Recommended for this Mac" : "";
     let detail = `${formatBytes(entry.bytes)}${recommended}`;
     let actions = [];
+    let fraction = null;
     if (entry.downloaded) {
       detail = `Downloaded${recommended}`;
     } else if (entry.downloading) {
-      const percent = progress ? Math.floor((progress.received / progress.total) * 100) : 0;
-      detail = `Downloading ${percent}% of ${formatBytes(entry.bytes)}`;
+      fraction = progress?.total ? progress.received / progress.total : 0;
+      detail = `Downloading ${Math.floor(fraction * 100)}% of ${formatBytes(entry.bytes)}`;
       actions = [["Cancel", () => invoke("voice_cancel_model_download", { id: entry.id })]];
     } else {
-      actions = [["Download", async () => {
-        const download = invoke("voice_download_model", { id: entry.id });
-        await loadVoiceModels();
-        try {
-          const path = await download;
-          // First usable model: select it so dictation works right away.
-          if (!voiceModels.selected) {
-            await invoke("set_voice_stt", { choice: "whisper_cpp", baseUrl: "", model: path });
-          }
-          showSaveState("voice-provider-save-state", "Model ready");
-        } catch (error) {
-          if (errorMessage(error) !== "Download cancelled.") throw error;
-        } finally {
-          delete downloadProgress[entry.id];
-          await loadVoiceSettings();
-        }
-      }, entry.id === voiceModels.recommended]];
+      actions = [
+        [
+          "Download",
+          async () => {
+            const download = invoke("voice_download_model", { id: entry.id });
+            await loadVoiceModels();
+            try {
+              const path = await download;
+              // The first usable model is selected so dictation works at once.
+              if (!voiceModels.selected) {
+                await invoke("set_voice_stt", { choice: "whisper_cpp", baseUrl: "", model: path });
+              }
+              showSaved("voice-engine-saved", "Model ready");
+            } catch (error) {
+              if (errorMessage(error) !== "Download cancelled.") throw error;
+            } finally {
+              delete downloadProgress[entry.id];
+              await loadVoiceSettings();
+            }
+          },
+          entry.id === voiceModels.recommended,
+        ],
+      ];
     }
-    catalog.append(modelRow(entry.label, detail, actions));
+    catalog.append(modelRow(entry.label, detail, actions, fraction));
   });
 }
 
@@ -593,36 +854,115 @@ async function saveSpeechChoice() {
   const choice = byId("voice-stt-choice").value;
   const baseUrl = byId("voice-stt-base-url").value.trim();
   if (choice === "custom" && !baseUrl) {
+    // A custom engine needs its address before it can be saved.
     byId("voice-stt-base-url-row").hidden = false;
+    byId("voice-cloud-model-row").hidden = false;
+    byId("voice-cloud-key-row").hidden = false;
+    byId("voice-whisper-fields").hidden = true;
+    byId("voice-apple-row").hidden = true;
     byId("voice-stt-base-url").focus();
     return;
   }
   let model = choice === voiceSettings?.stt.choice ? byId("voice-stt-model").value : "";
   if (choice === "whisper_cpp") {
-    // Keep the current whisper model, or fall back to the first usable one.
+    // Keep the current Whisper model, or fall back to the first usable one.
     await loadVoiceModels();
-    model =
-      voiceModels.selected || voiceModels.models.find((item) => !item.missing)?.path || "";
+    model = voiceModels.selected || voiceModels.models.find((item) => !item.missing)?.path || "";
   }
   await invoke("set_voice_stt", { choice, baseUrl, model });
-  showSaveState("voice-provider-save-state");
+  showSaved("voice-engine-saved");
   await loadVoiceSettings();
 }
 
-function shortcutGlyphs(shortcut) {
-  const glyph = {
-    cmd: "⌘",
-    command: "⌘",
-    shift: "⇧",
-    alt: "⌥",
-    option: "⌥",
-    ctrl: "⌃",
-    control: "⌃",
-  };
-  return shortcut
+async function loadVoiceHistory() {
+  try {
+    voiceHistory = await invoke("get_voice_history", { query: byId("voice-history-search").value });
+    renderVoiceHistory();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+function renderVoiceHistory() {
+  const list = byId("voice-history-list");
+  const showRaw = byId("voice-history-raw").checked;
+  list.replaceChildren();
+  if (!voiceHistory.length) {
+    list.append(
+      emptyRow(
+        byId("voice-keep-history").checked
+          ? byId("voice-history-search").value
+            ? "No dictations match."
+            : "No dictations yet."
+          : "History is off.",
+      ),
+    );
+    return;
+  }
+  voiceHistory.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const text = document.createElement("span");
+    text.className = "row-text";
+    const body = document.createElement("span");
+    body.className = "history-text";
+    body.textContent = showRaw && entry.raw ? entry.raw : entry.text;
+    const meta = document.createElement("span");
+    meta.className = "row-detail";
+    const when = new Date(entry.timestamp).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    const outcome = String(entry.outcome || "").replace(/_/g, " ");
+    meta.textContent = [when, entry.mode, entry.engine, outcome, entry.targetApp]
+      .filter(Boolean)
+      .join(" · ");
+    text.append(body, meta);
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "text-button";
+    copy.textContent = "Copy";
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(body.textContent);
+        showSaved("voice-history-saved", "Copied");
+      } catch (error) {
+        toast(errorMessage(error), true);
+      }
+    });
+    row.append(text, copy);
+    list.append(row);
+  });
+}
+
+/* --------------------------------------------------------------- shortcuts */
+
+const GLYPHS = {
+  cmd: "⌘",
+  command: "⌘",
+  shift: "⇧",
+  alt: "⌥",
+  option: "⌥",
+  ctrl: "⌃",
+  control: "⌃",
+};
+
+function keyGlyph(part) {
+  const trimmed = part.trim();
+  const glyph = GLYPHS[trimmed.toLowerCase()] || trimmed.toUpperCase();
+  // Named keys read as words on a keycap: "Space", not "SPACE".
+  return glyph.length > 1 ? glyph[0] + glyph.slice(1).toLowerCase() : glyph;
+}
+
+function keycaps(shortcut) {
+  return String(shortcut || "")
     .split("+")
-    .map((part) => glyph[part.trim().toLowerCase()] || part.trim().toUpperCase())
-    .join("");
+    .filter((part) => part.trim())
+    .map((part) => {
+      const key = document.createElement("kbd");
+      key.textContent = keyGlyph(part);
+      return key;
+    });
 }
 
 function addShortcutModifier(shortcut, modifier) {
@@ -631,60 +971,17 @@ function addShortcutModifier(shortcut, modifier) {
   return [...parts, modifier, key].join("+");
 }
 
-/** Draws a shortcut as one keycap per key, e.g. ⌥ ⇧ V. */
 function renderKeys(id, shortcut) {
   const holder = byId(id);
   if (!holder) return;
-  holder.replaceChildren();
-  if (!shortcut) {
-    holder.textContent = "Not set";
-    holder.classList.add("unset");
-    return;
-  }
-  holder.classList.remove("unset");
-  holder.setAttribute("aria-label", shortcutGlyphs(shortcut));
-  shortcut
-    .split("+")
-    .map((part) => shortcutGlyphs(part))
-    .filter(Boolean)
-    // Named keys read as words on a keycap: "Space", not "SPACE".
-    .map((glyph) => (glyph.length > 1 ? glyph[0] + glyph.slice(1).toLowerCase() : glyph))
-    .forEach((glyph) => {
-      const key = document.createElement("kbd");
-      key.className = "samlu-kbd";
-      key.textContent = glyph;
-      holder.appendChild(key);
-    });
+  holder.replaceChildren(...keycaps(shortcut));
+  holder.setAttribute("aria-label", shortcut ? shortcut.split("+").map(keyGlyph).join("") : "Not set");
 }
 
 function updateVoiceShortcutGuide(hotkey) {
-  const summary = addShortcutModifier(hotkey, "Shift");
-  const prompt = addShortcutModifier(hotkey, "Cmd");
   renderKeys("voice-normal-key", hotkey);
-  renderKeys("voice-summary-key", summary);
-  renderKeys("voice-prompt-key", prompt);
-  renderKeys("overview-normal-key", hotkey);
-  renderKeys("overview-summary-key", summary);
-  renderKeys("overview-prompt-key", prompt);
-  byId("overview-hold-key").textContent = shortcutGlyphs(hotkey);
-}
-
-/** The Overview's shortcut card reads both hotkeys at startup, without
- * waiting for the Voice or Launcher tab to be opened. */
-async function loadShortcutSummary() {
-  const greeting = new Date().getHours();
-  byId("overview-greeting").textContent =
-    greeting < 12 ? "Good morning" : greeting < 18 ? "Good afternoon" : "Good evening";
-  try {
-    const [voice, launcher] = await Promise.all([
-      invoke("get_voice_settings"),
-      invoke("get_launcher_hotkey"),
-    ]);
-    updateVoiceShortcutGuide(voice?.hotkey || "Alt+V");
-    renderKeys("overview-launcher-key", launcher || "");
-  } catch (_) {
-    // The card keeps its defaults; each tab reports its own load errors.
-  }
+  renderKeys("voice-summary-key", addShortcutModifier(hotkey, "Shift"));
+  renderKeys("voice-prompt-key", addShortcutModifier(hotkey, "Cmd"));
 }
 
 // Ctrl, Alt, Shift, Cmd, then the key: the exact spelling and order the global
@@ -708,15 +1005,16 @@ function shortcutFromEvent(event) {
   return [...modifiers, shortcutKeyName(event.code)].join("+");
 }
 
-// Shortcut fields record a chord instead of accepting typed text, so the stored
-// value can never drift from the format the backend registers.
+/** Shortcut fields record a chord instead of accepting typed text, so the
+ * stored value can never drift from the format the backend registers. */
 function createShortcutRecorder(id, save, restore) {
   const button = byId(id);
   let value = "";
   let recording = false;
 
-  const paint = (text, armed) => {
-    button.textContent = text;
+  const paint = (content, armed) => {
+    if (typeof content === "string") button.textContent = content;
+    else button.replaceChildren(...content);
     button.classList.toggle("recording", armed);
     button.setAttribute("aria-pressed", armed ? "true" : "false");
   };
@@ -724,7 +1022,7 @@ function createShortcutRecorder(id, save, restore) {
   const rest = () => {
     const wasRecording = recording;
     recording = false;
-    paint(value ? shortcutGlyphs(value) : "Not set", false);
+    paint(value ? keycaps(value) : "Not set", false);
     // Hand the chords back to the system once the recorder is done with them.
     if (wasRecording) invoke("resume_global_shortcuts").catch(() => {});
   };
@@ -732,9 +1030,9 @@ function createShortcutRecorder(id, save, restore) {
   button.addEventListener("click", () => {
     if (recording) return;
     recording = true;
-    paint("Press shortcut", true);
-    // Samlu's own bindings have to step aside, or pressing the shortcut that
-    // is already assigned would fire it instead of being recorded.
+    paint("Type shortcut…", true);
+    // Samlu's own bindings step aside, or pressing the shortcut that is
+    // already assigned would fire it instead of being recorded.
     invoke("suspend_global_shortcuts").catch(() => {});
   });
   button.addEventListener("blur", () => {
@@ -751,14 +1049,14 @@ function createShortcutRecorder(id, save, restore) {
     if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
     const shortcut = shortcutFromEvent(event);
     if (!shortcut) {
-      paint("Hold a modifier", true);
+      paint("Add a modifier", true);
       return;
     }
     const previous = value;
     value = shortcut;
-    // Show the chord straight away, but stay armed until the save lands so the
+    // Show the chord at once, but stay armed until the save lands so the
     // rebind happens before the shortcuts are handed back.
-    paint(shortcutGlyphs(shortcut), false);
+    paint(keycaps(shortcut), false);
     try {
       await save(shortcut);
       rest();
@@ -778,6 +1076,8 @@ function createShortcutRecorder(id, save, restore) {
   };
 }
 
+/* ---------------------------------------------------------------- launcher */
+
 async function loadLauncherSettings() {
   try {
     const [hotkey, preferences, storedSnippets, storedProjectSettings] = await Promise.all([
@@ -787,9 +1087,8 @@ async function loadLauncherSettings() {
       invoke("get_project_settings"),
     ]);
     launcherHotkeyRecorder.set(hotkey);
-    renderKeys("overview-launcher-key", hotkey || "");
-    notificationPreferences = preferences;
-    byId("clipboard-history-enabled").checked = preferences.clipboardHistoryEnabled;
+    prefs = preferences;
+    renderPrefs();
     snippets = storedSnippets;
     projectSettings = storedProjectSettings;
     renderSnippets();
@@ -800,39 +1099,39 @@ async function loadLauncherSettings() {
 }
 
 function renderProjectSettings() {
-  byId("project-count").textContent = `${projectSettings.projectCount} indexed`;
-  renderPathList("project-root-list", projectSettings.roots, "No project folders configured.", "root");
-  renderPathList(
-    "project-exclusion-list",
-    projectSettings.excludedPaths,
-    "No excluded folders.",
-    "exclusion",
-  );
+  const count = projectSettings.projectCount;
+  byId("project-count").textContent = `${count} ${count === 1 ? "project" : "projects"}`;
+  renderPathList("project-root-list", projectSettings.roots, "No folders yet.", "root");
+  renderPathList("project-exclusion-list", projectSettings.excludedPaths, "None.", "exclusion");
 }
 
 function renderPathList(id, paths, emptyLabel, kind) {
   const list = byId(id);
   list.replaceChildren();
   if (!paths.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = emptyLabel;
+    const empty = emptyRow(emptyLabel);
+    empty.classList.add("path");
     list.append(empty);
     return;
   }
   paths.forEach((path) => {
     const row = document.createElement("div");
-    row.className = "path-row";
-    const value = document.createElement("span");
-    value.title = path;
-    value.textContent = path;
+    row.className = "row path";
+    const text = document.createElement("span");
+    text.className = "row-text";
+    const label = document.createElement("span");
+    label.className = "row-label";
+    // Read right to left so a long path keeps its last folders in view.
+    label.textContent = `\u200e${tildePath(path)}\u200e`;
+    label.title = path;
+    text.append(label);
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.className = "path-remove";
+    remove.className = "text-button danger";
     remove.textContent = "Remove";
     remove.setAttribute("aria-label", `Remove ${path}`);
     remove.addEventListener("click", () => removeProjectPath(kind, path));
-    row.append(value, remove);
+    row.append(text, remove);
     list.append(row);
   });
 }
@@ -848,18 +1147,13 @@ async function saveProjectSettings(next) {
 
 async function removeProjectPath(kind, path) {
   try {
-    const next = {
-      roots:
-        kind === "root"
-          ? projectSettings.roots.filter((value) => value !== path)
-          : [...projectSettings.roots],
+    await saveProjectSettings({
+      roots: kind === "root" ? projectSettings.roots.filter((value) => value !== path) : [...projectSettings.roots],
       excludedPaths:
         kind === "exclusion"
           ? projectSettings.excludedPaths.filter((value) => value !== path)
           : [...projectSettings.excludedPaths],
-    };
-    await saveProjectSettings(next);
-    toast(kind === "root" ? "Project folder removed." : "Folder included again.");
+    });
   } catch (error) {
     toast(errorMessage(error), true);
   }
@@ -867,24 +1161,20 @@ async function removeProjectPath(kind, path) {
 
 async function addProjectPath(kind, button) {
   try {
-    const path = await runButton(button, "Choosing", () =>
+    const path = await runButton(button, "Choosing…", () =>
       invoke("choose_project_folder", {
-        prompt: kind === "root" ? "Choose a project folder to index" : "Choose a folder to exclude",
+        prompt: kind === "root" ? "Choose a folder of projects to index" : "Choose a folder to exclude",
       }),
     );
     if (!path) return;
     const key = kind === "root" ? "roots" : "excludedPaths";
     if (projectSettings[key].includes(path)) {
-      toast(kind === "root" ? "That project folder is already indexed." : "That folder is already excluded.");
+      toast(kind === "root" ? "That folder is already indexed." : "That folder is already excluded.");
       return;
     }
-    const next = {
-      roots: [...projectSettings.roots],
-      excludedPaths: [...projectSettings.excludedPaths],
-    };
+    const next = { roots: [...projectSettings.roots], excludedPaths: [...projectSettings.excludedPaths] };
     next[key].push(path);
     await saveProjectSettings(next);
-    toast(kind === "root" ? "Project folder added and indexed." : "Folder excluded from the index.");
   } catch (error) {
     toast(errorMessage(error), true);
   }
@@ -894,16 +1184,14 @@ function renderSnippets(activeId = byId("snippet-id").value) {
   const list = byId("snippet-list");
   list.replaceChildren();
   if (!snippets.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "No snippets yet.";
-    list.append(empty);
+    list.append(emptyRow("No snippets yet."));
     return;
   }
   snippets.forEach((snippet) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `snippet-item ${snippet.id === activeId ? "active" : ""}`.trim();
+    button.className = "snippet-item";
+    if (snippet.id === activeId) button.setAttribute("aria-current", "true");
     const title = document.createElement("strong");
     title.textContent = snippet.title;
     const keyword = document.createElement("span");
@@ -916,6 +1204,7 @@ function renderSnippets(activeId = byId("snippet-id").value) {
 
 function editSnippet(snippet = { id: "", title: "", keyword: "", content: "" }) {
   byId("snippet-form").hidden = false;
+  byId("snippet-empty").hidden = true;
   byId("snippet-id").value = snippet.id;
   byId("snippet-title").value = snippet.title;
   byId("snippet-keyword").value = snippet.keyword;
@@ -925,22 +1214,73 @@ function editSnippet(snippet = { id: "", title: "", keyword: "", content: "" }) 
   byId("snippet-title").focus();
 }
 
+/* ------------------------------------------------------------------ events */
+
 function bindEvents() {
-  document.querySelectorAll(".nav-item").forEach((button) => {
-    button.addEventListener("click", () => selectTab(button.dataset.tab));
-  });
-  byId("refresh-overview").addEventListener("click", loadOverview);
-  byId("clear-activity").addEventListener("click", async () => {
-    if (!window.confirm("Clear Samlu's local agent activity?")) return;
-    try {
-      await invoke("clear_event_history");
-      renderActivity([]);
-      toast("Agent activity cleared.");
-    } catch (error) {
-      toast(errorMessage(error), true);
-    }
+  const navItems = [...document.querySelectorAll(".nav-item")];
+  navItems.forEach((item, index) => {
+    item.addEventListener("click", () => selectPane(item.dataset.pane));
+    // Arrow keys move through the sidebar like a native source list.
+    item.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      const next = navItems[(index + (event.key === "ArrowDown" ? 1 : navItems.length - 1)) % navItems.length];
+      next.focus();
+      selectPane(next.dataset.pane);
+    });
   });
 
+  const scroller = byId("scroller");
+  scroller.addEventListener(
+    "scroll",
+    () => {
+      byId("pane-title").parentElement.dataset.scrolled = String(scroller.scrollTop > 2);
+    },
+    { passive: true },
+  );
+
+  // General
+  byId("appearance").addEventListener("change", async (event) => {
+    const appearance = event.currentTarget.value;
+    applyAppearance(appearance);
+    try {
+      await invoke("set_appearance", { appearance });
+    } catch (error) {
+      toast(errorMessage(error), true);
+      await loadAppearance();
+    }
+  });
+  byId("keep-running").addEventListener("change", () => queuePrefsSave());
+  byId("update-action").addEventListener("click", updateAction);
+  byId("about-check-updates").addEventListener("click", () => {
+    if (updateState?.status === "ready") {
+      invoke("restart_to_update").catch((error) => toast(errorMessage(error), true));
+      return;
+    }
+    selectPane("general");
+    updateAction();
+  });
+  byId("update-auto-check").addEventListener("change", (event) =>
+    saveUpdatePreferences({
+      autoCheck: event.currentTarget.checked,
+      autoInstall: Boolean(updateState?.autoInstall),
+    }),
+  );
+  byId("update-auto-install").addEventListener("change", (event) =>
+    saveUpdatePreferences({ autoCheck: true, autoInstall: event.currentTarget.checked }),
+  );
+  byId("open-setup-guide").addEventListener("click", () =>
+    invoke("onboarding_show").catch((error) => toast(errorMessage(error), true)),
+  );
+  document.querySelectorAll("[data-link]").forEach((link) => {
+    link.addEventListener("click", () =>
+      invoke("open_samlu_link", { link: link.dataset.link }).catch((error) =>
+        toast(errorMessage(error), true),
+      ),
+    );
+  });
+
+  // Agents
   [
     "notify-needs-input",
     "notify-task-completed",
@@ -948,30 +1288,28 @@ function bindEvents() {
     "include-agent-summary",
     "agent-delivery",
     "notification-debounce",
-    "close-behavior",
-  ].forEach((id) => byId(id).addEventListener("change", () => queuePreferenceSave()));
-  byId("clipboard-history-enabled").addEventListener("change", () =>
-    queuePreferenceSave("launcher-save-state"),
-  );
+  ].forEach((id) => byId(id).addEventListener("change", () => queuePrefsSave("notifications-saved")));
   byId("test-agent-notification").addEventListener("click", async (event) => {
     try {
-      await runButton(event.currentTarget, "Sending", () => invoke("test_agent_notification"));
+      await runButton(event.currentTarget, "Sending…", () => invoke("test_agent_notification"));
     } catch (error) {
       toast(errorMessage(error), true);
     }
   });
-  byId("appearance").addEventListener("change", async (event) => {
-    const appearance = event.currentTarget.value;
-    applyAppearance(appearance);
+  byId("clear-activity").addEventListener("click", async () => {
+    const confirmed = await confirmAction(
+      "Clear agent activity?",
+      "Samlu’s record of recent agent events is deleted from this Mac.",
+      "Clear",
+    );
+    if (!confirmed) return;
     try {
-      await invoke("set_appearance", { appearance });
-      showSaveState("presence-save-state");
+      await invoke("clear_event_history");
+      renderActivity([]);
     } catch (error) {
       toast(errorMessage(error), true);
-      await loadAppearance();
     }
   });
-
   byId("close-agent-preview").addEventListener("click", () => {
     byId("agent-preview").hidden = true;
   });
@@ -980,29 +1318,32 @@ function bindEvents() {
     if (!button) return;
     const id = button.dataset.integrationId;
     const action = button.dataset.integrationAction;
-    const integration = agentIntegrations.find((item) => item.id === id);
+    const name = agentIntegrations.find((item) => item.id === id)?.name || "This agent";
     try {
       if (action === "preview") {
-        showAgentPreview(
-          `${integration?.name || "Agent"} configuration preview`,
-          await invoke("preview_agent_integration", { id }),
-        );
+        showAgentPreview(`${name} configuration`, await invoke("preview_agent_integration", { id }));
         return;
       }
       if (action === "remove") {
-        if (!window.confirm(`Disconnect ${integration?.name || "this integration"}?`)) return;
-        await runButton(button, "Disconnecting", () => invoke("remove_agent_integration", { id }));
-        toast(`${integration?.name || "Integration"} disconnected.`);
+        const confirmed = await confirmAction(
+          `Disconnect ${name}?`,
+          "Samlu removes only its own hooks. The rest of the configuration stays as it is.",
+          "Disconnect",
+        );
+        if (!confirmed) return;
+        await runButton(button, "Disconnecting…", () => invoke("remove_agent_integration", { id }));
+        toast(`${name} disconnected.`);
       } else {
-        await runButton(button, "Installing", () => invoke("apply_agent_integration", { id }));
-        toast(`${integration?.name || "Integration"} connected.`);
+        await runButton(button, "Connecting…", () => invoke("apply_agent_integration", { id }));
+        toast(`${name} connected.`);
       }
-      await loadAgentStatus();
+      await loadAgents();
     } catch (error) {
       toast(errorMessage(error), true);
     }
   });
 
+  // Voice
   listen("voice://model-download", (event) => {
     downloadProgress[event.payload.id] = event.payload;
     if (!byId("voice-whisper-fields").hidden) renderVoiceModels();
@@ -1018,27 +1359,31 @@ function bindEvents() {
   byId("voice-language").addEventListener("change", async (event) => {
     try {
       await invoke("set_voice_language", { language: event.currentTarget.value });
-      showSaveState("voice-provider-save-state");
+      showSaved("voice-engine-saved");
     } catch (error) {
       toast(errorMessage(error), true);
     }
   });
   byId("save-voice-stt-key").addEventListener("click", async (event) => {
     const input = byId("voice-stt-api-key");
-    if (!input.value.trim()) return toast("Paste an API key first.", true);
+    if (!input.value.trim()) {
+      toast("Paste an API key first.", true);
+      input.focus();
+      return;
+    }
     if (byId("voice-stt-choice").value !== voiceSettings?.stt.choice) {
-      await saveSpeechChoice();
+      await saveSpeechChoice().catch((error) => toast(errorMessage(error), true));
       if (byId("voice-stt-choice").value !== voiceSettings?.stt.choice) {
         toast("Enter the provider URL before saving a key.", true);
         return;
       }
     }
     try {
-      await runButton(event.currentTarget, "Saving", () =>
+      await runButton(event.currentTarget, "Saving…", () =>
         invoke("set_voice_api_key", { role: "transcription", key: input.value.trim() }),
       );
       input.value = "";
-      showSaveState("voice-provider-save-state", "Saved to Keychain");
+      showSaved("voice-engine-saved", "Saved to Keychain");
       await loadVoiceSettings();
     } catch (error) {
       toast(errorMessage(error), true);
@@ -1066,7 +1411,7 @@ function bindEvents() {
   byId("voice-cleanup").addEventListener("change", async (event) => {
     try {
       await invoke("set_voice_cleanup", { enabled: event.currentTarget.checked });
-      showSaveState("voice-text-save-state");
+      showSaved("voice-text-saved");
     } catch (error) {
       toast(errorMessage(error), true);
     }
@@ -1076,18 +1421,16 @@ function bindEvents() {
     try {
       const status = await invoke("get_voice_microphone_status");
       if (status === "not_determined") {
-        await runButton(button, "Requesting", async () => {
+        await runButton(button, "Asking…", async () => {
           await invoke("request_voice_microphone");
           await refreshMicrophonePermission(20);
         });
         const updated = await refreshMicrophonePermission();
-        if (updated === "authorized") {
-          toast("Microphone access granted.");
-        } else if (updated === "denied") {
-          toast("Microphone access is off. Opening macOS Settings.", true);
+        if (updated === "denied") {
+          toast("Microphone access is off. Opening System Settings.", true);
           await invoke("open_voice_microphone_settings");
         } else if (updated === "not_determined") {
-          toast("Waiting for the macOS microphone permission prompt.");
+          toast("Waiting for the macOS microphone prompt.");
         }
         return;
       }
@@ -1099,11 +1442,9 @@ function bindEvents() {
   byId("open-voice-accessibility").addEventListener("click", async () => {
     try {
       const trusted = await invoke("request_voice_accessibility");
-      if (!trusted) {
-        await new Promise((resolve) => setTimeout(resolve, 700));
-      }
+      if (!trusted) await new Promise((resolve) => setTimeout(resolve, 700));
       await invoke("open_voice_accessibility_settings");
-      await loadVoiceSettings();
+      await refreshPermissions();
     } catch (error) {
       toast(errorMessage(error), true);
     }
@@ -1118,7 +1459,7 @@ function bindEvents() {
       return;
     }
     await invoke("set_voice_transformation", { provider, baseUrl });
-    showSaveState("voice-text-save-state");
+    showSaved("voice-text-saved");
     await loadVoiceSettings();
   };
   ["voice-transform-provider", "voice-transform-base-url"].forEach((id) => {
@@ -1129,20 +1470,24 @@ function bindEvents() {
   byId("voice-transform-model").addEventListener("change", async (event) => {
     try {
       await invoke("set_voice_transform_model", { model: event.currentTarget.value });
-      showSaveState("voice-text-save-state");
+      showSaved("voice-text-saved");
     } catch (error) {
       toast(errorMessage(error), true);
     }
   });
   byId("save-voice-transform-key").addEventListener("click", async (event) => {
     const input = byId("voice-transform-api-key");
-    if (!input.value.trim()) return toast("Paste an API key first.", true);
+    if (!input.value.trim()) {
+      toast("Paste an API key first.", true);
+      input.focus();
+      return;
+    }
     try {
-      await runButton(event.currentTarget, "Saving", () =>
+      await runButton(event.currentTarget, "Saving…", () =>
         invoke("set_voice_api_key", { role: "transformation", key: input.value.trim() }),
       );
       input.value = "";
-      showSaveState("voice-text-save-state", "Saved to Keychain");
+      showSaved("voice-text-saved", "Saved to Keychain");
       await loadVoiceSettings();
     } catch (error) {
       toast(errorMessage(error), true);
@@ -1152,7 +1497,7 @@ function bindEvents() {
     try {
       const terms = await invoke("set_voice_vocabulary", { text: event.currentTarget.value });
       event.currentTarget.value = terms.join("\n");
-      showSaveState("voice-vocabulary-save-state", `${terms.length} terms saved`);
+      showSaved("voice-vocabulary-saved", `${terms.length} ${terms.length === 1 ? "term" : "terms"} saved`);
     } catch (error) {
       toast(errorMessage(error), true);
     }
@@ -1162,7 +1507,7 @@ function bindEvents() {
     async (hotkey) => {
       await invoke("set_voice_hotkey", { hotkey });
       updateVoiceShortcutGuide(hotkey);
-      showSaveState("voice-interaction-save-state");
+      showSaved("voice-modes-saved");
     },
     loadVoiceSettings,
   );
@@ -1174,7 +1519,7 @@ function bindEvents() {
     byId(id).addEventListener("change", async (event) => {
       try {
         await invoke("set_voice_delivery", { mode, delivery: event.currentTarget.value });
-        showSaveState("voice-interaction-save-state");
+        showSaved("voice-modes-saved");
       } catch (error) {
         toast(errorMessage(error), true);
         await loadVoiceSettings();
@@ -1184,6 +1529,7 @@ function bindEvents() {
   byId("voice-interface-sounds").addEventListener("change", async (event) => {
     try {
       await invoke("set_voice_interface_sounds", { enabled: event.currentTarget.checked });
+      showSaved("voice-modes-saved");
     } catch (error) {
       toast(errorMessage(error), true);
       await loadVoiceSettings();
@@ -1192,63 +1538,79 @@ function bindEvents() {
   byId("voice-history-search").addEventListener("input", loadVoiceHistory);
   byId("voice-history-raw").addEventListener("change", renderVoiceHistory);
   byId("voice-keep-history").addEventListener("change", async (event) => {
+    const enabled = event.currentTarget.checked;
+    const toggle = event.currentTarget;
+    if (!enabled && voiceHistory.length) {
+      const confirmed = await confirmAction(
+        "Turn off transcript history?",
+        "Saved transcripts are deleted from this Mac.",
+        "Turn Off",
+      );
+      if (!confirmed) {
+        toggle.checked = true;
+        return;
+      }
+    }
     try {
-      await invoke("set_voice_keep_history", { enabled: event.currentTarget.checked });
-      showSaveState("voice-history-save-state");
+      await invoke("set_voice_keep_history", { enabled });
+      showSaved("voice-history-saved");
       await loadVoiceHistory();
     } catch (error) {
       toast(errorMessage(error), true);
     }
   });
   byId("clear-voice-history").addEventListener("click", async () => {
+    const confirmed = await confirmAction(
+      "Delete all transcripts?",
+      "Your saved dictation history is removed from this Mac.",
+      "Delete",
+    );
+    if (!confirmed) return;
     try {
       await invoke("clear_voice_history");
-      showSaveState("voice-history-save-state", "Cleared");
+      showSaved("voice-history-saved", "Cleared");
       await loadVoiceHistory();
     } catch (error) {
       toast(errorMessage(error), true);
     }
   });
 
+  // Launcher
   launcherHotkeyRecorder = createShortcutRecorder(
     "launcher-hotkey",
     async (hotkey) => {
       await invoke("set_launcher_hotkey", { hotkey });
-      renderKeys("overview-launcher-key", hotkey);
-      showSaveState("launcher-save-state");
+      showSaved("launcher-saved");
     },
     async () => launcherHotkeyRecorder.set(await invoke("get_launcher_hotkey")),
   );
-  byId("open-launcher").addEventListener("click", async () => {
+  byId("open-launcher").addEventListener("click", () =>
+    invoke("launcher_toggle").catch((error) => toast(errorMessage(error), true)),
+  );
+  byId("clipboard-history-enabled").addEventListener("change", () => queuePrefsSave());
+  byId("clear-clipboard").addEventListener("click", async () => {
+    const confirmed = await confirmAction(
+      "Clear clipboard history?",
+      "Every saved clip is deleted from this Mac.",
+      "Clear",
+    );
+    if (!confirmed) return;
     try {
-      await invoke("launcher_toggle");
+      await invoke("clear_clipboard_history");
+      toast("Clipboard history cleared.");
     } catch (error) {
       toast(errorMessage(error), true);
     }
   });
-  byId("add-project-root").addEventListener("click", (event) =>
-    addProjectPath("root", event.currentTarget),
-  );
+  byId("add-project-root").addEventListener("click", (event) => addProjectPath("root", event.currentTarget));
   byId("add-project-exclusion").addEventListener("click", (event) =>
     addProjectPath("exclusion", event.currentTarget),
   );
   byId("reindex-projects").addEventListener("click", async (event) => {
     try {
-      const projectCount = await runButton(event.currentTarget, "Indexing", () =>
-        invoke("reindex_projects"),
-      );
+      const projectCount = await runButton(event.currentTarget, "Indexing…", () => invoke("reindex_projects"));
       projectSettings.projectCount = projectCount;
       renderProjectSettings();
-      toast(`Indexed ${projectCount} projects.`);
-    } catch (error) {
-      toast(errorMessage(error), true);
-    }
-  });
-  byId("clear-clipboard").addEventListener("click", async () => {
-    if (!window.confirm("Clear Samlu's local clipboard history?")) return;
-    try {
-      await invoke("clear_clipboard_history");
-      toast("Clipboard history cleared.");
     } catch (error) {
       toast(errorMessage(error), true);
     }
@@ -1276,33 +1638,44 @@ function bindEvents() {
   });
   byId("delete-snippet").addEventListener("click", async () => {
     const id = byId("snippet-id").value;
-    if (!id || !window.confirm("Delete this snippet?")) return;
+    if (!id) return;
+    const confirmed = await confirmAction("Delete this snippet?", "It is removed from the launcher.", "Delete");
+    if (!confirmed) return;
     try {
       await invoke("delete_snippet", { id });
       snippets = snippets.filter((item) => item.id !== id);
       byId("snippet-form").hidden = true;
+      byId("snippet-empty").hidden = false;
+      byId("snippet-id").value = "";
       renderSnippets("");
-      toast("Snippet deleted.");
     } catch (error) {
       toast(errorMessage(error), true);
     }
   });
 }
 
+/* -------------------------------------------------------------------- boot */
+
 async function boot() {
   bindEvents();
+  selectPane("general");
+
   window.addEventListener("focus", () => {
-    if (byId("tab-voice").classList.contains("active")) loadVoiceSettings();
+    if (currentPane === "voice") refreshPermissions();
+    if (currentPane === "general" && updateState?.status !== "checking") loadUpdateState();
   });
-  await Promise.all([loadOverview(), loadShortcutSummary()]);
-  await listen("agent://event", () => loadOverview());
+  await listen("updater://state", (event) => renderUpdate(event.payload));
+  await listen("agent://event", () => {
+    if (currentPane === "agents") loadActivity();
+  });
   await listen("appearance://changed", (event) => {
     applyAppearance(event.payload);
     byId("appearance").value = event.payload;
   });
   await listen("settings://tab", (event) => {
     const tab = typeof event.payload === "string" ? event.payload : event.payload?.tab;
-    if (["overview", "agents", "voice", "launcher", "about"].includes(tab)) selectTab(tab);
+    // "overview" is the pane's name in older builds of the backend.
+    selectPane(tab === "overview" ? "general" : tab);
   });
 }
 

@@ -34,6 +34,7 @@ extern "C" {
     fn samlu_frontmost_application(bundle_buffer: *mut i8, bundle_capacity: usize) -> i32;
     fn samlu_activate_application(pid: i32, bundle_identifier: *const i8) -> bool;
     fn samlu_post_paste_shortcut() -> bool;
+    fn samlu_is_developer_id_signed() -> bool;
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +111,11 @@ pub fn activate_application(pid: i32, bundle_id: Option<&str>) -> bool {
 
 pub fn post_paste_shortcut() -> bool {
     unsafe { samlu_post_paste_shortcut() }
+}
+
+/// Signed with a Developer ID rather than ad hoc. See `native/signing.m`.
+pub fn is_developer_id_signed() -> bool {
+    unsafe { samlu_is_developer_id_signed() }
 }
 
 pub fn configure_overlay(window: &WebviewWindow) {
@@ -197,6 +203,7 @@ pub fn active_display_has_notch() -> bool {
 }
 
 /// Resizes an overlay to `height` logical points while its top edge stays put.
+/// On the main thread this has happened by the time it returns.
 pub fn resize_overlay_keeping_top(window: &WebviewWindow, height: f64) {
     if let Ok(pointer) = window.ns_window() {
         unsafe { samlu_resize_overlay_keeping_top(pointer, height) };

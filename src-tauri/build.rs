@@ -53,15 +53,18 @@ fn build_swift_bridge() {
 fn main() {
     println!("cargo:rerun-if-changed=native/color_sampler.m");
     println!("cargo:rerun-if-changed=native/permissions.m");
+    println!("cargo:rerun-if-changed=native/signing.m");
     cc::Build::new()
         .file("native/color_sampler.m")
         .file("native/permissions.m")
+        .file("native/signing.m")
         .flag("-fobjc-arc")
         .flag("-fblocks")
         .compile("samlu_native");
     println!("cargo:rustc-link-lib=framework=AppKit");
     println!("cargo:rustc-link-lib=framework=CoreGraphics");
     println!("cargo:rustc-link-lib=framework=AVFoundation");
+    println!("cargo:rustc-link-lib=framework=Security");
     build_swift_bridge();
     tauri_build::build()
 }

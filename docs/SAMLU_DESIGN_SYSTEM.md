@@ -2,7 +2,7 @@
 
 Status: Living product and interface specification  
 Primary platform: macOS, Apple silicon  
-Last updated: 2026-07-27
+Last updated: 2026-10-14
 
 ## Product posture
 
@@ -86,6 +86,44 @@ Samlu has three interface layers:
    - History and diagnostics
 
 The presence surfaces must never depend on the control-center window being visible.
+
+## Control center layout
+
+Settings follows macOS System Settings rather than a marketing page:
+
+- A full-height sidebar sits under the window controls (overlay title bar),
+  with the Samlu mark, the running version, and five panes: General, Agents,
+  Voice, Launcher, About. The selection is a soft fill; it never animates.
+- Each pane is a column of grouped boxes. A row puts its label and an
+  optional one-line explanation on the left and one control on the right;
+  separators are inset hairlines. Group titles sit above a box and footnotes
+  below it.
+- Controls use standard macOS sizes: 26-point buttons and fields with a
+  7-point radius, pop-up buttons with up-and-down chevrons, segmented controls
+  with a single sliding thumb, and switches whose knob stretches while pressed.
+- At most one primary (yellow) button is visible per pane. Routine saves
+  confirm inline beside the group title with a drawn check; toasts are for
+  errors and results that land out of view.
+- The window, scrollbars and the mark follow the Appearance setting; the mark
+  itself is never recoloured for dark surfaces.
+
+## Launcher motion
+
+The launcher opens and closes many times a day, so its motion is short, soft
+and never in the way:
+
+- The panel resizes with its results as a CSS spring (about 260 ms, no
+  overshoot). The transparent window follows out of sight — it grows before
+  the panel and shrinks after it settles — because animating the native
+  window per keystroke jumps, and a window much larger than the panel would
+  swallow clicks meant for the app behind it.
+- Opening fades in at once while scale and offset settle on a spring; typing
+  works from the first frame. Closing is a quicker ease-out fade. Both are CSS
+  transitions, so pressing the hotkey again mid-exit turns the panel around
+  instead of restarting it.
+- Selection, hover and result changes do not animate. App icons that arrive
+  after their row fade up once, then come from the cache.
+- Reduce Motion keeps the fades and drops movement and springs.
 
 ## Voice state model
 

@@ -49,6 +49,9 @@ macOS 11 or later. A `.zip` of the raw `.app` is published alongside it.
 > *Open* no longer bypasses Gatekeeper. Because each unsigned build carries a
 > different ad-hoc signature, macOS treats an upgrade as a new app, so
 > Microphone and Accessibility access have to be granted again after updating.
+>
+> This is needed once. Updates after that are installed by Samlu itself (see
+> [Updates](#updates)) and do not need the quarantine step.
 
 Samlu asks for two permissions, both on first use and both revocable in
 System Settings → Privacy & Security:
@@ -87,7 +90,13 @@ in the Voice settings tab.
 The default launcher shortcut is `Option+H`. It avoids taking over macOS
 Spotlight's `Command+Space` binding and can be changed in Launcher settings.
 
-- Search installed applications, projects, and source files.
+- Search installed applications, projects, and source files. Results are
+  ranked by how well they match — an exact or leading match on an app's name
+  puts that app first — and by what you open most. Samlu's own commands only
+  appear when you type their name, or everything behind `>`.
+- An empty search shows what you open most, then Samlu's commands.
+- Return opens the selection, Command-Return shows it in Finder, and the first
+  Escape clears the search before the second closes the launcher.
 - Type `=` for calculator expressions.
 - Type `;` for snippets.
 - Type `@` for opt-in local clipboard history.
@@ -97,6 +106,16 @@ Spotlight's `Command+Space` binding and can be changed in Launcher settings.
 Project discovery starts with common existing development folders. Launcher
 settings can add or remove indexed roots, exclude folders, and trigger a manual
 reindex without running a permanent file-system watcher.
+
+### Updates
+
+Samlu checks the latest GitHub release every few hours (Settings → General →
+Software Update, or **Check for Updates…** in the menu bar). Updates are
+downloaded, verified against Samlu's signing key, and installed in place; the
+new version starts the next time Samlu does, and **Restart to Update** applies
+it straight away. Automatic checks and automatic installs can each be turned
+off. Samlu never asks for an administrator password on its own: if it cannot
+replace itself silently, it waits for you to choose Install.
 
 ### Agent notifications
 
@@ -141,6 +160,19 @@ Every push to `main` runs CI and, if it passes, publishes a universal release
 (`.github/workflows/release.yml`). The version in `src-tauri/tauri.conf.json`
 ships first; later pushes bump the patch number (0.2.0, 0.2.1, …). Raise that
 version to start a new minor or major series.
+
+Self-update needs the updater signing key in the repository's Actions secrets
+as `TAURI_SIGNING_PRIVATE_KEY` (the contents of the private key file) and, if
+the key has a password, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Its public half
+is `plugins.updater.pubkey` in `tauri.conf.json`. With the secret set, each
+release also carries `Samlu-<version>-macos-universal.app.tar.gz`, its `.sig`
+and the `latest.json` feed that installed copies read. Keep the private key
+backed up: a release signed with any other key cannot update existing installs.
+
+To try an update end to end without publishing, run a debug bundle with
+`SAMLU_UPDATER_ENDPOINT` pointing at a local `latest.json`, and
+`SAMLU_UPDATER_FIRST_CHECK_SECS` to shorten the first check. Both are read
+only by debug builds.
 
 ### Local build
 

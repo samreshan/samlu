@@ -10,6 +10,7 @@ mod settings;
 mod setup;
 mod state;
 mod tray;
+mod updater;
 mod voice;
 
 use state::AppState;
@@ -73,6 +74,50 @@ fn clear_event_history(state: tauri::State<'_, Arc<AppState>>) {
     state.clear_event_history();
 }
 
+/// Asks before something that cannot be undone, as a native alert sheet on
+/// the window that asked. The dialog plugin replaces `window.confirm` with an
+/// async function, so a plain `if (!confirm(...))` in a page sees a promise,
+/// treats it as yes, and never waits for the answer; pages ask through here.
+#[tauri::command]
+async fn confirm_action(
+    window: tauri::WebviewWindow,
+    title: String,
+    message: String,
+    confirm: String,
+) -> bool {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let (answer, answered) = std::sync::mpsc::channel();
+    window
+        .dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            confirm,
+            "Cancel".to_string(),
+        ))
+        .parent(&window)
+        .show(move |confirmed| {
+            let _ = answer.send(confirmed);
+        });
+    tauri::async_runtime::spawn_blocking(move || answered.recv().unwrap_or(false))
+        .await
+        .unwrap_or(false)
+}
+
+/// Opens one of Samlu's own pages in the default browser. The UI can only
+/// name these fixed addresses, never pass a URL of its own.
+#[tauri::command]
+fn open_samlu_link(link: String) -> Result<(), String> {
+    let url = match link.as_str() {
+        "releases" => "https://github.com/samreshan/samlu/releases",
+        "repository" => "https://github.com/samreshan/samlu",
+        "issues" => "https://github.com/samreshan/samlu/issues",
+        _ => return Err(format!("unknown link: {link}")),
+    };
+    open_path(url)
+}
+
 pub(crate) fn open_path(path: &str) -> Result<(), String> {
     std::process::Command::new("/usr/bin/open")
         .arg(path)
@@ -104,6 +149,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
@@ -114,6 +160,7 @@ pub fn run() {
                     })
                     .build(),
             )?;
+            log::info!("Samlu {} starting", app.package_info().version);
 
             let app_data_dir = app.path().app_data_dir()?;
             let app_config = Arc::new(settings::AppConfig::load(&app_data_dir));
@@ -128,6 +175,7 @@ pub fn run() {
             ));
             app.manage(app_state.clone());
             app.manage(Arc::new(notify::IslandState::new()));
+            app.manage(Arc::new(updater::UpdaterState::new()));
 
             app.manage(Arc::new(launcher::history::LauncherHistory::load(
                 &app_data_dir,
@@ -183,6 +231,11 @@ pub fn run() {
             }
 
             tray::build(app)?;
+            updater::start(app.handle());
+            settings::apply_window_theme(
+                app.handle(),
+                &app.state::<Arc<settings::AppConfig>>().appearance(),
+            );
 
             // First launch opens the setup guide instead of the settings window.
             if needs_onboarding && initial_codex_payload.is_none() {
@@ -209,6 +262,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_status,
+            confirm_action,
+            open_samlu_link,
             get_event_history,
             clear_event_history,
             settings::get_notification_preferences,
@@ -233,6 +288,7 @@ pub fn run() {
             launcher::launcher_search,
             launcher::launcher_search_files,
             launcher::launcher_activate,
+            launcher::launcher_reveal,
             launcher::get_launcher_hotkey,
             launcher::set_launcher_hotkey,
             launcher::get_project_settings,
@@ -244,6 +300,11 @@ pub fn run() {
             launcher::snippets::save_snippet,
             launcher::snippets::delete_snippet,
             launcher::clipboard::clear_clipboard_history,
+            updater::get_update_state,
+            updater::set_update_preferences,
+            updater::check_for_updates,
+            updater::install_update,
+            updater::restart_to_update,
             voice::get_voice_settings,
             voice::set_voice_api_key,
             voice::set_voice_stt,

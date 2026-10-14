@@ -14,13 +14,16 @@
         "label": "main",
         "title": "Samlu",
         "width": 820,
-        "height": 680,
+        "height": 640,
         "minWidth": 720,
-        "minHeight": 540,
+        "minHeight": 520,
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
-        "center": true
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 20, "y": 24 }
       }
     ],
     "security": {
@@ -46,5 +49,12 @@
       "minimumSystemVersion": "11.0"
     }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU4RjZCMjZEMjE4RkJDQkYKUldTL3ZJOGhiYkwyV0ZFY0t4dGxieTU4K0VoaHlnNlZUYUpxUzJIWmpXMGl4eE5INUx2eS9takQK",
+      "endpoints": [
+        "https://github.com/samreshan/samlu/releases/latest/download/latest.json"
+      ]
+    }
+  }
 }

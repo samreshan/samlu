@@ -32,22 +32,6 @@ impl SnippetStore {
         self.snippets.lock().unwrap().clone()
     }
 
-    pub fn search(&self, query: &str, limit: usize) -> Vec<Snippet> {
-        let query = query.to_lowercase();
-        self.snippets
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|snippet| {
-                query.is_empty()
-                    || snippet.title.to_lowercase().contains(&query)
-                    || snippet.keyword.to_lowercase().contains(&query)
-            })
-            .take(limit)
-            .cloned()
-            .collect()
-    }
-
     pub fn upsert(&self, mut snippet: Snippet) -> Result<Snippet, String> {
         snippet.title = snippet.title.trim().to_string();
         snippet.keyword = snippet.keyword.trim().to_string();

@@ -39,7 +39,7 @@ button {
 }
 
 .island-stage[data-leaving="true"] {
-  animation: ascend var(--duration-exit) var(--ease-in) both;
+  animation: ascend var(--duration-exit) var(--ease-out) both;
 }
 
 .island {
@@ -129,7 +129,7 @@ button {
   padding: 15px;
   transition:
     opacity 110ms ease,
-    transform 110ms var(--ease-in);
+    transform 110ms var(--ease-out);
 }
 
 /* Only the camera bridge needs the extra top clearance. */

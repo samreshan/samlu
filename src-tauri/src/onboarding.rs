@@ -34,6 +34,9 @@ pub fn show(app: &AppHandle) -> Result<(), String> {
     .center()
     .build()
     .map_err(|error| error.to_string())?;
+    if let Some(config) = app.try_state::<Arc<AppConfig>>() {
+        crate::settings::apply_window_theme(app, &config.appearance());
+    }
     crate::macos::present_application_window(&window)
         .then_some(())
         .ok_or_else(|| "could not access the native setup-guide window".to_string())

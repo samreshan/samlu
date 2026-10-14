@@ -25,6 +25,13 @@ struct Data {
     /// `background` keeps shortcuts and agent notifications active after
     /// Settings closes; `quit` exits the process instead.
     close_behavior: String,
+    /// Look for a newer release every few hours.
+    update_auto_check: bool,
+    /// Install what a check finds without asking. It takes effect on the next
+    /// start of Samlu.
+    update_auto_install: bool,
+    /// RFC 3339 time of the last finished check, successful or not.
+    update_last_checked_at: Option<String>,
 }
 
 /// Retired with the pet overlay. Kept only so older configs migrate cleanly.
@@ -56,6 +63,9 @@ impl Default for Data {
             clipboard_history_enabled: false,
             onboarding_completed: false,
             close_behavior: "background".to_string(),
+            update_auto_check: true,
+            update_auto_install: true,
+            update_last_checked_at: None,
         }
     }
 }
@@ -172,6 +182,35 @@ impl AppConfig {
         Ok(())
     }
 
+    pub fn update_auto_check(&self) -> bool {
+        self.data.lock().unwrap().update_auto_check
+    }
+
+    /// The stored choice. It only takes effect while automatic checks are on,
+    /// and is kept as chosen while they are off so turning them back on
+    /// restores it.
+    pub fn update_auto_install(&self) -> bool {
+        self.data.lock().unwrap().update_auto_install
+    }
+
+    pub fn set_update_preferences(&self, auto_check: bool, auto_install: bool) {
+        {
+            let mut data = self.data.lock().unwrap();
+            data.update_auto_check = auto_check;
+            data.update_auto_install = auto_install;
+        }
+        self.save();
+    }
+
+    pub fn update_last_checked_at(&self) -> Option<String> {
+        self.data.lock().unwrap().update_last_checked_at.clone()
+    }
+
+    pub fn set_update_last_checked_at(&self, at: String) {
+        self.data.lock().unwrap().update_last_checked_at = Some(at);
+        self.save();
+    }
+
     pub fn preferences(&self) -> NotificationPreferences {
         let data = self.data.lock().unwrap();
         NotificationPreferences {
@@ -254,7 +293,23 @@ pub fn set_appearance(
     config: tauri::State<'_, std::sync::Arc<AppConfig>>,
 ) -> Result<(), String> {
     config.set_appearance(appearance.clone())?;
+    apply_window_theme(&app, &appearance);
     use tauri::Emitter;
     let _ = app.emit("appearance://changed", appearance);
     Ok(())
+}
+
+/// Gives every native window the chosen appearance, so window controls,
+/// scrollbars and each page's `prefers-color-scheme` agree with Samlu's
+/// setting instead of only with the system's.
+pub fn apply_window_theme(app: &tauri::AppHandle, appearance: &str) {
+    use tauri::Manager;
+    let theme = match appearance {
+        "light" => Some(tauri::Theme::Light),
+        "dark" => Some(tauri::Theme::Dark),
+        _ => None,
+    };
+    for window in app.webview_windows().values() {
+        let _ = window.set_theme(theme);
+    }
 }

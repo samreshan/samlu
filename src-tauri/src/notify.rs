@@ -218,7 +218,7 @@ pub fn agent_island_ready(app: AppHandle, state: tauri::State<'_, Arc<IslandStat
 pub fn agent_island_open_activity(app: AppHandle) {
     agent_island_dismiss(app.clone());
     crate::tray::show_main(&app);
-    let _ = app.emit_to("main", "settings://tab", "overview");
+    let _ = app.emit_to("main", "settings://tab", "agents");
 }
 
 #[tauri::command]

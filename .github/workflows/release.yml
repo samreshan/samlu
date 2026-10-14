@@ -7,6 +7,12 @@ name: Release
 # upgrades the same workflow to a Developer ID signed, notarized, stapled
 # build with no other changes.
 #
+# Updates: with the TAURI_SIGNING_PRIVATE_KEY secret set (the private half of
+# the key whose public half is in tauri.conf.json), the build also produces a
+# signed .app.tar.gz and a latest.json feed. Installed copies of Samlu read that
+# feed from the newest release to update themselves. Without the secret the
+# release still ships, just without self-update files.
+#
 # Versioning: the version in tauri.conf.json is released as-is the first time;
 # later pushes in that series bump the patch number past the newest existing
 # tag (0.2.0, 0.2.1, 0.2.2, ...). Raise the version in tauri.conf.json to start
@@ -88,8 +94,15 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            echo "updater=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "updater=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No TAURI_SIGNING_PRIVATE_KEY secret set - this release will not include self-update files."
+          fi
           if [ -n "${APPLE_CERTIFICATE}" ]; then
             echo "signed=true" >> "$GITHUB_OUTPUT"
           else
@@ -153,6 +166,9 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
           SIGNED: ${{ steps.signing.outputs.signed }}
           NOTARIZE: ${{ steps.signing.outputs.notarize }}
+          UPDATER: ${{ steps.signing.outputs.updater }}
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
           NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -178,10 +194,21 @@ jobs:
             echo "Building ad-hoc signed (no notarization credentials)."
           fi
 
+          # The updater archive is signed with the key from the secret. The
+          # password variable is always exported, empty when the key has none,
+          # because an unset one makes the CLI wait for a prompt.
+          if [ "$UPDATER" = "true" ]; then
+            export TAURI_SIGNING_PRIVATE_KEY="$UPDATER_KEY"
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${UPDATER_KEY_PASSWORD:-}"
+            create_updater=true
+          else
+            create_updater=false
+          fi
+
           # The computed version is stamped into the bundle, so the app reports
           # the release it shipped in even when tauri.conf.json lags behind.
           cargo tauri build --target "$TARGET" --bundles app \
-            --config "{\"version\":\"${VERSION}\"}"
+            --config "{\"version\":\"${VERSION}\",\"bundle\":{\"createUpdaterArtifacts\":${create_updater}}}"
 
       - name: Package disk image and archive
         id: package
@@ -223,6 +250,58 @@ jobs:
           echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
           echo "zip=$zip" >> "$GITHUB_OUTPUT"
 
+      - name: Package update feed
+        id: feed
+        if: steps.signing.outputs.updater == 'true'
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bundle_dir="src-tauri/target/${TARGET}/release/bundle/macos"
+          archive="$(find "$bundle_dir" -maxdepth 1 -name '*.app.tar.gz' | head -1)"
+          if [ -z "$archive" ] || [ ! -f "${archive}.sig" ]; then
+            echo "::error::The build did not produce a signed updater archive in $bundle_dir"
+            exit 1
+          fi
+          name="Samlu-${VERSION}-macos-universal.app.tar.gz"
+          cp "$archive" "dist/${name}"
+          cp "${archive}.sig" "dist/${name}.sig"
+
+          # Notes for the in-app update panel: this release's commit subjects,
+          # newest first, without merges or housekeeping nobody using Samlu
+          # needs to read.
+          previous="$(git tag --list 'v*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)"
+          range="${previous:+${previous}..}HEAD"
+          notes="$(git log --no-merges --format='- %s' "$range" \
+            | grep -Ev '^- (ci|chore|build|test|docs|style|refactor)(\([^)]*\))?:' \
+            | head -12 || true)"
+          [ -n "$notes" ] || notes="See the release notes on GitHub."
+
+          # One universal archive serves both architectures. The -app keys are
+          # what an installed .app looks for first.
+          url="https://github.com/${REPOSITORY}/releases/download/${TAG}/${name}"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$notes" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg url "$url" \
+            --arg signature "$(cat "dist/${name}.sig")" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: {
+              "darwin-aarch64": {url: $url, signature: $signature},
+              "darwin-x86_64": {url: $url, signature: $signature},
+              "darwin-aarch64-app": {url: $url, signature: $signature},
+              "darwin-x86_64-app": {url: $url, signature: $signature}
+            }}' > dist/latest.json
+          jq . dist/latest.json
+
+          {
+            echo "archive=dist/${name}"
+            echo "signature=dist/${name}.sig"
+            echo "feed=dist/latest.json"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Notarize and staple
         if: steps.signing.outputs.notarize == 'true'
         env:
@@ -244,6 +323,7 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           SIGNED: ${{ steps.signing.outputs.notarize }}
+          UPDATER: ${{ steps.signing.outputs.updater }}
         run: |
           set -euo pipefail
           {
@@ -273,6 +353,15 @@ jobs:
               echo "> Microphone and Accessibility access after upgrading."
               echo
             fi
+            if [ "$UPDATER" = "true" ]; then
+              echo "## Updates"
+              echo
+              echo "Samlu checks for updates on its own and can install them in the"
+              echo "background. Use **Check for Updates…** in the menu bar or in"
+              echo "Settings → General at any time. Versions released before self-update"
+              echo "existed need this release installed by hand once."
+              echo
+            fi
             echo "## Permissions Samlu asks for"
             echo
             echo "| Permission | Why |"
@@ -289,6 +378,29 @@ jobs:
           } > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
 
+      # Built as an explicit list so a release without update files never hands
+      # the publisher an empty entry to match.
+      - name: Collect release files
+        id: files
+        env:
+          DMG: ${{ steps.package.outputs.dmg }}
+          ZIP: ${{ steps.package.outputs.zip }}
+          ARCHIVE: ${{ steps.feed.outputs.archive }}
+          SIGNATURE: ${{ steps.feed.outputs.signature }}
+          FEED: ${{ steps.feed.outputs.feed }}
+        run: |
+          set -euo pipefail
+          {
+            echo "list<<FILES"
+            for file in "$DMG" "$ZIP" "$ARCHIVE" "$SIGNATURE" "$FEED"; do
+              if [ -n "$file" ]; then
+                test -f "$file"
+                echo "$file"
+              fi
+            done
+            echo "FILES"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -300,6 +412,4 @@ jobs:
           draft: false
           make_latest: true
           fail_on_unmatched_files: true
-          files: |
-            ${{ steps.package.outputs.dmg }}
-            ${{ steps.package.outputs.zip }}
+          files: ${{ steps.files.outputs.list }}
