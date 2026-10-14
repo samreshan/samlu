@@ -12,6 +12,8 @@ let voiceModels = { models: [], catalog: [], recommended: "", selected: "" };
 let voiceHistory = [];
 let snippets = [];
 let projectSettings = { roots: [], excludedPaths: [], projectCount: 0 };
+let deepFind = null;
+let deepFindDownload = null;
 let agentIntegrations = [];
 let voiceHotkeyRecorder = null;
 let launcherHotkeyRecorder = null;
@@ -1096,16 +1098,180 @@ async function loadLauncherSettings() {
   } catch (error) {
     toast(errorMessage(error), true);
   }
+  loadDeepFind();
+}
+
+/* -------------------------------------------------------- descriptive find */
+
+async function loadDeepFind() {
+  try {
+    deepFind = await invoke("get_deep_find_settings");
+    renderDeepFind();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+function deepFindPill(status) {
+  if (!deepFind.enabled) return ["Off", ""];
+  if (status.state === "error") return ["Needs attention", "warn"];
+  if (status.state === "indexing") {
+    const progress = status.total ? ` ${status.done.toLocaleString()} of ${status.total.toLocaleString()}` : "";
+    return [`${status.phase.replace(/…$/, "")}${progress}`, ""];
+  }
+  const files = status.files;
+  return [`${files.toLocaleString()} ${files === 1 ? "file" : "files"}`, "good"];
+}
+
+function renderDeepFind() {
+  if (!deepFind) return;
+  const status = deepFind.status;
+  byId("deep-find-enabled").checked = deepFind.enabled;
+  byId("deep-find-details").hidden = !deepFind.enabled;
+  byId("deep-find-code").checked = deepFind.includeCode;
+  const [pill, state] = deepFindPill(status);
+  setPill("deep-find-pill", pill, state);
+
+  const model = byId("deep-find-model");
+  model.replaceChildren();
+  const label = document.createElement("div");
+  label.className = "list-label";
+  label.textContent = "Meaning model";
+  model.append(label);
+  DEEP_FIND_MODELS.forEach((option) => {
+    if (option.id === "large" && !status.largeSupported) return;
+    model.append(deepFindModelRow(option, status));
+  });
+
+  renderPathList("deep-find-root-list", deepFind.roots, "No folders yet. Add one to start.", (path) =>
+    saveDeepFindFolders({ roots: deepFind.roots.filter((value) => value !== path) }),
+  );
+  renderPathList("deep-find-exclusion-list", deepFind.excluded, "None.", (path) =>
+    saveDeepFindFolders({ excluded: deepFind.excluded.filter((value) => value !== path) }),
+  );
+  const usage = [
+    `${status.passages.toLocaleString()} passages`,
+    status.vectors ? `${status.vectors.toLocaleString()} understood by meaning` : "",
+    status.error || "",
+  ].filter(Boolean);
+  byId("deep-find-usage").textContent = `${usage.join(" · ")}. Stored on this computer only.`;
+}
+
+const DEEP_FIND_MODELS = [
+  {
+    id: "large",
+    title: "Large: EmbeddingGemma 2",
+    about: "Google DeepMind’s model, as in DigUp. Best at descriptions, 100+ languages. Runs on the GPU.",
+  },
+  {
+    id: "small",
+    title: "Small: Model2Vec retrieval",
+    about: "Fast and light on any computer. Answers in microseconds on the CPU.",
+  },
+  { id: "none", title: "None", about: "Exact words only. Nothing to download." },
+];
+
+function deepFindModelRow(option, status) {
+  const chosen = deepFind.model === option.id;
+  const downloaded = option.id === "none" || status[`${option.id}Downloaded`];
+  const bytes = status[`${option.id}Bytes`];
+  const parts = [option.about];
+  const actions = [];
+  let fraction = null;
+  if (status.downloading === option.id) {
+    fraction = deepFindDownload?.model === option.id && deepFindDownload.total
+      ? deepFindDownload.received / deepFindDownload.total
+      : 0;
+    parts.push(`Downloading ${Math.floor(fraction * 100)}% of ${formatBytes(bytes)}`);
+    actions.push(["Cancel", () => invoke("deep_find_cancel_download")]);
+  } else {
+    if (option.id !== "none") parts.push(downloaded ? `${formatBytes(bytes)} downloaded` : `${formatBytes(bytes)} download`);
+    if (chosen) {
+      parts.push(
+        option.id === "none" || !downloaded
+          ? "In use"
+          : status.modelLoaded === option.id
+            ? "In use · Ready"
+            : "In use · Loads when you search",
+      );
+      if (!downloaded) actions.push(["Download", () => downloadDeepFindModel(option.id), true]);
+    } else {
+      actions.push([
+        downloaded ? "Use" : "Download & Use",
+        () => chooseDeepFindModel(option.id, downloaded),
+        false,
+      ]);
+    }
+  }
+  return modelRow(option.title, parts.join(" · "), actions, fraction);
+}
+
+async function chooseDeepFindModel(model, downloaded) {
+  deepFind = await invoke("set_deep_find_model", { model });
+  renderDeepFind();
+  if (!downloaded) await downloadDeepFindModel(model);
+}
+
+async function downloadDeepFindModel(model = deepFind.model) {
+  if (model === "none") return;
+  const download = invoke("deep_find_download_model", { model });
+  // The status flips to downloading as soon as the command starts.
+  setTimeout(loadDeepFind, 150);
+  try {
+    deepFind = await download;
+    showSaved("launcher-saved", "Model ready");
+  } catch (error) {
+    if (errorMessage(error) !== "Download cancelled.") throw error;
+  } finally {
+    deepFindDownload = null;
+    await loadDeepFind();
+  }
+}
+
+async function saveDeepFindFolders(change) {
+  try {
+    const next = {
+      roots: deepFind.roots,
+      excluded: deepFind.excluded,
+      includeCode: deepFind.includeCode,
+      ...change,
+    };
+    deepFind = await invoke("set_deep_find_folders", next);
+    renderDeepFind();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+async function addDeepFindFolder(kind, button) {
+  try {
+    const path = await runButton(button, "Choosing…", () =>
+      invoke("deep_find_choose_folder", {
+        title: kind === "root" ? "Choose a folder to search inside" : "Choose a folder to leave out",
+      }),
+    );
+    if (!path) return;
+    const key = kind === "root" ? "roots" : "excluded";
+    if (deepFind[key].includes(path)) {
+      toast(kind === "root" ? "That folder is already searched." : "That folder is already excluded.");
+      return;
+    }
+    await saveDeepFindFolders({ [key]: [...deepFind[key], path] });
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
 }
 
 function renderProjectSettings() {
   const count = projectSettings.projectCount;
   byId("project-count").textContent = `${count} ${count === 1 ? "project" : "projects"}`;
-  renderPathList("project-root-list", projectSettings.roots, "No folders yet.", "root");
-  renderPathList("project-exclusion-list", projectSettings.excludedPaths, "None.", "exclusion");
+  renderPathList("project-root-list", projectSettings.roots, "No folders yet.", (path) => removeProjectPath("root", path));
+  renderPathList("project-exclusion-list", projectSettings.excludedPaths, "None.", (path) =>
+    removeProjectPath("exclusion", path),
+  );
 }
 
-function renderPathList(id, paths, emptyLabel, kind) {
+function renderPathList(id, paths, emptyLabel, onRemove) {
   const list = byId(id);
   list.replaceChildren();
   if (!paths.length) {
@@ -1130,7 +1296,7 @@ function renderPathList(id, paths, emptyLabel, kind) {
     remove.className = "text-button danger";
     remove.textContent = "Remove";
     remove.setAttribute("aria-label", `Remove ${path}`);
-    remove.addEventListener("click", () => removeProjectPath(kind, path));
+    remove.addEventListener("click", () => onRemove(path));
     row.append(text, remove);
     list.append(row);
   });
@@ -1613,6 +1779,66 @@ function bindEvents() {
       renderProjectSettings();
     } catch (error) {
       toast(errorMessage(error), true);
+    }
+  });
+  byId("deep-find-enabled").addEventListener("change", async (event) => {
+    try {
+      deepFind = await invoke("set_deep_find_enabled", { enabled: event.currentTarget.checked });
+      renderDeepFind();
+      // Turning it on offers the meaning model straight away.
+      const chosen = deepFind.model;
+      if (
+        deepFind.enabled &&
+        chosen !== "none" &&
+        !deepFind.status[`${chosen}Downloaded`] &&
+        !deepFind.status.downloading
+      ) {
+        downloadDeepFindModel(chosen).catch((error) => toast(errorMessage(error), true));
+      }
+    } catch (error) {
+      toast(errorMessage(error), true);
+    }
+  });
+  byId("deep-find-code").addEventListener("change", (event) =>
+    saveDeepFindFolders({ includeCode: event.currentTarget.checked }),
+  );
+  byId("deep-find-add-root").addEventListener("click", (event) => addDeepFindFolder("root", event.currentTarget));
+  byId("deep-find-add-exclusion").addEventListener("click", (event) =>
+    addDeepFindFolder("exclusion", event.currentTarget),
+  );
+  byId("deep-find-rebuild").addEventListener("click", async () => {
+    const confirmed = await confirmAction(
+      "Rebuild the index?",
+      "Every file in the searched folders is read again. Searching keeps working meanwhile, with fewer results until it finishes.",
+      "Rebuild",
+    );
+    if (!confirmed) return;
+    invoke("deep_find_rebuild").catch((error) => toast(errorMessage(error), true));
+  });
+  byId("deep-find-remove").addEventListener("click", async () => {
+    const confirmed = await confirmAction(
+      "Remove Descriptive Find’s data?",
+      "This turns Descriptive Find off and deletes its index and meaning model from this computer. Your files are not touched.",
+      "Remove",
+    );
+    if (!confirmed) return;
+    try {
+      deepFind = await invoke("deep_find_remove_data");
+      renderDeepFind();
+    } catch (error) {
+      toast(errorMessage(error), true);
+    }
+  });
+  listen("deep-find://status", (event) => {
+    if (!deepFind) return;
+    deepFind.status = event.payload;
+    if (currentPane === "launcher") renderDeepFind();
+  });
+  listen("deep-find://download", (event) => {
+    deepFindDownload = event.payload;
+    if (deepFind && currentPane === "launcher") {
+      deepFind.status.downloading = event.payload.model;
+      renderDeepFind();
     }
   });
   byId("new-snippet").addEventListener("click", () => editSnippet());

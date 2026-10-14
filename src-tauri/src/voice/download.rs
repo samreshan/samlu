@@ -163,7 +163,7 @@ async fn stream_to(
         file.write_all(&chunk)
             .map_err(|error| format!("Could not write the model: {error}"))?;
         received += chunk.len() as u64;
-        if last_emit.map_or(true, |at| at.elapsed() >= PROGRESS_INTERVAL) {
+        if last_emit.is_none_or(|at| at.elapsed() >= PROGRESS_INTERVAL) {
             last_emit = Some(Instant::now());
             let _ = app.emit(
                 PROGRESS_EVENT,

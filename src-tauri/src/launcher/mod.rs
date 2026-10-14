@@ -6,6 +6,7 @@ pub mod calculator;
 pub mod clipboard;
 pub mod color_picker;
 pub mod config;
+pub mod deep_find;
 pub mod history;
 pub mod icons;
 pub mod projects;
@@ -136,6 +137,8 @@ pub fn launcher_toggle(app: AppHandle) -> Result<(), String> {
         // prepared for the next keystroke/open.
         let app_index = app.state::<Arc<AppIndex>>().inner().clone();
         std::thread::spawn(move || app_index.rebuild());
+        // Descriptive Find's model loads while you type the description.
+        app.state::<Arc<deep_find::DeepFind>>().prewarm();
     }
     Ok(())
 }
@@ -254,7 +257,7 @@ pub fn launcher_activate(
     history: tauri::State<'_, Arc<LauncherHistory>>,
 ) -> Result<(), String> {
     let result = match kind.as_str() {
-        "app" | "file" | "project" => crate::open_path(&target),
+        "app" | "file" | "project" | "content" => crate::open_path(&target),
         "snippet" | "clipboard" | "calculation" => app
             .clipboard()
             .write_text(target.clone())
@@ -279,15 +282,10 @@ pub fn launcher_activate(
 /// it.
 #[tauri::command]
 pub fn launcher_reveal(kind: String, target: String) -> Result<(), String> {
-    if !matches!(kind.as_str(), "app" | "file" | "project") {
+    if !matches!(kind.as_str(), "app" | "file" | "project" | "content") {
         return Err("Only apps, files and projects can be shown in Finder.".to_string());
     }
-    std::process::Command::new("/usr/bin/open")
-        .arg("-R")
-        .arg(&target)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+    crate::reveal_path(&target)
 }
 
 /// Binds `hotkey` (e.g. "Alt+Space", "Cmd+Shift+K") to toggle the launcher.
@@ -448,7 +446,7 @@ fn run_action(app: &AppHandle, action: &str) -> Result<(), String> {
             crate::tray::show_main(app);
             Ok(())
         }
-        "manage_snippets" => {
+        "manage_snippets" | "open_launcher_settings" => {
             crate::tray::show_main(app);
             let _ = app.emit_to("main", "settings://tab", "launcher");
             Ok(())

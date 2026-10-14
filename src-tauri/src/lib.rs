@@ -119,8 +119,44 @@ fn open_samlu_link(link: String) -> Result<(), String> {
 }
 
 pub(crate) fn open_path(path: &str) -> Result<(), String> {
-    std::process::Command::new("/usr/bin/open")
-        .arg(path)
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        // Explorer hands the file to its default app with no shell in
+        // between, so nothing in a file name is ever run as a command. The
+        // path is always quoted (Windows paths can't contain quotes).
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("explorer");
+        command.raw_arg(format!("\"{path}\""));
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut command = std::process::Command::new("/usr/bin/open");
+        command.arg(path);
+        command
+    };
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Shows a file selected in Finder, or in Explorer on Windows.
+pub(crate) fn reveal_path(path: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("explorer");
+        command.raw_arg(format!("/select,\"{path}\""));
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut command = std::process::Command::new("/usr/bin/open");
+        command.arg("-R").arg(path);
+        command
+    };
+    command
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -188,6 +224,9 @@ pub fn run() {
             ));
             app.manage(launcher_config);
             app.manage(Arc::new(launcher::app_index::AppIndex::new()));
+            let deep_find = launcher::deep_find::DeepFind::new(&app_data_dir);
+            deep_find.start(app.handle().clone());
+            app.manage(deep_find);
             app.manage(project_index);
             app.manage(Arc::new(launcher::snippets::SnippetStore::load(
                 &app_data_dir,
@@ -287,6 +326,16 @@ pub fn run() {
             launcher::launcher_resize,
             launcher::launcher_search,
             launcher::launcher_search_files,
+            launcher::deep_find::launcher_find_in_files,
+            launcher::deep_find::get_deep_find_settings,
+            launcher::deep_find::set_deep_find_enabled,
+            launcher::deep_find::set_deep_find_folders,
+            launcher::deep_find::set_deep_find_model,
+            launcher::deep_find::deep_find_rebuild,
+            launcher::deep_find::deep_find_choose_folder,
+            launcher::deep_find::deep_find_download_model,
+            launcher::deep_find::deep_find_cancel_download,
+            launcher::deep_find::deep_find_remove_data,
             launcher::launcher_activate,
             launcher::launcher_reveal,
             launcher::get_launcher_hotkey,
@@ -400,7 +449,11 @@ pub fn run() {
         } if BACKGROUND_CLOSE_GENERATION.swap(0, Ordering::AcqRel) != 0 => {
             api.prevent_exit();
         }
-        tauri::RunEvent::Exit => voice::engines_shutdown(),
+        tauri::RunEvent::Exit => {
+            voice::engines_shutdown();
+            // Stops EmbeddingGemma's llama.cpp helper with Samlu.
+            app.state::<Arc<launcher::deep_find::DeepFind>>().shutdown();
+        }
         _ => {}
     });
 }

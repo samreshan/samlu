@@ -1,12 +1,12 @@
 [package]
 name = "samlu"
-version = "0.2.0"
+version = "0.3.0"
 description = "Samlu - a macOS AI development kit for voice, agent notifications, and developer commands"
 authors = ["Samlu contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/samreshan/samlu"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.88"
 
 [lib]
 name = "app_lib"
@@ -41,3 +41,13 @@ sha2 = "0.10"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 semver = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+model2vec-rs = { version = "0.3", default-features = false, features = ["fancy-regex"] }
+notify = "8"
+walkdir = "2"
+pdf-extract = "0.12"
+unicode-normalization = "0.1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1"
+ureq = { version = "2", default-features = false, features = ["json"] }

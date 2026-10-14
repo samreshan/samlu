@@ -552,6 +552,7 @@
                 <div class="row tool"><kbd>;</kbd><span class="row-label">Snippets</span><code>; deploy</code></div>
                 <div class="row tool"><kbd>@</kbd><span class="row-label">Clipboard history</span><code>@ token</code></div>
                 <div class="row tool"><kbd>&gt;</kbd><span class="row-label">Commands</span><code>&gt; color</code></div>
+                <div class="row tool"><kbd>?</kbd><span class="row-label">Describe a file</span><code>? pets clause in the lease</code></div>
                 <div class="row tool"><kbd>⌘↩</kbd><span class="row-label">Show in Finder</span><code>apps, files, projects</code></div>
               </div>
             </section>
@@ -591,6 +592,50 @@
                 </div>
               </div>
               <p class="group-note">Folders are searched for Git repositories two levels deep. Reindex after adding projects.</p>
+            </section>
+
+            <section class="group" aria-labelledby="deep-find-title">
+              <div class="group-head">
+                <h2 id="deep-find-title">Descriptive Find</h2>
+                <span class="pill" id="deep-find-pill">Off</span>
+              </div>
+              <div class="group-box">
+                <label class="row">
+                  <span class="row-text">
+                    <span class="row-label">Search inside files</span>
+                    <span class="row-detail">Type ? and describe what you’re looking for, like “the clause about pets in the lease”. Strong matches also appear in ordinary searches.</span>
+                  </span>
+                  <input id="deep-find-enabled" class="switch" type="checkbox" role="switch" />
+                </label>
+                <div id="deep-find-details" hidden>
+                  <div id="deep-find-model"></div>
+                  <label class="row">
+                    <span class="row-text">
+                      <span class="row-label">Include source code</span>
+                      <span class="row-detail">Read code in projects too. Off keeps the index to your documents.</span>
+                    </span>
+                    <input id="deep-find-code" class="switch" type="checkbox" role="switch" />
+                  </label>
+                  <div class="list-label">Searched folders</div>
+                  <div id="deep-find-root-list"></div>
+                  <div class="list-label">Excluded folders</div>
+                  <div id="deep-find-exclusion-list"></div>
+                  <div class="row actions">
+                    <button class="button" id="deep-find-add-root" type="button">Add Folder…</button>
+                    <button class="button" id="deep-find-add-exclusion" type="button">Exclude Folder…</button>
+                    <span class="spacer"></span>
+                    <button class="button" id="deep-find-rebuild" type="button">Rebuild Index</button>
+                  </div>
+                  <div class="row">
+                    <span class="row-text">
+                      <span class="row-label">Index and model</span>
+                      <span class="row-detail" id="deep-find-usage">Stored on this computer only.</span>
+                    </span>
+                    <span class="row-control"><button class="button danger" id="deep-find-remove" type="button">Remove…</button></span>
+                  </div>
+                </div>
+              </div>
+              <p class="group-note">Reads text, Markdown, Word, OpenDocument, RTF, HTML and PDF files in the folders you choose, and keeps up as they change. Nothing leaves this computer. Keys, password files and hidden folders are never read. Search modeled on DigUp.</p>
             </section>
 
             <section class="group" aria-labelledby="launcher-snippets-title">
