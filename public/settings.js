@@ -942,11 +942,40 @@ function renderVoiceHistory() {
 const GLYPHS = {
   cmd: "⌘",
   command: "⌘",
+  super: "⌘",
+  meta: "⌘",
   shift: "⇧",
   alt: "⌥",
   option: "⌥",
   ctrl: "⌃",
   control: "⌃",
+  up: "↑",
+  arrowup: "↑",
+  down: "↓",
+  arrowdown: "↓",
+  left: "←",
+  arrowleft: "←",
+  right: "→",
+  arrowright: "→",
+  enter: "↩",
+  tab: "⇥",
+  backspace: "⌫",
+  delete: "⌦",
+  pageup: "⇞",
+  pagedown: "⇟",
+  home: "↖",
+  end: "↘",
+  backquote: "`",
+  minus: "-",
+  equal: "=",
+  bracketleft: "[",
+  bracketright: "]",
+  backslash: "\\",
+  semicolon: ";",
+  quote: "'",
+  comma: ",",
+  period: ".",
+  slash: "/",
 };
 
 function keyGlyph(part) {
@@ -995,24 +1024,81 @@ const SHORTCUT_MODIFIERS = [
   ["metaKey", "Cmd"],
 ];
 
+const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "OS", "Fn", "FnLock", "CapsLock", "Hyper", "Super"]);
+
+// Physical key (KeyboardEvent.code) to the name the backend's parser accepts.
+// Anything missing here can't be registered as a global shortcut on macOS.
+const SHORTCUT_KEYS = {
+  Space: "Space",
+  Enter: "Enter",
+  Tab: "Tab",
+  Backspace: "Backspace",
+  Delete: "Delete",
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  Home: "Home",
+  End: "End",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
+  Backquote: "Backquote",
+  Minus: "Minus",
+  Equal: "Equal",
+  BracketLeft: "BracketLeft",
+  BracketRight: "BracketRight",
+  Backslash: "Backslash",
+  Semicolon: "Semicolon",
+  Quote: "Quote",
+  Comma: "Comma",
+  Period: "Period",
+  Slash: "Slash",
+  NumpadAdd: "NumAdd",
+  NumpadSubtract: "NumSubtract",
+  NumpadMultiply: "NumMultiply",
+  NumpadDivide: "NumDivide",
+  NumpadDecimal: "NumDecimal",
+  NumpadEnter: "NumEnter",
+  NumpadEqual: "NumEqual",
+};
+
 function shortcutKeyName(code) {
   if (/^Key[A-Z]$/.test(code)) return code.slice(3);
   if (/^Digit[0-9]$/.test(code)) return code.slice(5);
-  return code.toUpperCase();
+  if (/^Numpad[0-9]$/.test(code)) return `Num${code.slice(6)}`;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  return SHORTCUT_KEYS[code] || "";
 }
 
-function shortcutFromEvent(event) {
-  const modifiers = SHORTCUT_MODIFIERS.filter(([flag]) => event[flag]).map(([, name]) => name);
-  if (!modifiers.length || !event.code) return "";
-  return [...modifiers, shortcutKeyName(event.code)].join("+");
+function heldModifiers(event) {
+  return SHORTCUT_MODIFIERS.filter(([flag]) => event[flag]).map(([, name]) => name);
 }
+
+/** Reads a chord from a keydown. Returns `{ shortcut }` when it can be
+ * registered, or `{ hint }` explaining why not. */
+function shortcutFromEvent(event) {
+  // Some keyboards leave `code` empty for the higher function keys.
+  const key = shortcutKeyName(event.code || (/^F\d+$/.test(event.key) ? event.key : ""));
+  if (!key) return { hint: "Key not supported" };
+  const modifiers = heldModifiers(event);
+  // Function keys work alone; everything else would swallow ordinary typing.
+  if (!modifiers.length && !/^F\d+$/.test(key)) return { hint: "Add ⌃, ⌥, ⇧ or ⌘" };
+  return { shortcut: [...modifiers, key].join("+") };
+}
+
+// Only one field records at a time; arming another one cancels it.
+let activeRecorder = null;
 
 /** Shortcut fields record a chord instead of accepting typed text, so the
- * stored value can never drift from the format the backend registers. */
-function createShortcutRecorder(id, save, restore) {
+ * stored value can never drift from the format the backend registers.
+ *
+ * Keys are read at the window, not the button: WebKit on macOS doesn't focus a
+ * button when it is clicked, so listeners on the button would miss the chord. */
+function createShortcutRecorder(id, save, restore, validate = () => "") {
   const button = byId(id);
   let value = "";
   let recording = false;
+  let saving = false;
 
   const paint = (content, armed) => {
     if (typeof content === "string") button.textContent = content;
@@ -1021,41 +1107,87 @@ function createShortcutRecorder(id, save, restore) {
     button.setAttribute("aria-pressed", armed ? "true" : "false");
   };
 
+  const prompt = (hint) => paint(hint || "Type shortcut…", true);
+
+  const detach = () => {
+    window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("keyup", onKeyUp, true);
+    window.removeEventListener("blur", cancel);
+    document.removeEventListener("pointerdown", onPointerDown, true);
+    if (activeRecorder === cancel) activeRecorder = null;
+  };
+
   const rest = () => {
     const wasRecording = recording;
     recording = false;
+    saving = false;
+    detach();
     paint(value ? keycaps(value) : "Not set", false);
     // Hand the chords back to the system once the recorder is done with them.
     if (wasRecording) invoke("resume_global_shortcuts").catch(() => {});
   };
 
-  button.addEventListener("click", () => {
-    if (recording) return;
+  function cancel() {
+    if (recording && !saving) rest();
+  }
+
+  const arm = () => {
+    if (activeRecorder) activeRecorder();
     recording = true;
-    paint("Type shortcut…", true);
+    activeRecorder = cancel;
+    prompt();
+    button.focus({ preventScroll: true });
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    window.addEventListener("blur", cancel);
+    document.addEventListener("pointerdown", onPointerDown, true);
     // Samlu's own bindings step aside, or pressing the shortcut that is
     // already assigned would fire it instead of being recorded.
     invoke("suspend_global_shortcuts").catch(() => {});
-  });
-  button.addEventListener("blur", () => {
-    if (recording) rest();
-  });
-  button.addEventListener("keydown", async (event) => {
+  };
+
+  // Show held modifiers as they go down and up, so the user sees the chord
+  // forming before the final key lands.
+  const previewModifiers = (event) => {
+    const modifiers = heldModifiers(event);
+    if (modifiers.length) paint([...keycaps(modifiers.join("+")), document.createTextNode("…")], true);
+    else prompt();
+  };
+
+  function onPointerDown(event) {
+    if (!button.contains(event.target)) cancel();
+  }
+
+  function onKeyUp(event) {
+    if (!recording || saving) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (MODIFIER_KEYS.has(event.key)) previewModifiers(event);
+  }
+
+  async function onKeyDown(event) {
     if (!recording) return;
     // While armed every key belongs to the chord, including Tab and Space.
     event.preventDefault();
-    if (event.key === "Escape") {
+    event.stopPropagation();
+    if (saving || event.repeat || event.isComposing) return;
+    if (event.key === "Escape" && !heldModifiers(event).length) {
       rest();
       return;
     }
-    if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
-    const shortcut = shortcutFromEvent(event);
-    if (!shortcut) {
-      paint("Add a modifier", true);
+    if (MODIFIER_KEYS.has(event.key)) {
+      previewModifiers(event);
+      return;
+    }
+    const { shortcut, hint } = shortcutFromEvent(event);
+    const problem = hint || validate(shortcut);
+    if (problem) {
+      prompt(problem);
       return;
     }
     const previous = value;
     value = shortcut;
+    saving = true;
     // Show the chord at once, but stay armed until the save lands so the
     // rebind happens before the shortcuts are handed back.
     paint(keycaps(shortcut), false);
@@ -1068,7 +1200,13 @@ function createShortcutRecorder(id, save, restore) {
       toast(errorMessage(error), true);
       await restore();
     }
+  }
+
+  button.addEventListener("click", () => {
+    if (!recording) arm();
+    else cancel();
   });
+  button.addEventListener("blur", cancel);
 
   return {
     set(next) {
@@ -1676,6 +1814,8 @@ function bindEvents() {
       showSaved("voice-modes-saved");
     },
     loadVoiceSettings,
+    // ⇧ and ⌘ are added on top of the base chord for Summary and Prompt.
+    (hotkey) => (/(^|\+)(Shift|Cmd)(\+|$)/.test(hotkey) ? "Use ⌃ or ⌥ only" : ""),
   );
   [
     ["dictation", "voice-dictation-delivery"],
