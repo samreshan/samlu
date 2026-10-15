@@ -1,14 +1,123 @@
-:root,
-:root[data-theme="light"],
-:root[data-theme="dark"] {
-  color-scheme: dark;
+/* The island follows Samlu's appearance. Dark is the default; the light
+ * palette is written twice on purpose, once for the explicit "Light"
+ * preference and once for "System" on a light Mac. Plain CSS cannot alias a
+ * declaration block across a media query, so the two lists below MUST be
+ * edited together. */
+:root {
+  color-scheme: light dark;
   --island: rgba(16, 16, 14, 0.97);
   --island-raised: rgba(255, 255, 255, 0.075);
+  --island-raised-hover: rgba(255, 255, 255, 0.11);
   --island-line: rgba(255, 248, 219, 0.1);
   --island-ink: #fbf7e9;
   --island-secondary: #b9b39f;
   --island-muted: #777363;
   --island-brand: #f1d326;
+  --island-brand-hover: #f7db37;
+  --island-on-brand: #2b2505;
+  --island-glyph: #f1d326;
+  --island-glyph-bg: rgba(241, 211, 38, 0.11);
+  --island-glyph-line: rgba(241, 211, 38, 0.15);
+  --island-warn: #f0b66e;
+  --island-warn-bg: rgba(240, 182, 110, 0.12);
+  --island-warn-line: rgba(240, 182, 110, 0.2);
+  /* Buddy's mark has no tile of its own, so its glow is a little stronger:
+   * it is what lets the olive half of the mark read on near-black. */
+  --island-glow: rgba(241, 211, 38, 0.09);
+  --island-glow-buddy: rgba(241, 211, 38, 0.16);
+  --island-glow-warn: rgba(240, 182, 110, 0.14);
+  --island-shadow: 0 22px 58px rgba(0, 0, 0, 0.38), 0 4px 14px rgba(0, 0, 0, 0.2);
+  --island-track: rgba(255, 255, 255, 0.05);
+  --island-track-fill: rgba(241, 211, 38, 0.5);
+  --island-grabber: rgba(255, 255, 255, 0.18);
+  --island-confetti-1: #f1d326;
+  --island-confetti-2: #f7e7a1;
+  --island-confetti-3: #fbf7e9;
+  --island-spark: #f1d326;
+
+  /* A pool of light behind Buddy's mark; see .buddy::before. */
+  --island-mark-pool: rgba(251, 246, 228, 0.62);
+  --island-mark-pool-edge: rgba(251, 246, 228, 0.2);
+
+  /* A spring with a visible overshoot, for small playful things only. */
+  --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-strong-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-pop: linear(0, 0.0479, 0.1651, 0.3204, 0.4887, 0.6559, 0.7995, 0.9175, 1.0072, 1.0692, 1.1065, 1.1232, 1.124, 1.1133, 1.0959, 1.0753, 1.0543, 1.0349, 1.0182, 1.005, 0.9953, 0.9888, 0.9854, 0.9843, 0.9849, 0.9867, 0.9891, 0.9917, 0.9943, 0.9967, 0.9985, 1, 1);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --island: rgba(255, 253, 247, 0.94);
+  --island-raised: rgba(68, 57, 12, 0.06);
+  --island-raised-hover: rgba(68, 57, 12, 0.11);
+  --island-line: rgba(68, 57, 12, 0.1);
+  --island-ink: #29250f;
+  --island-secondary: #676044;
+  --island-muted: #a39c80;
+  --island-brand: #efd01d;
+  --island-brand-hover: #dfbe09;
+  --island-glyph: #44390c;
+  --island-glyph-bg: rgba(239, 208, 29, 0.26);
+  --island-glyph-line: rgba(201, 169, 0, 0.32);
+  --island-warn: #9a621b;
+  --island-warn-bg: rgba(154, 98, 27, 0.12);
+  --island-warn-line: rgba(154, 98, 27, 0.24);
+  --island-glow: rgba(239, 208, 29, 0.18);
+  --island-glow-buddy: rgba(239, 208, 29, 0.2);
+  --island-glow-warn: rgba(154, 98, 27, 0.1);
+  --island-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.7), 0 18px 48px rgba(61, 48, 4, 0.18), 0 4px 14px rgba(61, 48, 4, 0.08);
+  --island-track: rgba(68, 57, 12, 0.07);
+  --island-track-fill: rgba(201, 169, 0, 0.8);
+  --island-grabber: rgba(68, 57, 12, 0.22);
+  --island-confetti-1: #efd01d;
+  --island-confetti-2: #44390c;
+  --island-confetti-3: #c9a900;
+  --island-spark: #c9a900;
+  --island-mark-pool: transparent;
+  --island-mark-pool-edge: transparent;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --island: rgba(255, 253, 247, 0.94);
+    --island-raised: rgba(68, 57, 12, 0.06);
+    --island-raised-hover: rgba(68, 57, 12, 0.11);
+    --island-line: rgba(68, 57, 12, 0.1);
+    --island-ink: #29250f;
+    --island-secondary: #676044;
+    --island-muted: #a39c80;
+    --island-brand: #efd01d;
+    --island-brand-hover: #dfbe09;
+    --island-glyph: #44390c;
+    --island-glyph-bg: rgba(239, 208, 29, 0.26);
+    --island-glyph-line: rgba(201, 169, 0, 0.32);
+    --island-warn: #9a621b;
+    --island-warn-bg: rgba(154, 98, 27, 0.12);
+    --island-warn-line: rgba(154, 98, 27, 0.24);
+    --island-glow: rgba(239, 208, 29, 0.18);
+    --island-glow-buddy: rgba(239, 208, 29, 0.2);
+    --island-glow-warn: rgba(154, 98, 27, 0.1);
+    --island-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.7), 0 18px 48px rgba(61, 48, 4, 0.18), 0 4px 14px rgba(61, 48, 4, 0.08);
+    --island-track: rgba(68, 57, 12, 0.07);
+    --island-track-fill: rgba(201, 169, 0, 0.8);
+    --island-grabber: rgba(68, 57, 12, 0.22);
+    --island-confetti-1: #efd01d;
+    --island-confetti-2: #44390c;
+    --island-confetti-3: #c9a900;
+    --island-spark: #c9a900;
+    --island-mark-pool: transparent;
+    --island-mark-pool-edge: transparent;
+  }
 }
 
 html,
@@ -29,17 +138,18 @@ body {
 button {
   border: 0;
   cursor: pointer;
+  font: inherit;
 }
 
-/* Arrives out of the top edge and leaves the same way (never sideways, never
- * a plain fade) so the notch stays the place updates come from. */
+/* Arrivals and exits are played from island.js so each style can have its
+ * own; the stage only needs to stay invisible until the first one, so the
+ * placeholder copy never flashes when the window first appears. */
 .island-stage {
   transform-origin: 50% 0;
-  animation: descend 180ms var(--ease-out) both;
 }
 
-.island-stage[data-leaving="true"] {
-  animation: ascend var(--duration-exit) var(--ease-out) both;
+.island-stage:not([data-ready]) {
+  opacity: 0;
 }
 
 .island {
@@ -49,37 +159,65 @@ button {
   height: 130px;
   margin: 0 auto;
   color: var(--island-ink);
-  background:
-    radial-gradient(circle at 18% 10%, rgba(241, 211, 38, 0.08), transparent 34%),
-    var(--island);
-  border: 1px solid var(--island-line);
-  border-top: 0;
-  border-radius: 0 0 23px 23px;
-  box-shadow:
-    0 22px 58px rgba(0, 0, 0, 0.38),
-    0 4px 14px rgba(0, 0, 0, 0.2);
-  backdrop-filter: blur(28px) saturate(1.18);
-  -webkit-backdrop-filter: blur(28px) saturate(1.18);
   cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transform-origin: 50% 0;
   /* Owned by the drag gesture only — the stage above owns animation, so the
-   * two never contend for this property. */
-  transform: translateY(var(--drag-y, 0px));
+   * two never contend for this property. Bloom also narrows the island
+   * toward the notch as it is thrown back up. */
+  transform: translateY(var(--drag-y, 0px)) scaleX(var(--drag-squeeze, 1));
 }
 
 .island[data-dragging="true"] {
   cursor: grabbing;
 }
 
+.island-body {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  border: 1px solid var(--island-line);
+  border-top: 0;
+  border-radius: 0 0 23px 23px;
+  background:
+    radial-gradient(circle at 18% 10%, var(--island-glow), transparent 36%),
+    var(--island);
+  box-shadow: var(--island-shadow);
+  backdrop-filter: blur(28px) saturate(1.18);
+  -webkit-backdrop-filter: blur(28px) saturate(1.18);
+  transform-origin: 50% 0;
+}
+
+.island[data-style="bloom"] .island-body {
+  border-radius: 0 0 26px 26px;
+}
+
+.island[data-style="buddy"] .island-body {
+  background:
+    radial-gradient(circle at 12% 58%, var(--island-glow-buddy), transparent 38%),
+    var(--island);
+}
+
+.island[data-kind="needs_input"] .island-body {
+  background:
+    radial-gradient(circle at 11% 56%, var(--island-glow-warn), transparent 41%),
+    var(--island);
+}
+
 /* Faint handle at the lower edge: the only affordance saying "this can be
  * thrown back up". Fades in with the actions on hover. */
 .grabber {
   position: absolute;
-  bottom: 4px;
+  bottom: 3px;
   left: 50%;
   width: 34px;
   height: 3px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--island-grabber);
   opacity: 0;
   transform: translateX(-50%);
   transition: opacity var(--duration-fast) ease;
@@ -91,7 +229,8 @@ button {
 }
 
 /* Only drawn on displays that actually have a camera housing to hang from.
- * Centered on an external monitor it would just be an unexplained black tab. */
+ * Centered on an external monitor it would just be an unexplained black tab.
+ * It is hardware-coloured, so it stays black in the light theme too. */
 .camera-bridge {
   position: absolute;
   top: 0;
@@ -121,63 +260,306 @@ button {
 }
 
 .notification {
-  height: 126px;
+  position: relative;
+  height: 130px;
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  padding: 15px;
-  transition:
-    opacity 110ms ease,
-    transform 110ms var(--ease-out);
+  padding: 15px 16px;
+}
+
+.island[data-style="buddy"] .notification {
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  padding-left: 14px;
 }
 
 /* Only the camera bridge needs the extra top clearance. */
 .island[data-notch="true"] .notification {
-  padding-top: 21px;
+  padding-top: 24px;
 }
 
-/* A second update arriving while the island is still on screen swaps its
- * contents in place. Replaying the descend would mean re-entering something
- * that never left. */
-.notification[data-swapping="true"] {
-  opacity: 0;
-  transform: translateY(-4px);
-}
-
-.agent-mark {
+.agent-slot {
+  position: relative;
   width: 38px;
   height: 38px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(241, 211, 38, 0.12);
+}
+
+.island[data-style="buddy"] .agent-slot {
+  width: 44px;
+  height: 44px;
+}
+
+/* ---------------------------------------------------------------- bloom */
+
+.agent-mark {
+  position: relative;
+  z-index: 1;
+  width: 38px;
+  height: 38px;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--island-glyph-line);
   border-radius: 13px;
-  color: var(--island-brand);
-  background: rgba(241, 211, 38, 0.11);
-  font-size: 14px;
-  font-weight: 750;
-}
-
-.input-symbol,
-.turn-symbol {
-  display: none;
-}
-
-.island[data-kind="needs_input"] .completed-symbol,
-.island[data-kind="turn_finished"] .completed-symbol {
-  display: none;
-}
-
-.island[data-kind="needs_input"] .input-symbol,
-.island[data-kind="turn_finished"] .turn-symbol {
-  display: inline;
+  color: var(--island-glyph);
+  background: var(--island-glyph-bg);
+  transition: transform 320ms var(--ease-pop);
 }
 
 .island[data-kind="needs_input"] .agent-mark {
-  color: #f0b66e;
-  background: rgba(240, 182, 110, 0.12);
-  border-color: rgba(240, 182, 110, 0.14);
+  color: var(--island-warn);
+  background: var(--island-warn-bg);
+  border-color: var(--island-warn-line);
 }
+
+.glyph {
+  grid-area: 1 / 1;
+  display: none;
+}
+
+.glyph path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glyph-check path {
+  stroke-dasharray: 20;
+  stroke-dashoffset: 0;
+}
+
+.island[data-kind="completed"] .glyph-check,
+.island[data-kind="turn_finished"] .glyph-arrow {
+  display: block;
+}
+
+.island[data-kind="needs_input"] .glyph-dots {
+  display: flex;
+}
+
+.glyph-dots {
+  align-items: center;
+  gap: 3px;
+}
+
+.glyph-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: typing 1.3s ease-in-out infinite;
+}
+
+.glyph-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.glyph-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+/* Waiting can stay on screen for minutes, so its loop is a slow halo rather
+ * than anything that bounces. */
+.glyph-ring {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  bottom: -1px;
+  left: -1px;
+  border: 1.5px solid var(--island-warn);
+  border-radius: 13px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.island[data-kind="needs_input"] .glyph-ring {
+  animation: halo 2.4s var(--ease-strong-out) infinite;
+}
+
+.burst {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.confetti {
+  position: absolute;
+  opacity: 0;
+}
+
+.confetti.square {
+  top: -3px;
+  left: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--island-confetti-1);
+}
+
+.confetti.quarter {
+  top: -4px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 8px 0 0 0;
+  background: var(--island-confetti-2);
+}
+
+.confetti.dot {
+  top: -2px;
+  left: -2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--island-confetti-3);
+}
+
+/* ---------------------------------------------------------------- buddy */
+
+.buddy-lean,
+.buddy-halo,
+.buddy-ripple,
+.spark {
+  display: none;
+}
+
+.island[data-style="buddy"] .agent-mark,
+.island[data-style="buddy"] .burst {
+  display: none;
+}
+
+.island[data-style="buddy"] .buddy-lean {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.island[data-style="buddy"] .buddy-halo,
+.island[data-style="buddy"] .buddy-ripple,
+.island[data-style="buddy"] .spark {
+  display: block;
+}
+
+.buddy {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: transparent;
+  transition: transform 140ms var(--ease-strong-out);
+}
+
+/* The mark is never recoloured, and its olive half all but disappears on the
+ * near-black island. A soft, edgeless pool of light behind it (not a tile)
+ * gives the olive something to sit on. Light theme needs none. */
+.buddy::before {
+  content: "";
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  bottom: -8px;
+  left: -8px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    var(--island-mark-pool) 0%,
+    var(--island-mark-pool-edge) 46%,
+    transparent 70%
+  );
+  pointer-events: none;
+}
+
+.buddy-mark {
+  position: relative;
+}
+
+.buddy:active {
+  transform: scale(0.93);
+}
+
+.buddy:focus-visible {
+  outline: 2px solid var(--island-brand);
+  outline-offset: 2px;
+}
+
+.buddy-mark {
+  display: block;
+  width: 30px;
+  height: 30px;
+  overflow: visible;
+}
+
+.piece {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.piece.foot {
+  transform-origin: 50% 100%;
+}
+
+/* While it waits, only the small square moves: two taps, then a rest. */
+.island[data-style="buddy"][data-kind="needs_input"] .piece.foot {
+  animation: tap 2.6s ease-in-out infinite;
+}
+
+.buddy-halo,
+.buddy-ripple {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--island-warn);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.island[data-style="buddy"][data-kind="needs_input"] .buddy-halo {
+  animation: halo 2.6s var(--ease-strong-out) infinite;
+}
+
+.spark {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.spark path {
+  fill: var(--island-spark);
+}
+
+.spark-1 {
+  top: -5px;
+  left: -6px;
+}
+
+.spark-2 {
+  top: -8px;
+  left: 36px;
+}
+
+.spark-3 {
+  top: 26px;
+  left: 41px;
+}
+
+/* ----------------------------------------------------------------- copy */
 
 .notification-copy {
   min-width: 0;
@@ -213,7 +595,7 @@ button {
 
 .notification-copy p {
   display: -webkit-box;
-  max-width: 265px;
+  max-width: 262px;
   margin: 5px 0 0;
   overflow: hidden;
   color: var(--island-secondary);
@@ -223,64 +605,81 @@ button {
   -webkit-line-clamp: 2;
 }
 
+/* -------------------------------------------------------------- actions */
+
 .notification-actions {
   display: flex;
   align-items: center;
   gap: 5px;
-  opacity: 0;
-  transform: translateX(3px);
-  transition:
-    opacity var(--duration-fast) ease,
-    transform var(--duration-fast) var(--ease-out);
 }
 
-.island:hover .notification-actions,
-.island:focus-within .notification-actions,
-.island[data-kind="needs_input"] .notification-actions {
+.notification-actions button {
+  opacity: 0;
+  transform: translateX(4px);
+  transition:
+    opacity var(--duration-fast) ease,
+    transform 260ms var(--ease-strong-out),
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.notification-actions button:nth-child(2) {
+  transition-delay: 40ms, 40ms, 0ms, 0ms;
+}
+
+.island:hover .notification-actions button,
+.island:focus-within .notification-actions button,
+.island[data-kind="needs_input"] .notification-actions button {
   opacity: 1;
-  transform: translateX(0);
+  transform: none;
 }
 
 .icon-button,
 .open-button {
   height: 28px;
   border-radius: 9px;
-  color: var(--island-secondary);
-  background: var(--island-raised);
   font-size: 11.5px;
   font-weight: 600;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    transform var(--duration-instant) ease;
 }
 
 .icon-button {
   width: 28px;
-  font-size: 18px;
-  font-weight: 300;
+  display: grid;
+  place-items: center;
+  color: var(--island-secondary);
+  background: var(--island-raised);
+}
+
+.icon-button path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
 }
 
 .open-button {
-  padding: 0 10px;
-  color: #2b2505;
+  padding: 0 11px;
+  color: var(--island-on-brand);
   background: var(--island-brand);
 }
 
-.icon-button:active,
-.open-button:active {
+.island .notification-actions .icon-button:active,
+.island .notification-actions .open-button:active {
   transform: scale(0.96);
+  transition-duration: var(--duration-instant);
 }
+
+/* ------------------------------------------------------------- lifetime */
 
 .timeout-track {
   position: absolute;
-  right: 22px;
+  right: 24px;
   bottom: 7px;
-  left: 22px;
-  height: 1px;
+  left: 24px;
+  height: 1.5px;
   overflow: hidden;
   border-radius: 1px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--island-track);
 }
 
 .timeout-track::after {
@@ -288,7 +687,7 @@ button {
   display: block;
   width: 100%;
   height: 100%;
-  background: rgba(241, 211, 38, 0.42);
+  background: var(--island-track-fill);
   transform-origin: left;
   animation: timeout var(--timeout, 7s) linear both;
   animation-play-state: var(--timeout-play-state, running);
@@ -298,48 +697,79 @@ button {
   display: none;
 }
 
-@keyframes descend {
-  from {
-    opacity: 0;
-    transform: translateY(-8px) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-/* Retraces descend rather than fading out where it stands. */
-@keyframes ascend {
-  from {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(-14px) scale(0.985);
-  }
-}
-
 @keyframes timeout {
   to { transform: scaleX(0); }
 }
 
+@keyframes typing {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+
+@keyframes halo {
+  0% { transform: scale(1); opacity: 0.5; }
+  70%, 100% { transform: scale(1.42); opacity: 0; }
+}
+
+@keyframes tap {
+  0%, 42%, 100% { transform: none; }
+  7% { transform: translateY(-34px); }
+  14% { transform: scale(1.12, 0.88); }
+  20% { transform: translateY(-20px); }
+  27% { transform: scale(1.08, 0.92); }
+  33% { transform: none; }
+}
+
 @media (prefers-reduced-transparency: reduce) {
-  .island {
+  .island-body {
     background: #10100e;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
+
+  :root[data-theme="light"] .island-body {
+    background: #fffdf7;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .island-body {
+    background: #fffdf7;
+  }
+}
+
+/* Reduce Motion keeps state legible (colour, glyphs, the halo's place) and
+ * drops every loop and spring. */
+@media (prefers-reduced-motion: reduce) {
+  .glyph-dots i,
+  .glyph-ring,
+  .buddy-halo,
+  .piece.foot {
+    animation: none;
+  }
+
+  .island[data-kind="needs_input"] .glyph-ring,
+  .island[data-style="buddy"][data-kind="needs_input"] .buddy-halo {
+    opacity: 0.5;
+  }
+
+  .agent-mark,
+  .notification-actions button {
+    transition-property: opacity, background, color;
+  }
 }
 
 @media (hover: hover) and (pointer: fine) {
+  .island:hover .agent-mark {
+    transform: rotate(-7deg) scale(1.07);
+  }
+
   .icon-button:hover {
     color: var(--island-ink);
-    background: rgba(255, 255, 255, 0.11);
+    background: var(--island-raised-hover);
   }
 
   .open-button:hover {
-    background: #f7db37;
+    background: var(--island-brand-hover);
   }
 }

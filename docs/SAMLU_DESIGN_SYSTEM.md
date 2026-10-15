@@ -51,16 +51,20 @@ The interface should feel calm, personable, and immediate. It should use macOS c
 - The Samlu Island provides immediate, contextual feedback and does not replace the native notification record.
 - Agent summaries are configurable.
 - Notification payload content remains encrypted.
+- The island has two styles, chosen in Settings › Agents. Bloom is the default.
+  - **Bloom** grows out of the camera housing on a spring with a small overshoot, brings its content into focus piece by piece, and draws back into the housing when it leaves. A completed task gets a self-drawing check and a short burst of confetti in the mark's own shapes.
+  - **Buddy** makes the Samlu mark the character. Its pieces snap together on arrival; it hops for a completed task, knocks and then taps its small square while an agent waits, and nods for a finished turn. It leans toward the pointer while the pointer is over the island, and clicking it boops it.
+- Motion follows how often an event happens. Finished turns, which arrive all day, get the least: no confetti, no assembly. Waiting stays on screen for minutes, so its loops are slow (a halo, a tap every few seconds) rather than anything that bounces. A second update while the island is showing swaps in place and never replays a celebration.
 
 ### Visual direction
 
 - The selected direction is **Soft Presence**.
 - The appearance selector provides System, Light, and Dark.
 - System is the default and follows the macOS appearance.
-- The visual system should feel warm and personable without becoming playful, toy-like, or visually noisy.
+- The visual system should feel warm and personable. Playfulness is reserved for the Samlu Island, where agent updates arrive a few times an hour at most; everything used many times a day (launcher, voice capsule, Settings) stays quiet.
 - Translucent materials are reserved primarily for floating surfaces.
 - State must never be communicated by color alone.
-- Samlu's character on presence surfaces is the **breath bead**: a small yellow bead with a breathing halo (`.samlu-bead` in `presence.css`). The flying mascot and its pointer-delivered cards are retired.
+- Samlu's character on presence surfaces is the **breath bead**: a small yellow bead with a breathing halo (`.samlu-bead` in `presence.css`). On the island, in the Buddy style, the character is the Samlu mark itself, animated piece by piece but never recoloured. The flying mascot and its pointer-delivered cards are retired.
 - Every `<select>` is drawn by `samlu-select.js` as a Samlu dropdown or, with `data-variant="segmented"`, a segmented control. Native select chrome never shows.
 
 ## Interaction architecture
@@ -268,7 +272,7 @@ The foundation is:
 - System follows the macOS appearance and is the default.
 - Light uses warm ivory canvas and raised soft-white surfaces.
 - Dark uses warm charcoal rather than pure black.
-- The Samlu Island remains near-black in either appearance so it relates visually to the camera housing.
+- The Samlu Island follows the appearance too: near-black in Dark, warm ivory in Light. The camera bridge stays black in both, since it stands in for hardware. On the near-black island a soft pool of light sits behind Buddy's mark so its olive half stays visible; the mark's colours never change.
 
 ### Core brand tokens
 

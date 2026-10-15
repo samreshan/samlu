@@ -20,6 +20,8 @@ struct Data {
     /// choice, and derived from `show_agent_island` then. Configs from the pet
     /// era may still hold `pet`; it now reads as `island`.
     delivery: Option<String>,
+    /// How the Samlu Island presents an update: `bloom` | `buddy`.
+    island_style: String,
     clipboard_history_enabled: bool,
     onboarding_completed: bool,
     /// `background` keeps shortcuts and agent notifications active after
@@ -38,6 +40,21 @@ struct Data {
 const LEGACY_DELIVERY_PET: &str = "pet";
 pub const DELIVERY_ISLAND: &str = "island";
 pub const DELIVERY_SYSTEM: &str = "system";
+
+pub const ISLAND_STYLE_BLOOM: &str = "bloom";
+pub const ISLAND_STYLE_BUDDY: &str = "buddy";
+
+fn normalize_island_style(value: &str) -> Option<&'static str> {
+    match value {
+        ISLAND_STYLE_BLOOM => Some(ISLAND_STYLE_BLOOM),
+        ISLAND_STYLE_BUDDY => Some(ISLAND_STYLE_BUDDY),
+        _ => None,
+    }
+}
+
+fn default_island_style() -> String {
+    ISLAND_STYLE_BLOOM.to_string()
+}
 
 fn normalize_delivery(value: &str) -> Option<&'static str> {
     match value {
@@ -60,6 +77,7 @@ impl Default for Data {
             include_agent_summary: true,
             show_agent_island: true,
             delivery: None,
+            island_style: default_island_style(),
             clipboard_history_enabled: false,
             onboarding_completed: false,
             close_behavior: "background".to_string(),
@@ -79,6 +97,10 @@ pub struct NotificationPreferences {
     pub notify_turn_finished: bool,
     pub include_agent_summary: bool,
     pub delivery: String,
+    /// Defaulted so a Settings page from before the choice existed can still
+    /// save the rest of its preferences.
+    #[serde(default = "default_island_style")]
+    pub island_style: String,
     pub clipboard_history_enabled: bool,
     pub close_behavior: String,
 }
@@ -182,6 +204,11 @@ impl AppConfig {
         Ok(())
     }
 
+    pub fn island_style(&self) -> &'static str {
+        normalize_island_style(&self.data.lock().unwrap().island_style)
+            .unwrap_or(ISLAND_STYLE_BLOOM)
+    }
+
     pub fn update_auto_check(&self) -> bool {
         self.data.lock().unwrap().update_auto_check
     }
@@ -225,6 +252,9 @@ impl AppConfig {
                 .and_then(normalize_delivery)
                 .unwrap_or(DELIVERY_ISLAND)
                 .to_string(),
+            island_style: normalize_island_style(&data.island_style)
+                .unwrap_or(ISLAND_STYLE_BLOOM)
+                .to_string(),
             clipboard_history_enabled: data.clipboard_history_enabled,
             close_behavior: match data.close_behavior.as_str() {
                 "quit" => "quit".to_string(),
@@ -244,6 +274,9 @@ impl AppConfig {
             if let Some(delivery) = normalize_delivery(&preferences.delivery) {
                 data.delivery = Some(delivery.to_string());
                 data.show_agent_island = delivery == DELIVERY_ISLAND;
+            }
+            if let Some(style) = normalize_island_style(&preferences.island_style) {
+                data.island_style = style.to_string();
             }
             data.clipboard_history_enabled = preferences.clipboard_history_enabled;
             data.close_behavior = match preferences.close_behavior.as_str() {
@@ -311,5 +344,26 @@ pub fn apply_window_theme(app: &tauri::AppHandle, appearance: &str) {
     };
     for window in app.webview_windows().values() {
         let _ = window.set_theme(theme);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_island_style, NotificationPreferences, ISLAND_STYLE_BLOOM};
+
+    #[test]
+    fn island_style_accepts_only_known_styles() {
+        assert_eq!(normalize_island_style("bloom"), Some("bloom"));
+        assert_eq!(normalize_island_style("buddy"), Some("buddy"));
+        assert_eq!(normalize_island_style("ticket"), None);
+    }
+
+    #[test]
+    fn preferences_without_island_style_still_parse() {
+        let json = r#"{"debounceSecs":20,"notifyNeedsInput":true,"notifyTaskCompleted":true,
+            "notifyTurnFinished":false,"includeAgentSummary":true,"delivery":"island",
+            "clipboardHistoryEnabled":false,"closeBehavior":"background"}"#;
+        let prefs: NotificationPreferences = serde_json::from_str(json).unwrap();
+        assert_eq!(prefs.island_style, ISLAND_STYLE_BLOOM);
     }
 }

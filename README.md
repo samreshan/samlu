@@ -163,6 +163,10 @@ replace itself silently, it waits for you to choose Install.
 - Hook authentication persists across Samlu restarts.
 - Native macOS notification triggers, summary content, and turn debounce are
   configurable.
+- Updates can also appear on the Samlu Island at the top of the screen, in one
+  of two styles chosen in Settings › Agents: Bloom (grows out of the notch) or
+  Buddy (the Samlu mark comes along and reacts). It follows the System, Light
+  or Dark appearance.
 - Recent normalized agent events are stored locally for the status view.
 - Existing Claude and Codex configuration is preserved and backed up before
   Samlu writes a merged configuration.

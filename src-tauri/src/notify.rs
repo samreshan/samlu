@@ -26,6 +26,8 @@ struct IslandPayload {
     summary: String,
     persistent: bool,
     has_notch: bool,
+    /// `bloom` | `buddy`, the presentation chosen in Settings.
+    style: &'static str,
 }
 
 pub struct IslandState {
@@ -184,6 +186,7 @@ fn show_island_update(app: &AppHandle, event: &AgentEvent, summary: String) {
         summary,
         persistent: event.kind == AgentEventKind::NeedsInput,
         has_notch: crate::macos::active_display_has_notch(),
+        style: app.state::<Arc<AppConfig>>().island_style(),
     };
     crate::macos::order_front_without_activating(&window);
     if let Some(state) = app.try_state::<Arc<IslandState>>() {
