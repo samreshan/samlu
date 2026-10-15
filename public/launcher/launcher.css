@@ -7,7 +7,8 @@
  * Motion, by frequency of use: the panel opens and closes many times a day,
  * so both are short and soft, and typing works from the first frame. Moving
  * the selection and swapping results happen on every keystroke, so they do
- * not animate at all. */
+ * not animate at all, and neither does switching to a project's actions or a
+ * task's output: only the panel's height springs. */
 
 :root {
   --panel-width: 600px;
@@ -71,6 +72,12 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* `hidden` always wins, even over the display an element sets for itself
+ * (the legend, its `?` hint, the task view). */
+[hidden] {
+  display: none !important;
 }
 
 html,
@@ -200,10 +207,49 @@ body {
   box-shadow: none;
 }
 
+/* The task view puts the task's title here, read-only. */
+.query[readonly] {
+  caret-color: transparent;
+  cursor: default;
+}
+
+/* The project the action panel and the task view are about. */
+.scope {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 220px;
+  height: 24px;
+  padding: 0 9px;
+  overflow: hidden;
+  border-radius: 7px;
+  background: var(--key-bg);
+  color: var(--ink-secondary);
+  font: 500 12.5px/24px var(--samlu-font);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hotkey {
   flex: none;
   display: inline-flex;
   gap: 3px;
+}
+
+/* Why the last action didn't work, until the next keystroke. The words say
+ * it; the tint only marks it as a problem. */
+.notice {
+  flex: none;
+  margin: 0;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--danger-soft);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.notice:empty {
+  display: none;
 }
 
 /* ------------------------------------------------------------------- list */
@@ -215,11 +261,13 @@ body {
   overscroll-behavior: contain;
 }
 
-.body::-webkit-scrollbar {
+.body::-webkit-scrollbar,
+.task-log::-webkit-scrollbar {
   width: 10px;
 }
 
-.body::-webkit-scrollbar-thumb {
+.body::-webkit-scrollbar-thumb,
+.task-log::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 6px;
   background: var(--line-strong);
@@ -338,6 +386,51 @@ body {
   font-size: 11.5px;
 }
 
+/* The keys bound to a project action, one group per chord. */
+.result-keys {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.result-keys span {
+  display: inline-flex;
+  gap: 3px;
+}
+
+/* A task's status is a word; the dot repeats it in colour and in shape. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ink-muted);
+}
+
+.status[data-status="running"] .status-dot {
+  background: var(--brand);
+  box-shadow: 0 0 0 1px var(--brand-pressed) inset;
+}
+
+.status[data-status="succeeded"] .status-dot {
+  background: var(--success);
+}
+
+.status[data-status="failed"] .status-dot {
+  background: var(--danger);
+}
+
+/* Stopped is an empty ring: nothing is running any more. */
+.status[data-status="stopped"] .status-dot {
+  background: transparent;
+  box-shadow: 0 0 0 1.5px var(--ink-muted) inset;
+}
+
 .result[data-kind="calculation"] .result-title {
   font: 600 15px/1 var(--samlu-mono);
   font-variant-numeric: tabular-nums;
@@ -361,6 +454,108 @@ body {
   line-height: 1.45;
 }
 
+/* ------------------------------------------------------------------- task */
+
+/* One task fills the panel: its status, the links it printed, then its
+ * output, which scrolls on its own and follows the end. */
+.task {
+  height: 100%;
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task-head {
+  flex: none;
+  min-width: 0;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.task-status {
+  flex: none;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.task-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* At most two rows of links; Return opens the first. */
+.task-links {
+  flex: none;
+  max-height: 56px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.task-link {
+  max-width: 100%;
+  height: 25px;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-solid);
+  color: var(--ink);
+  font: 500 11.5px/23px var(--samlu-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.task-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: calc(var(--panel-radius) - 6px);
+  background: var(--tile-bg);
+  color: var(--ink-secondary);
+  font: 400 11.5px/1.5 var(--samlu-mono);
+}
+
+.task-log:empty::before {
+  content: attr(data-empty);
+  color: var(--ink-muted);
+  font-family: var(--samlu-font);
+}
+
+.log-line {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* The runner starts each step with a "▸ title" line. */
+.log-line.step {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.log-line.step:not(:first-child) {
+  margin-top: 6px;
+}
+
+/* Like the rows, a link answers the pointer at once. */
+@media (hover: hover) and (pointer: fine) {
+  .task-link:hover {
+    border-color: var(--brand);
+  }
+}
+
 /* ----------------------------------------------------------------- footer */
 
 .bar {
@@ -378,26 +573,42 @@ body {
   white-space: nowrap;
 }
 
+/* One line. A hint that doesn't fit beside the action wraps whole onto a
+ * second line, which is never shown, rather than being cut in half. */
 .legend {
+  height: 18px;
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   overflow: hidden;
 }
 
 .legend span,
-.action {
+.action,
+.hint {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
+/* What Return does comes first; whatever else the view offers follows,
+ * quieter. It stays on the right when the panel and task views hide the
+ * legend. */
 .action {
+  margin-left: auto;
+  gap: 14px;
   color: var(--ink-secondary);
   font-weight: 500;
 }
 
+.hint.quiet {
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+
 .bar kbd,
-.hotkey kbd {
+.hotkey kbd,
+.result-kind kbd {
   min-width: 18px;
   height: 18px;
   padding: 0 5px;

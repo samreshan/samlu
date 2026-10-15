@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light dark" />
     <title>Samlu Launcher</title>
     <link rel="stylesheet" href="../presence.css" />
-    <link rel="stylesheet" href="./launcher.css?v=4" />
+    <link rel="stylesheet" href="./launcher.css?v=5" />
   </head>
   <body>
     <!-- The window is fixed-size and transparent; the panel inside it grows
@@ -27,6 +27,8 @@
               </g>
             </svg>
           </span>
+          <!-- The project the action panel and the task view are about. -->
+          <span id="scope" class="scope" hidden></span>
           <input
             id="query"
             class="query"
@@ -42,21 +44,31 @@
           />
           <span class="hotkey" id="hotkey" aria-hidden="true"></span>
         </div>
+        <p id="notice" class="notice" role="status"></p>
         <div class="body" id="body">
           <ul id="results" class="results" role="listbox" aria-label="Results"></ul>
+          <section id="task" class="task" aria-label="Task" hidden>
+            <div class="task-head">
+              <span id="task-status" class="task-status" aria-live="polite"></span>
+              <span id="task-meta" class="task-meta"></span>
+            </div>
+            <div id="task-links" class="task-links" aria-label="Links" hidden></div>
+            <div id="task-log" class="task-log" role="log" aria-label="Output" aria-live="off"></div>
+          </section>
         </div>
         <footer class="bar">
-          <span class="legend" aria-label="Search prefixes">
+          <span class="legend" id="legend" aria-label="Search prefixes">
             <span><kbd>=</kbd>Calculate</span>
             <span><kbd>;</kbd>Snippets</span>
             <span><kbd>@</kbd>Clipboard</span>
             <span><kbd>&gt;</kbd>Commands</span>
             <span id="legend-describe" hidden><kbd>?</kbd>Describe</span>
+            <span><kbd>!</kbd>Tasks</span>
           </span>
           <span class="action" id="action" aria-live="polite"></span>
         </footer>
       </div>
     </div>
-    <script src="./launcher.js?v=4"></script>
+    <script src="./launcher.js?v=5"></script>
   </body>
 </html>
