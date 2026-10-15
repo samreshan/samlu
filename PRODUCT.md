@@ -13,7 +13,9 @@ The current release has three surfaces:
    expressions, snippets, clipboard history, commands, and screen colors,
    with Descriptive Find as an optional add-on that searches inside files by
    description (portable Rust, built to run on macOS and Windows).
-3. Configurable native macOS notifications for agent input and completion.
+3. Configurable native macOS notifications for agent input and completion,
+   with a playful Samlu Island in two styles (Bloom and Buddy) that follows
+   the System, Light or Dark appearance.
 
 ## Deferred work
 
@@ -21,11 +23,11 @@ The current release has three surfaces:
 - Full Spotlight replacement behavior
 - iPhone companion app
 - Hosted APNs relay
-- New Samlu mascot and contextual character feedback
+- Contextual character feedback beyond the island (voice, launcher search)
 
-The old mascot is removed from the app runtime. A future mascot will be a new
-design and may appear contextually during voice, launcher search, or
-notification delivery.
+The old mascot is removed from the app runtime. On the island, the Buddy style
+now uses the Samlu mark itself as the character. Character feedback anywhere
+else is still deferred.
 
 ## Product principles
 

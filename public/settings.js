@@ -237,8 +237,23 @@ function renderPrefs() {
   byId("notify-turn-finished").checked = prefs.notifyTurnFinished;
   byId("include-agent-summary").checked = prefs.includeAgentSummary;
   byId("agent-delivery").value = prefs.delivery || "island";
+  byId("island-style").value = prefs.islandStyle || "bloom";
+  syncIslandStyleRow();
   byId("notification-debounce").value = prefs.debounceSecs;
   byId("clipboard-history-enabled").checked = prefs.clipboardHistoryEnabled;
+}
+
+const ISLAND_STYLE_DETAIL = {
+  bloom: "Grows out of the notch and settles with a little wobble.",
+  buddy: "The Samlu mark comes along: it hops, taps and leans toward you.",
+};
+
+/** The style only matters while updates go to the island, so its row hides
+ * when they go to Notification Center instead. */
+function syncIslandStyleRow() {
+  byId("island-style-row").hidden = byId("agent-delivery").value !== "island";
+  byId("island-style-detail").textContent =
+    ISLAND_STYLE_DETAIL[byId("island-style").value] || ISLAND_STYLE_DETAIL.bloom;
 }
 
 function readPrefs() {
@@ -250,6 +265,7 @@ function readPrefs() {
     notifyTurnFinished: byId("notify-turn-finished").checked,
     includeAgentSummary: byId("include-agent-summary").checked,
     delivery: byId("agent-delivery").value,
+    islandStyle: byId("island-style").value,
     clipboardHistoryEnabled: byId("clipboard-history-enabled").checked,
     closeBehavior: byId("keep-running").checked ? "background" : "quit",
   };
@@ -1591,8 +1607,10 @@ function bindEvents() {
     "notify-turn-finished",
     "include-agent-summary",
     "agent-delivery",
+    "island-style",
     "notification-debounce",
   ].forEach((id) => byId(id).addEventListener("change", () => queuePrefsSave("notifications-saved")));
+  ["agent-delivery", "island-style"].forEach((id) => byId(id).addEventListener("change", syncIslandStyleRow));
   byId("test-agent-notification").addEventListener("click", async (event) => {
     try {
       await runButton(event.currentTarget, "Sending…", () => invoke("test_agent_notification"));

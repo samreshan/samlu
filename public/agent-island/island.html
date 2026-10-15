@@ -3,27 +3,78 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <title>Samlu Agent Update</title>
     <link rel="stylesheet" href="../presence.css" />
     <link rel="stylesheet" href="./island.css" />
   </head>
   <body>
     <!-- The stage owns the arrive/leave animation; the island itself owns the
-         drag offset, so a gesture never fights an animation for `transform`. -->
-    <div class="island-stage" id="stage" data-motion="surface">
-      <main class="island" id="island" data-kind="completed" data-notch="false" aria-live="polite">
+         drag offset, so a gesture never fights an animation for `transform`.
+         The body is a separate layer so Bloom can grow it out of the notch
+         without stretching the text. -->
+    <div class="island-stage" id="stage">
+      <main
+        class="island"
+        id="island"
+        data-kind="completed"
+        data-style="bloom"
+        data-notch="false"
+        aria-live="polite"
+      >
+        <div class="island-body" id="island-body" aria-hidden="true"></div>
         <div class="camera-bridge" aria-hidden="true">
           <span class="camera-dot"></span>
         </div>
         <section class="notification" id="notification">
-          <div class="agent-mark" aria-hidden="true">
-            <span class="completed-symbol">✓</span>
-            <span class="input-symbol">···</span>
-            <span class="turn-symbol">↗</span>
+          <div class="agent-slot" id="agent-slot">
+            <!-- Bloom: a glyph tile that pops, with confetti on completion. -->
+            <div class="burst" id="burst" aria-hidden="true">
+              <span class="confetti square"></span><span class="confetti quarter"></span>
+              <span class="confetti dot"></span><span class="confetti square"></span>
+              <span class="confetti quarter"></span><span class="confetti dot"></span>
+              <span class="confetti square"></span><span class="confetti quarter"></span>
+              <span class="confetti dot"></span><span class="confetti square"></span>
+            </div>
+            <div class="agent-mark" id="glyph" aria-hidden="true">
+              <svg class="glyph glyph-check" width="20" height="20" viewBox="0 0 20 20">
+                <path id="check-path" d="M5 10.5l3.2 3.2L15 7" />
+              </svg>
+              <span class="glyph glyph-dots"><i></i><i></i><i></i></span>
+              <svg class="glyph glyph-arrow" id="glyph-arrow" width="20" height="20" viewBox="0 0 20 20">
+                <path d="M6.5 13.5L13.5 6.5M8 6.5h5.5V12" />
+              </svg>
+              <span class="glyph-ring"></span>
+            </div>
+
+            <!-- Buddy: the Samlu mark itself is the character. Its colours are
+                 fixed in every theme. -->
+            <span class="buddy-halo" aria-hidden="true"></span>
+            <span class="buddy-ripple" aria-hidden="true"></span>
+            <span class="buddy-ripple" aria-hidden="true"></span>
+            <div class="buddy-lean" id="buddy-lean">
+              <button class="buddy" id="buddy" type="button" aria-label="Boop Samlu">
+                <svg class="buddy-mark" id="buddy-mark" viewBox="0 0 240 240" aria-hidden="true">
+                  <path id="piece-qa" class="piece samlu-mark-ink" d="M144,0h0v96H48C48,43.02,91.02,0,144,0Z" />
+                  <rect id="piece-sqb" class="piece samlu-mark-brand" x="143.5" y=".5" width="96" height="96" />
+                  <rect id="piece-sqa" class="piece samlu-mark-brand" x="48" y="96" width="96" height="96" />
+                  <path id="piece-qb" class="piece samlu-mark-ink" d="M143,96h96c0,52.98-43.02,96-96,96h0v-96h0Z" />
+                  <rect id="piece-foot" class="piece foot samlu-mark-brand" x="0" y="192.5" width="48.5" height="47.5" />
+                </svg>
+              </button>
+            </div>
+            <span class="spark spark-1" aria-hidden="true">
+              <svg width="11" height="11" viewBox="0 0 12 12"><path d="M6 0L7.3 4.7L12 6L7.3 7.3L6 12L4.7 7.3L0 6L4.7 4.7Z" /></svg>
+            </span>
+            <span class="spark spark-2" aria-hidden="true">
+              <svg width="9" height="9" viewBox="0 0 12 12"><path d="M6 0L7.3 4.7L12 6L7.3 7.3L6 12L4.7 7.3L0 6L4.7 4.7Z" /></svg>
+            </span>
+            <span class="spark spark-3" aria-hidden="true">
+              <svg width="7" height="7" viewBox="0 0 12 12"><path d="M6 0L7.3 4.7L12 6L7.3 7.3L6 12L4.7 7.3L0 6L4.7 4.7Z" /></svg>
+            </span>
           </div>
-          <div class="notification-copy">
-            <div class="meta">
+          <div class="notification-copy" id="copy">
+            <div class="meta" id="meta">
               <strong id="title">Task completed</strong>
               <span id="agent">Codex</span>
               <span class="separator" aria-hidden="true">·</span>
@@ -31,8 +82,10 @@
             </div>
             <p id="summary">The agent finished its task.</p>
           </div>
-          <div class="notification-actions">
-            <button id="dismiss" class="icon-button" type="button" aria-label="Dismiss">×</button>
+          <div class="notification-actions" id="actions">
+            <button id="dismiss" class="icon-button" type="button" aria-label="Dismiss">
+              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" /></svg>
+            </button>
             <button id="open" class="open-button" type="button">View</button>
           </div>
         </section>
