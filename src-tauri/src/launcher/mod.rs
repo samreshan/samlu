@@ -295,6 +295,9 @@ pub fn register_hotkey(app: &AppHandle, hotkey: &str) -> Result<(), String> {
     // A rebind can happen with the old chord still physically held down; the
     // release for it will never arrive at the new registration.
     LAUNCHER_SHORTCUT_DOWN.store(false, Ordering::Release);
+    if crate::modifier_shortcuts::modifier_mask(hotkey).is_some() {
+        return crate::modifier_shortcuts::bind_launcher(app, hotkey);
+    }
     app.global_shortcut()
         .on_shortcut(hotkey, |app_handle, _shortcut, event| match event.state() {
             ShortcutState::Pressed if !LAUNCHER_SHORTCUT_DOWN.swap(true, Ordering::AcqRel) => {
@@ -329,7 +332,11 @@ pub fn set_launcher_hotkey(
 
     let previous = config.hotkey();
     LAUNCHER_SHORTCUT_DOWN.store(false, Ordering::Release);
-    let _ = app.global_shortcut().unregister(previous.as_str());
+    if crate::modifier_shortcuts::modifier_mask(&previous).is_some() {
+        crate::modifier_shortcuts::unbind_launcher();
+    } else {
+        let _ = app.global_shortcut().unregister(previous.as_str());
+    }
 
     if let Err(err) = register_hotkey(&app, &hotkey) {
         let _ = register_hotkey(&app, &previous);

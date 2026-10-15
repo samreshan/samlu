@@ -1014,6 +1014,8 @@ function keycaps(shortcut) {
 
 function addShortcutModifier(shortcut, modifier) {
   const parts = shortcut.split("+").map((part) => part.trim()).filter(Boolean);
+  // A chord made only of modifiers has no key to keep last.
+  if (parts.length && parts.every(isModifierName)) return [...parts, modifier].join("+");
   const key = parts.pop() || "V";
   return [...parts, modifier, key].join("+");
 }
@@ -1039,6 +1041,8 @@ const SHORTCUT_MODIFIERS = [
   ["shiftKey", "Shift"],
   ["metaKey", "Cmd"],
 ];
+
+const isModifierName = (part) => SHORTCUT_MODIFIERS.some(([, name]) => name === part);
 
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "OS", "Fn", "FnLock", "CapsLock", "Hyper", "Super"]);
 
@@ -1115,6 +1119,11 @@ function createShortcutRecorder(id, save, restore, validate = () => "") {
   let value = "";
   let recording = false;
   let saving = false;
+  // The modifiers held at the last change, and whether a regular key landed
+  // while they were down: letting go of two or more modifiers on their own
+  // records a modifier-only chord such as ⌃⌥.
+  let chordModifiers = [];
+  let keyLanded = false;
 
   const paint = (content, armed) => {
     if (typeof content === "string") button.textContent = content;
@@ -1137,6 +1146,8 @@ function createShortcutRecorder(id, save, restore, validate = () => "") {
     const wasRecording = recording;
     recording = false;
     saving = false;
+    chordModifiers = [];
+    keyLanded = false;
     detach();
     paint(value ? keycaps(value) : "Not set", false);
     // Hand the chords back to the system once the recorder is done with them.
@@ -1178,7 +1189,21 @@ function createShortcutRecorder(id, save, restore, validate = () => "") {
     if (!recording || saving) return;
     event.preventDefault();
     event.stopPropagation();
-    if (MODIFIER_KEYS.has(event.key)) previewModifiers(event);
+    if (!MODIFIER_KEYS.has(event.key)) return;
+    // The first modifier to come up ends a chord that never got a key.
+    const released = chordModifiers;
+    const clean = !keyLanded;
+    chordModifiers = heldModifiers(event);
+    if (!chordModifiers.length) keyLanded = false;
+    if (clean && released.length >= 2) {
+      commit(released.join("+"));
+      return;
+    }
+    if (clean && released.length === 1 && !chordModifiers.length) {
+      prompt("Hold two modifiers or add a key");
+      return;
+    }
+    previewModifiers(event);
   }
 
   async function onKeyDown(event) {
@@ -1192,10 +1217,16 @@ function createShortcutRecorder(id, save, restore, validate = () => "") {
       return;
     }
     if (MODIFIER_KEYS.has(event.key)) {
+      chordModifiers = heldModifiers(event);
       previewModifiers(event);
       return;
     }
+    keyLanded = true;
     const { shortcut, hint } = shortcutFromEvent(event);
+    await commit(shortcut, hint);
+  }
+
+  async function commit(shortcut, hint) {
     const problem = hint || validate(shortcut);
     if (problem) {
       prompt(problem);

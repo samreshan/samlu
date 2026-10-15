@@ -3,6 +3,7 @@ mod events;
 mod launcher;
 mod lifecycle;
 mod macos;
+mod modifier_shortcuts;
 mod notify;
 mod onboarding;
 mod server;
@@ -31,6 +32,8 @@ static BACKGROUND_CLOSE_GENERATION: AtomicU64 = AtomicU64::new(0);
 #[tauri::command]
 fn suspend_global_shortcuts(app: tauri::AppHandle) {
     let _ = app.global_shortcut().unregister_all();
+    modifier_shortcuts::unbind_launcher();
+    modifier_shortcuts::unbind_voice();
 }
 
 /// Rebinds everything from the saved configuration. Clears first so this is
@@ -40,6 +43,8 @@ fn suspend_global_shortcuts(app: tauri::AppHandle) {
 #[tauri::command]
 fn resume_global_shortcuts(app: tauri::AppHandle) {
     let _ = app.global_shortcut().unregister_all();
+    modifier_shortcuts::unbind_launcher();
+    modifier_shortcuts::unbind_voice();
     let launcher_hotkey = app
         .state::<Arc<launcher::config::LauncherConfig>>()
         .hotkey();
