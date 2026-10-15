@@ -51,3 +51,4 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 tar = "0.4"
 flate2 = "1"
 ureq = { version = "2", default-features = false, features = ["json"] }
+libc = "0.2"

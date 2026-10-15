@@ -4648,6 +4648,7 @@ dependencies = [
  "dirs 5.0.1",
  "flate2",
  "hound",
+ "libc",
  "log",
  "model2vec-rs",
  "notify",

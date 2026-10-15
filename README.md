@@ -96,16 +96,46 @@ Spotlight's `Command+Space` binding and can be changed in Launcher settings.
   appear when you type their name, or everything behind `>`.
 - An empty search shows what you open most, then Samlu's commands.
 - Return opens the selection, Command-Return shows it in Finder, and the first
-  Escape clears the search before the second closes the launcher.
+  Escape clears the search before the second closes the launcher. On a
+  project, every Return key runs the action you choose (below).
 - Type `=` for calculator expressions.
 - Type `;` for snippets.
 - Type `@` for opt-in local clipboard history.
 - Type `>` for commands, including the macOS screen color picker.
+- Type `!` for the tasks Samlu is running for your projects.
 - Open Terminal and Samlu settings from the launcher.
 
-Project discovery starts with common existing development folders. Launcher
-settings can add or remove indexed roots, exclude folders, and trigger a manual
+Project discovery starts with common existing development folders. Settings ›
+Projects can add or remove indexed roots, exclude folders, and trigger a manual
 reindex without running a permanent file-system watcher.
+
+#### Project actions
+
+Every Return key on a project result runs an action you choose in Settings ›
+Projects: Return, Command-Return, Option-Return, Control-Return and
+Shift-Return. Out of the box Return opens the folder and Command-Return shows
+it in Finder, as before; a key with nothing set opens the project's actions.
+
+- Tab (or Command-K) on a project lists everything you can do with it: your
+  actions, the scripts the project defines, and its running tasks.
+- An action opens the project in an app (VS Code, Antigravity, Antigravity
+  IDE, the Claude or Codex app, a terminal, a Git client, or any app you
+  pick), runs a command in a terminal (Claude Code, Codex, Gemini, `agy`, or
+  your own, such as a tunnel script), runs the project's own script, copies
+  its path, opens a link, or runs a list of steps in the background.
+- Samlu suggests actions for the editors, agent apps, CLIs and terminals it
+  finds on this Mac, and you can add, edit, reorder or remove any of them.
+- Scripts come from `package.json` (run with the package manager its lockfile
+  names), `Cargo.toml`, `Makefile`, `justfile`, `go.mod`, `Package.swift`,
+  `deno.json`, `pyproject.toml`, `manage.py` and Compose files, in the
+  project folder and the folders directly inside it.
+- Commands start in the project folder with your login shell's PATH, so tools
+  installed through Homebrew or into `~/.local/bin` are found. `{path}` and
+  `{name}` stand for the project.
+- Background tasks keep their output, pick out any link they print (a tunnel
+  URL, say), and notify you when they finish or fail. Type `!` to see them;
+  Stop, Run Again, the link and the full log are a key away. Quitting Samlu
+  stops them.
 
 #### Descriptive Find (optional add-on)
 
@@ -241,6 +271,9 @@ Apple notarization credentials to Tauri.
 - Cloud provider API keys are stored in macOS Keychain, not Samlu JSON files.
 - Snippets, launcher history, event history, and optional clipboard history are
   local to the Mac.
+- Project actions run only commands you configured, in your own login
+  environment. Task output is written to Samlu's app data folder (`tasks/`,
+  the last 30 runs) and never leaves the Mac.
 - Descriptive Find reads only the folders you choose, and its index stays on
   this computer. It goes online only to download the model you choose, once.
 - With on-device engines, voice audio never leaves the Mac. With a cloud

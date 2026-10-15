@@ -12,7 +12,10 @@ The current release has three surfaces:
 2. A developer-focused launcher for apps, projects, source files, calculator
    expressions, snippets, clipboard history, commands, and screen colors,
    with Descriptive Find as an optional add-on that searches inside files by
-   description (portable Rust, built to run on macOS and Windows).
+   description (portable Rust, built to run on macOS and Windows). Projects
+   have configurable actions on every Return key — open in an editor or agent
+   app, start an agent CLI, run the project's scripts — and background tasks
+   Samlu tracks to completion.
 3. Configurable native macOS notifications for agent input and completion,
    with a playful Samlu Island in two styles (Bloom and Buddy) that follows
    the System, Light or Dark appearance.
@@ -50,5 +53,7 @@ else is still deferred.
 - Prompt mode produces a useful coding brief without inventing requirements.
 - Claude and Codex notifications still work after Samlu restarts.
 - A developer can reach any launcher tool from one keyboard-driven surface.
+- A developer can open a project in their tool of choice, start an agent in it,
+  or run it, from one key on the project.
 - Optional data collection, especially clipboard history and agent summaries,
   is configurable and understandable.
