@@ -26,7 +26,6 @@
   --island-glow: rgba(241, 211, 38, 0.09);
   --island-glow-buddy: rgba(241, 211, 38, 0.16);
   --island-glow-warn: rgba(240, 182, 110, 0.14);
-  --island-shadow: 0 22px 58px rgba(0, 0, 0, 0.38), 0 4px 14px rgba(0, 0, 0, 0.2);
   --island-track: rgba(255, 255, 255, 0.05);
   --island-track-fill: rgba(241, 211, 38, 0.5);
   --island-grabber: rgba(255, 255, 255, 0.18);
@@ -70,7 +69,6 @@
   --island-glow: rgba(239, 208, 29, 0.18);
   --island-glow-buddy: rgba(239, 208, 29, 0.2);
   --island-glow-warn: rgba(154, 98, 27, 0.1);
-  --island-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.7), 0 18px 48px rgba(61, 48, 4, 0.18), 0 4px 14px rgba(61, 48, 4, 0.08);
   --island-track: rgba(68, 57, 12, 0.07);
   --island-track-fill: rgba(201, 169, 0, 0.8);
   --island-grabber: rgba(68, 57, 12, 0.22);
@@ -107,7 +105,6 @@
     --island-glow: rgba(239, 208, 29, 0.18);
     --island-glow-buddy: rgba(239, 208, 29, 0.2);
     --island-glow-warn: rgba(154, 98, 27, 0.1);
-    --island-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.7), 0 18px 48px rgba(61, 48, 4, 0.18), 0 4px 14px rgba(61, 48, 4, 0.08);
     --island-track: rgba(68, 57, 12, 0.07);
     --island-track-fill: rgba(201, 169, 0, 0.8);
     --island-grabber: rgba(68, 57, 12, 0.22);
@@ -186,7 +183,6 @@ button {
   background:
     radial-gradient(circle at 18% 10%, var(--island-glow), transparent 36%),
     var(--island);
-  box-shadow: var(--island-shadow);
   backdrop-filter: blur(28px) saturate(1.18);
   -webkit-backdrop-filter: blur(28px) saturate(1.18);
   transform-origin: 50% 0;
