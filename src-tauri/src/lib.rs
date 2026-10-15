@@ -5,6 +5,7 @@ mod lifecycle;
 mod macos;
 mod notify;
 mod onboarding;
+mod project_actions;
 mod server;
 mod settings;
 mod setup;
@@ -236,6 +237,12 @@ pub fn run() {
             app.manage(clipboard_history.clone());
             launcher::clipboard::start_monitor(app.handle().clone(), clipboard_history);
 
+            // Resolves the login shell and loads project actions off the main
+            // thread, so the first launcher action never waits for them.
+            let project_actions = project_actions::ProjectActions::new(app.handle(), &app_data_dir);
+            project_actions.warm();
+            app.manage(project_actions);
+
             if let Err(error) = launcher::launcher_init(app.handle()) {
                 log::error!("failed to create launcher window: {error}");
             }
@@ -349,6 +356,26 @@ pub fn run() {
             launcher::snippets::save_snippet,
             launcher::snippets::delete_snippet,
             launcher::clipboard::clear_clipboard_history,
+            project_actions::launcher_project_bindings,
+            project_actions::launcher_run_project_chord,
+            project_actions::launcher_project_actions,
+            project_actions::launcher_run_project_action,
+            project_actions::launcher_run_script,
+            project_actions::tasks_list,
+            project_actions::task_detail,
+            project_actions::task_stop,
+            project_actions::task_rerun,
+            project_actions::task_open_log,
+            project_actions::tasks_clear_finished,
+            project_actions::task_url,
+            project_actions::get_project_actions,
+            project_actions::save_project_action,
+            project_actions::delete_project_action,
+            project_actions::reorder_project_actions,
+            project_actions::set_project_action_binding,
+            project_actions::set_project_action_preferences,
+            project_actions::reset_project_actions,
+            project_actions::choose_application,
             updater::get_update_state,
             updater::set_update_preferences,
             updater::check_for_updates,
@@ -453,6 +480,9 @@ pub fn run() {
             voice::engines_shutdown();
             // Stops EmbeddingGemma's llama.cpp helper with Samlu.
             app.state::<Arc<launcher::deep_find::DeepFind>>().shutdown();
+            // Dev servers and tunnels started as tasks go with Samlu.
+            app.state::<Arc<project_actions::ProjectActions>>()
+                .shutdown();
         }
         _ => {}
     });

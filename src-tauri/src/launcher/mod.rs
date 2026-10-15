@@ -451,6 +451,11 @@ fn run_action(app: &AppHandle, action: &str) -> Result<(), String> {
             let _ = app.emit_to("main", "settings://tab", "launcher");
             Ok(())
         }
+        "open_projects_settings" => {
+            crate::tray::show_main(app);
+            let _ = app.emit_to("main", "settings://tab", "projects");
+            Ok(())
+        }
         "check_for_updates" => {
             crate::updater::check_from_menu(app);
             Ok(())

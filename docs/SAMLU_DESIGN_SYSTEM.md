@@ -96,8 +96,9 @@ The presence surfaces must never depend on the control-center window being visib
 Settings follows macOS System Settings rather than a marketing page:
 
 - A full-height sidebar sits under the window controls (overlay title bar),
-  with the Samlu mark, the running version, and five panes: General, Agents,
-  Voice, Launcher, About. The selection is a soft fill; it never animates.
+  with the Samlu mark, the running version, and six panes: General, Agents,
+  Voice, Launcher, Projects, About. The selection is a soft fill; it never
+  animates.
 - Each pane is a column of grouped boxes. A row puts its label and an
   optional one-line explanation on the left and one control on the right;
   separators are inset hairlines. Group titles sit above a box and footnotes
@@ -128,6 +129,25 @@ and never in the way:
 - Selection, hover and result changes do not animate. App icons that arrive
   after their row fade up once, then come from the cache.
 - Reduce Motion keeps the fades and drops movement and springs.
+
+## Launcher project actions
+
+A project result is where agentic work starts, so the launcher offers more
+than one thing to do with it without adding chrome:
+
+- The footer always names what Return will do to the selection. Holding ⌘, ⌥,
+  ⌃ or ⇧ swaps in that key's action, or "Show Actions" when the key is free.
+- Tab or ⌘K opens the project's action panel in place: the search field gains
+  a scope chip with the project's name and filters actions, scripts and
+  running tasks. Escape steps back to the results exactly as they were.
+- `!` lists tasks. A task's view shows its status as a word and a dot (never
+  colour alone), the elapsed time, the links it printed, and its output in
+  monospace, following the end until you scroll up.
+- These views swap without animation, like results do; only the panel's
+  height springs, as it does for any change in content.
+- Starting a background task keeps the launcher open on that task. Every other
+  action closes the launcher once it has worked, and stays open with a short
+  message when it has not.
 
 ## Voice state model
 

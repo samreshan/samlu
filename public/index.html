@@ -43,6 +43,10 @@
             <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.4"/><path d="m10.3 10.3 3.4 3.4"/></svg>
             <span>Launcher</span>
           </button>
+          <button class="nav-item" data-pane="projects" type="button">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.2c0-.66.54-1.2 1.2-1.2h2.7l1.4 1.5h5.5c.66 0 1.2.54 1.2 1.2v6.1c0 .66-.54 1.2-1.2 1.2H3.2c-.66 0-1.2-.54-1.2-1.2z"/><path d="M7 6.9v3.7l3-1.85z"/></svg>
+            <span>Projects</span>
+          </button>
           <button class="nav-item" data-pane="about" type="button">
             <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v4M8 4.9h.01"/></svg>
             <span>About</span>
@@ -565,7 +569,8 @@
                 <div class="row tool"><kbd>@</kbd><span class="row-label">Clipboard history</span><code>@ token</code></div>
                 <div class="row tool"><kbd>&gt;</kbd><span class="row-label">Commands</span><code>&gt; color</code></div>
                 <div class="row tool"><kbd>?</kbd><span class="row-label">Describe a file</span><code>? pets clause in the lease</code></div>
-                <div class="row tool"><kbd>⌘↩</kbd><span class="row-label">Show in Finder</span><code>apps, files, projects</code></div>
+                <div class="row tool"><kbd>!</kbd><span class="row-label">Tasks</span><code>! dev server</code></div>
+                <div class="row tool"><kbd>⇥</kbd><span class="row-label">Project actions</span><code>Tab on a project</code></div>
               </div>
             </section>
 
@@ -584,26 +589,6 @@
                   <span class="row-control"><button class="button danger" id="clear-clipboard" type="button">Clear History…</button></span>
                 </div>
               </div>
-            </section>
-
-            <section class="group" aria-labelledby="launcher-projects-title">
-              <div class="group-head">
-                <h2 id="launcher-projects-title">Projects</h2>
-                <span class="pill" id="project-count">Checking</span>
-              </div>
-              <div class="group-box">
-                <div class="list-label">Indexed folders</div>
-                <div id="project-root-list"></div>
-                <div class="list-label">Excluded folders</div>
-                <div id="project-exclusion-list"></div>
-                <div class="row actions">
-                  <button class="button" id="add-project-root" type="button">Add Folder…</button>
-                  <button class="button" id="add-project-exclusion" type="button">Exclude Folder…</button>
-                  <span class="spacer"></span>
-                  <button class="button" id="reindex-projects" type="button">Reindex</button>
-                </div>
-              </div>
-              <p class="group-note">Folders are searched for Git repositories two levels deep. Reindex after adding projects.</p>
             </section>
 
             <section class="group" aria-labelledby="deep-find-title">
@@ -671,6 +656,202 @@
                 </form>
               </div>
               <p class="group-note">Type ; and a keyword in the launcher, then Return to copy the snippet.</p>
+            </section>
+          </section>
+
+          <!-- ======================================================= Projects -->
+          <section class="pane" id="pane-projects" data-title="Projects" aria-labelledby="pane-title" hidden>
+            <section class="group" aria-labelledby="projects-keys-title">
+              <div class="group-head">
+                <h2 id="projects-keys-title">Keys</h2>
+                <span class="saved" id="projects-saved" aria-live="polite"></span>
+              </div>
+              <div class="group-box">
+                <div class="row">
+                  <span class="row-text"><span class="row-label">Return <span class="keys" aria-hidden="true"><kbd>↩</kbd></span></span></span>
+                  <span class="row-control">
+                    <select data-chord="enter" aria-label="Return"><option value="">Show Actions</option></select>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text"><span class="row-label">Command-Return <span class="keys" aria-hidden="true"><kbd>⌘</kbd><kbd>↩</kbd></span></span></span>
+                  <span class="row-control">
+                    <select data-chord="cmd+enter" aria-label="Command-Return"><option value="">Show Actions</option></select>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text"><span class="row-label">Option-Return <span class="keys" aria-hidden="true"><kbd>⌥</kbd><kbd>↩</kbd></span></span></span>
+                  <span class="row-control">
+                    <select data-chord="alt+enter" aria-label="Option-Return"><option value="">Show Actions</option></select>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text"><span class="row-label">Control-Return <span class="keys" aria-hidden="true"><kbd>⌃</kbd><kbd>↩</kbd></span></span></span>
+                  <span class="row-control">
+                    <select data-chord="ctrl+enter" aria-label="Control-Return"><option value="">Show Actions</option></select>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text"><span class="row-label">Shift-Return <span class="keys" aria-hidden="true"><kbd>⇧</kbd><kbd>↩</kbd></span></span></span>
+                  <span class="row-control">
+                    <select data-chord="shift+enter" aria-label="Shift-Return"><option value="">Show Actions</option></select>
+                  </span>
+                </div>
+              </div>
+              <p class="group-note">Tab on a project shows every action and the project’s scripts.</p>
+            </section>
+
+            <section class="group" aria-labelledby="projects-actions-title">
+              <div class="group-head">
+                <h2 id="projects-actions-title">Actions</h2>
+                <span class="group-tools">
+                  <span class="saved" id="project-actions-saved" aria-live="polite"></span>
+                  <button class="text-button" id="restore-project-actions" type="button">Restore Defaults…</button>
+                  <select id="add-project-action" data-placeholder="Add Action…" aria-label="Add an action">
+                    <option value="" hidden>Add Action…</option>
+                    <optgroup label="Apps" id="add-action-apps"></optgroup>
+                    <optgroup label="Agents and tools" id="add-action-tools"></optgroup>
+                    <optgroup label="Project" id="add-action-project"></optgroup>
+                    <optgroup label="Custom">
+                      <option value="new:open">Open with an App…</option>
+                      <option value="new:terminal">Command in a Terminal…</option>
+                      <option value="new:task">Background Task…</option>
+                      <option value="new:script">Project Script…</option>
+                      <option value="new:url">Link…</option>
+                    </optgroup>
+                  </select>
+                </span>
+              </div>
+              <div class="group-box snippets action-box">
+                <div class="action-column">
+                  <div class="action-list" id="project-action-list">
+                    <div class="row empty-row">Looking for installed apps and tools…</div>
+                  </div>
+                  <div class="list-tools">
+                    <button class="text-button" id="move-project-action-up" type="button" disabled>Move Up</button>
+                    <button class="text-button" id="move-project-action-down" type="button" disabled>Move Down</button>
+                  </div>
+                </div>
+                <div class="snippet-empty" id="project-action-empty">Select an action to edit it, or add one.</div>
+                <form class="snippet-editor action-editor" id="project-action-form" hidden>
+                  <input id="project-action-id" type="hidden" />
+                  <label class="stacked"><span>Title</span><input id="project-action-title" class="field" required type="text" spellcheck="false" autocomplete="off" /></label>
+                  <div class="stacked">
+                    <span>Kind</span>
+                    <select id="project-action-kind" aria-label="Kind">
+                      <option value="open">Open in App</option>
+                      <option value="reveal">Show in Finder</option>
+                      <option value="copy_path">Copy Path</option>
+                      <option value="url">Link</option>
+                      <option value="terminal">Terminal Command</option>
+                      <option value="task">Background Task</option>
+                      <option value="script">Project Script</option>
+                    </select>
+                  </div>
+                  <div class="stacked" data-kind="open">
+                    <span>App</span>
+                    <select id="project-action-app" aria-label="App"></select>
+                  </div>
+                  <label class="stacked" data-kind="url"><span>Link</span><input id="project-action-url" class="field mono" type="text" inputmode="url" spellcheck="false" autocomplete="off" placeholder="http://localhost:3000" /></label>
+                  <label class="stacked" data-kind="terminal"><span>Command</span><input id="project-action-command" class="field mono" type="text" spellcheck="false" autocomplete="off" placeholder="ctun start" /></label>
+                  <div class="stacked" data-kind="terminal">
+                    <span>Terminal</span>
+                    <select id="project-action-terminal" aria-label="Terminal"></select>
+                  </div>
+                  <label class="stacked" data-kind="terminal"><span>Folder</span><input id="project-action-cwd" class="field" type="text" spellcheck="false" autocomplete="off" placeholder="Project folder" /></label>
+                  <div class="stacked" data-kind="task">
+                    <span>Steps</span>
+                    <div class="steps" id="project-action-steps"></div>
+                    <button class="text-button" id="add-project-step" type="button">Add Step</button>
+                  </div>
+                  <label class="editor-switch" data-kind="task">
+                    <span>Keep going when a step fails</span>
+                    <input id="project-action-continue" class="switch" type="checkbox" role="switch" />
+                  </label>
+                  <label class="stacked" data-kind="script"><span>Scripts</span><input id="project-action-scripts" class="field mono" type="text" spellcheck="false" autocomplete="off" placeholder="dev, start, run" /></label>
+                  <div class="stacked" data-kind="script">
+                    <span>Run in</span>
+                    <select id="project-action-mode" data-variant="segmented" aria-label="Run in">
+                      <option value="terminal">Terminal</option>
+                      <option value="task">Background</option>
+                    </select>
+                  </div>
+                  <p class="kind-note" data-kind="script">The first of these the project has runs, from its own folder before any subfolder.</p>
+                  <p class="kind-note" data-kind="reveal">Selects the project folder in a Finder window.</p>
+                  <p class="kind-note" data-kind="copy_path">Copies the project’s path, ready to paste.</p>
+                  <div class="editor-actions">
+                    <button class="button danger" id="delete-project-action" type="button">Delete…</button>
+                    <span class="spacer"></span>
+                    <button class="button primary" type="submit">Save Action</button>
+                  </div>
+                </form>
+              </div>
+              <p class="group-note">{path} and {name} stand for the project. Commands start in the project folder.</p>
+            </section>
+
+            <section class="group" aria-labelledby="projects-running-title">
+              <div class="group-head">
+                <h2 id="projects-running-title">Running</h2>
+                <span class="saved" id="project-running-saved" aria-live="polite"></span>
+              </div>
+              <div class="group-box">
+                <div class="row">
+                  <span class="row-text">
+                    <span class="row-label">Terminal for commands</span>
+                    <span class="row-detail">Agent CLIs and commands open here unless an action names its own.</span>
+                  </span>
+                  <span class="row-control">
+                    <select id="project-terminal" aria-label="Terminal for commands"><option value="">Default</option></select>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text">
+                    <span class="row-label">Scripts run in</span>
+                    <span class="row-detail">For Return on a script in the action panel. ⌘↩ uses the other.</span>
+                  </span>
+                  <span class="row-control">
+                    <select id="project-script-mode" data-variant="segmented" aria-label="Scripts run in">
+                      <option value="terminal">Terminal</option>
+                      <option value="task">Background</option>
+                    </select>
+                  </span>
+                </div>
+                <label class="row">
+                  <span class="row-text">
+                    <span class="row-label">Notify when a task finishes</span>
+                    <span class="row-detail">Background tasks that succeed or fail.</span>
+                  </span>
+                  <input id="project-notify-finished" class="switch" type="checkbox" role="switch" />
+                </label>
+                <label class="row">
+                  <span class="row-text">
+                    <span class="row-label">Notify when a task shares a link</span>
+                    <span class="row-detail">Like a tunnel URL. Local addresses are skipped.</span>
+                  </span>
+                  <input id="project-notify-url" class="switch" type="checkbox" role="switch" />
+                </label>
+              </div>
+              <p class="group-note" id="project-found-note">Looking for agent CLIs and terminals…</p>
+            </section>
+
+            <section class="group" aria-labelledby="launcher-projects-title">
+              <div class="group-head">
+                <h2 id="launcher-projects-title">Folders</h2>
+                <span class="pill" id="project-count">Checking</span>
+              </div>
+              <div class="group-box">
+                <div class="list-label">Indexed folders</div>
+                <div id="project-root-list"></div>
+                <div class="list-label">Excluded folders</div>
+                <div id="project-exclusion-list"></div>
+                <div class="row actions">
+                  <button class="button" id="add-project-root" type="button">Add Folder…</button>
+                  <button class="button" id="add-project-exclusion" type="button">Exclude Folder…</button>
+                  <span class="spacer"></span>
+                  <button class="button" id="reindex-projects" type="button">Reindex</button>
+                </div>
+              </div>
+              <p class="group-note">Folders are searched for Git repositories two levels deep. Reindex after adding projects.</p>
             </section>
           </section>
 

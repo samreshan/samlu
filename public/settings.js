@@ -2,7 +2,7 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 const byId = (id) => document.getElementById(id);
-const PANES = ["general", "agents", "voice", "launcher", "about"];
+const PANES = ["general", "agents", "voice", "launcher", "projects", "about"];
 
 let currentPane = "general";
 let prefs = null;
@@ -12,6 +12,14 @@ let voiceModels = { models: [], catalog: [], recommended: "", selected: "" };
 let voiceHistory = [];
 let snippets = [];
 let projectSettings = { roots: [], excludedPaths: [], projectCount: 0 };
+let projectActions = null;
+// The project action editor's App pop-up, by bundle id: what each entry is
+// called and opens, and the entry shown before Choose App… was picked.
+let appChoices = new Map();
+let appBeforeChoosing = "";
+// Apps picked with Choose App… this session. Samlu has no preset for them, but
+// they are certainly installed.
+const chosenApps = new Map();
 let deepFind = null;
 let deepFindDownload = null;
 let agentIntegrations = [];
@@ -194,6 +202,7 @@ function loadPane(name) {
   if (name === "agents") return Promise.all([loadPrefs(), loadAgents(), loadActivity()]);
   if (name === "voice") return loadVoiceSettings();
   if (name === "launcher") return loadLauncherSettings();
+  if (name === "projects") return Promise.all([loadProjectActions(), loadProjectFolders()]);
   if (name === "about") return loadUpdateState();
   return Promise.resolve();
 }
@@ -1236,19 +1245,16 @@ function createShortcutRecorder(id, save, restore, validate = () => "") {
 
 async function loadLauncherSettings() {
   try {
-    const [hotkey, preferences, storedSnippets, storedProjectSettings] = await Promise.all([
+    const [hotkey, preferences, storedSnippets] = await Promise.all([
       invoke("get_launcher_hotkey"),
       invoke("get_notification_preferences"),
       invoke("get_snippets"),
-      invoke("get_project_settings"),
     ]);
     launcherHotkeyRecorder.set(hotkey);
     prefs = preferences;
     renderPrefs();
     snippets = storedSnippets;
-    projectSettings = storedProjectSettings;
     renderSnippets();
-    renderProjectSettings();
   } catch (error) {
     toast(errorMessage(error), true);
   }
@@ -1416,15 +1422,6 @@ async function addDeepFindFolder(kind, button) {
   }
 }
 
-function renderProjectSettings() {
-  const count = projectSettings.projectCount;
-  byId("project-count").textContent = `${count} ${count === 1 ? "project" : "projects"}`;
-  renderPathList("project-root-list", projectSettings.roots, "No folders yet.", (path) => removeProjectPath("root", path));
-  renderPathList("project-exclusion-list", projectSettings.excludedPaths, "None.", (path) =>
-    removeProjectPath("exclusion", path),
-  );
-}
-
 function renderPathList(id, paths, emptyLabel, onRemove) {
   const list = byId(id);
   list.replaceChildren();
@@ -1454,6 +1451,625 @@ function renderPathList(id, paths, emptyLabel, onRemove) {
     row.append(text, remove);
     list.append(row);
   });
+}
+
+function renderSnippets(activeId = byId("snippet-id").value) {
+  const list = byId("snippet-list");
+  list.replaceChildren();
+  if (!snippets.length) {
+    list.append(emptyRow("No snippets yet."));
+    return;
+  }
+  snippets.forEach((snippet) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "snippet-item";
+    if (snippet.id === activeId) button.setAttribute("aria-current", "true");
+    const title = document.createElement("strong");
+    title.textContent = snippet.title;
+    const keyword = document.createElement("span");
+    keyword.textContent = snippet.keyword ? `;${snippet.keyword}` : "No keyword";
+    button.append(title, keyword);
+    button.addEventListener("click", () => editSnippet(snippet));
+    list.append(button);
+  });
+}
+
+function editSnippet(snippet = { id: "", title: "", keyword: "", content: "" }) {
+  byId("snippet-form").hidden = false;
+  byId("snippet-empty").hidden = true;
+  byId("snippet-id").value = snippet.id;
+  byId("snippet-title").value = snippet.title;
+  byId("snippet-keyword").value = snippet.keyword;
+  byId("snippet-content").value = snippet.content;
+  byId("delete-snippet").hidden = !snippet.id;
+  renderSnippets(snippet.id);
+  byId("snippet-title").focus();
+}
+
+/* ---------------------------------------------------------------- projects */
+
+// The keys a project result answers to, in the order the backend lists them.
+const PROJECT_CHORDS = ["enter", "cmd+enter", "alt+enter", "ctrl+enter", "shift+enter"];
+
+const CHORD_NAMES = {
+  enter: "Return",
+  "cmd+enter": "Command-Return",
+  "alt+enter": "Option-Return",
+  "ctrl+enter": "Control-Return",
+  "shift+enter": "Shift-Return",
+};
+
+// Terminals that can run commands, named even after they are uninstalled and
+// so missing from the catalog.
+const TERMINAL_NAMES = { warp: "Warp", ghostty: "Ghostty", iterm: "iTerm", terminal: "Terminal" };
+
+// The App pop-up's last entry. A colon never appears in a bundle id.
+const CHOOSE_APP = ":choose";
+
+const PLAY_GLYPH = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.6v8.8l7-4.4z"/></svg>';
+
+const ACTION_GLYPHS = {
+  open: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M2.5 6.2h11"/></svg>',
+  reveal:
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.6c0-.7.5-1.2 1.2-1.2h2.6l1.4 1.5h5.6c.7 0 1.2.5 1.2 1.2v5.5c0 .7-.5 1.2-1.2 1.2H3.2c-.7 0-1.2-.5-1.2-1.2z"/></svg>',
+  copy_path:
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.2" y="5.2" width="8.3" height="8.3" rx="1.6"/><path d="M10.8 3.4c-.2-.5-.7-.9-1.3-.9H3.9c-.8 0-1.4.6-1.4 1.4v5.6c0 .6.4 1.1.9 1.3"/></svg>',
+  url: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.9 9.1a2.5 2.5 0 0 0 3.6 0l2.1-2.1a2.5 2.5 0 0 0-3.6-3.6l-.8.8M9.1 6.9a2.5 2.5 0 0 0-3.6 0L3.4 9a2.5 2.5 0 0 0 3.6 3.6l.8-.8"/></svg>',
+  terminal:
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.8" width="12" height="10.4" rx="2"/><path d="m5 6.4 2 1.6-2 1.6M8.6 10.1h2.6"/></svg>',
+  task: PLAY_GLYPH,
+  script: PLAY_GLYPH,
+};
+
+// Every field any kind of action has, so the editor can switch kinds back and
+// forth without losing what was typed.
+const BLANK_ACTION = {
+  id: "",
+  title: "",
+  kind: "open",
+  bundleId: "",
+  appPath: "",
+  url: "",
+  command: "",
+  terminal: "",
+  cwd: "",
+  steps: [],
+  continueOnError: false,
+  scripts: [],
+  mode: "terminal",
+};
+
+async function loadProjectActions() {
+  try {
+    projectActions = await invoke("get_project_actions");
+    renderProjectActions();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+/** Draws what the backend found and saved. An open editor keeps what is being
+ * typed; only its pop-ups are refreshed. */
+function renderProjectActions() {
+  renderFoundNote();
+  applyProjectConfig(projectActions.config);
+  if (byId("project-action-form").hidden) return;
+  const id = byId("project-action-id").value;
+  if (id && !projectActions.config.actions.some((action) => action.id === id)) {
+    closeActionEditor();
+    return;
+  }
+  const bundleId = selectedAppId();
+  fillAppSelect(bundleId, appChoices.get(bundleId)?.appPath || "");
+}
+
+/** Shows a configuration the backend returned. The editor is left alone, so
+ * an unsaved draft survives a key change or a reorder. */
+function applyProjectConfig(config) {
+  projectActions.config = config;
+  renderProjectKeys();
+  renderActionList();
+  renderAddActionMenu();
+  renderProjectRunning();
+  const terminal = byId("project-action-terminal");
+  fillTerminalSelect(terminal, terminal.value, config.terminal || projectActions.catalog.defaultTerminal);
+}
+
+function renderProjectKeys() {
+  const { actions, bindings } = projectActions.config;
+  document.querySelectorAll("select[data-chord]").forEach((select) => {
+    select.replaceChildren(
+      new Option("Show Actions", ""),
+      ...actions.map((action) => new Option(action.title, action.id)),
+    );
+    select.value = bindings[select.dataset.chord] || "";
+  });
+}
+
+async function bindProjectKey(select) {
+  if (!projectActions) return;
+  try {
+    applyProjectConfig(
+      await invoke("set_project_action_binding", {
+        chord: select.dataset.chord,
+        actionId: select.value || null,
+      }),
+    );
+    showSaved("projects-saved");
+  } catch (error) {
+    toast(errorMessage(error), true);
+    renderProjectKeys();
+  }
+}
+
+/** "cmd+enter" as one keycap, "⌘↩". */
+function chordGlyphs(chord) {
+  return chord.split("+").map(keyGlyph).join("");
+}
+
+function boundChords(id) {
+  const { bindings } = projectActions.config;
+  return PROJECT_CHORDS.filter((chord) => bindings[chord] === id);
+}
+
+/** An app's name: Samlu's own for apps it knows, else the bundle's file
+ * name. */
+function appName(bundleId, appPath) {
+  const known = projectActions.catalog.apps.find((app) => app.bundleId === bundleId) || chosenApps.get(bundleId);
+  if (known) return known.name;
+  return String(appPath || "").split("/").pop().replace(/\.app$/i, "") || bundleId;
+}
+
+function actionSubtitle(action) {
+  switch (action.kind) {
+    case "open":
+      return appName(action.bundleId, action.appPath);
+    case "reveal":
+      return "Finder";
+    case "copy_path":
+      return "Path to the clipboard";
+    case "url":
+      return action.url;
+    case "terminal":
+      return action.command;
+    case "task":
+      return (action.steps || []).map((step) => step.title || step.command).join(" → ");
+    case "script":
+      return (action.scripts || []).join(" · ");
+    default:
+      return "";
+  }
+}
+
+function renderActionList() {
+  const list = byId("project-action-list");
+  const { actions } = projectActions.config;
+  const activeId = byId("project-action-form").hidden ? null : byId("project-action-id").value;
+  list.replaceChildren();
+  if (!actions.length) list.append(emptyRow("No actions yet. Add one above."));
+  actions.forEach((action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "action-item";
+    if (action.id === activeId) button.setAttribute("aria-current", "true");
+    const glyph = document.createElement("span");
+    glyph.className = "action-glyph";
+    glyph.innerHTML = ACTION_GLYPHS[action.kind] || PLAY_GLYPH;
+    const text = document.createElement("span");
+    text.className = "action-text";
+    const subtitle = actionSubtitle(action);
+    const title = document.createElement("strong");
+    title.textContent = action.title;
+    const detail = document.createElement("span");
+    detail.textContent = subtitle;
+    text.append(title, detail);
+    button.append(glyph, text);
+    const chords = boundChords(action.id);
+    // Keys are named in words; the keycaps alone would be read as symbols.
+    button.setAttribute(
+      "aria-label",
+      [action.title, subtitle, ...chords.map((chord) => CHORD_NAMES[chord])].filter(Boolean).join(", "),
+    );
+    if (chords.length) {
+      const keys = document.createElement("span");
+      keys.className = "keys";
+      keys.setAttribute("aria-hidden", "true");
+      chords.forEach((chord) => {
+        const key = document.createElement("kbd");
+        key.textContent = chordGlyphs(chord);
+        keys.append(key);
+      });
+      button.append(keys);
+    }
+    button.addEventListener("click", () => editAction(action));
+    list.append(button);
+  });
+  const index = actions.findIndex((action) => action.id === activeId);
+  byId("move-project-action-up").disabled = index <= 0;
+  byId("move-project-action-down").disabled = index < 0 || index === actions.length - 1;
+}
+
+/** Presets for what is installed, less the ones already added. */
+function renderAddActionMenu() {
+  const added = new Set(projectActions.config.actions.map((action) => action.id));
+  const groups = { open: [], terminal: [], project: [] };
+  projectActions.catalog.presets
+    .filter((preset) => !added.has(preset.id))
+    .forEach((preset) => (groups[preset.kind] || groups.project).push(new Option(preset.title, `preset:${preset.id}`)));
+  byId("add-action-apps").replaceChildren(...groups.open);
+  byId("add-action-tools").replaceChildren(...groups.terminal);
+  byId("add-action-project").replaceChildren(...groups.project);
+}
+
+function renderProjectRunning() {
+  const { config, catalog } = projectActions;
+  fillTerminalSelect(byId("project-terminal"), config.terminal, catalog.defaultTerminal);
+  byId("project-script-mode").value = config.scriptMode;
+  byId("project-notify-finished").checked = config.notifyTaskFinished;
+  byId("project-notify-url").checked = config.notifyTaskUrl;
+}
+
+/** "A, B and C". */
+function listNames(names) {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** Says what detection found, so a CLI missing from Add Action is explained
+ * before anyone goes looking for it. */
+function renderFoundNote() {
+  const { clis, terminals } = projectActions.catalog;
+  const found = [clis, terminals].map((items) => listNames(items.map((item) => item.name))).filter(Boolean);
+  byId("project-found-note").textContent = clis.length
+    ? `Found ${found.join(" · ")}.`
+    : "No agent CLIs found on your PATH.";
+}
+
+function terminalName(id) {
+  return projectActions.catalog.terminals.find((terminal) => terminal.id === id)?.name || TERMINAL_NAMES[id] || id;
+}
+
+/** A terminal pop-up: the default, named, then each terminal Samlu can run
+ * commands in. A choice that is no longer one of those stays listed, so the
+ * pop-up never claims something the action doesn't say. */
+function fillTerminalSelect(select, value, defaultId) {
+  const options = [new Option(`Default (${terminalName(defaultId)})`, "")];
+  projectActions.catalog.terminals
+    .filter((terminal) => terminal.runsCommands)
+    .forEach((terminal) => options.push(new Option(terminal.name, terminal.id)));
+  if (value && !options.some((option) => option.value === value)) {
+    const installed = projectActions.catalog.terminals.some((terminal) => terminal.id === value);
+    options.push(
+      new Option(`${terminalName(value)} (${installed ? "can’t run commands" : "not installed"})`, value),
+    );
+  }
+  select.replaceChildren(...options);
+  select.value = value;
+}
+
+/** Opens an action in the editor: a saved one, or a new draft with no id. */
+function editAction(action, { focus = true } = {}) {
+  const draft = { ...BLANK_ACTION, ...action };
+  byId("project-action-form").hidden = false;
+  byId("project-action-empty").hidden = true;
+  byId("project-action-id").value = draft.id;
+  byId("project-action-title").value = draft.title;
+  byId("project-action-kind").value = draft.kind;
+  fillAppSelect(draft.bundleId, draft.appPath);
+  byId("project-action-url").value = draft.url;
+  byId("project-action-command").value = draft.command;
+  fillTerminalSelect(
+    byId("project-action-terminal"),
+    draft.terminal,
+    projectActions.config.terminal || projectActions.catalog.defaultTerminal,
+  );
+  byId("project-action-cwd").value = draft.cwd;
+  renderSteps(draft.steps.length ? draft.steps : [{ title: "", command: "", cwd: "" }]);
+  byId("project-action-continue").checked = draft.continueOnError;
+  byId("project-action-scripts").value = draft.scripts.join(", ");
+  byId("project-action-mode").value = draft.mode;
+  byId("delete-project-action").hidden = !draft.id;
+  syncActionKind();
+  renderActionList();
+  if (focus) byId("project-action-title").focus();
+}
+
+function closeActionEditor() {
+  byId("project-action-form").hidden = true;
+  byId("project-action-empty").hidden = false;
+  byId("project-action-id").value = "";
+  renderActionList();
+}
+
+/** Shows the fields for the chosen kind. The others keep their values, so
+ * changing your mind loses nothing. */
+function syncActionKind() {
+  const kind = byId("project-action-kind").value;
+  byId("project-action-form")
+    .querySelectorAll("[data-kind]")
+    .forEach((element) => {
+      element.hidden = element.dataset.kind !== kind;
+    });
+}
+
+/** The App pop-up: installed apps Samlu knows, apps chosen this session, the
+ * action's own app even when Samlu can't find it, then Choose App…. */
+function fillAppSelect(bundleId, appPath) {
+  appChoices = new Map();
+  projectActions.catalog.apps.forEach((app) =>
+    appChoices.set(app.bundleId, { name: app.name, appPath: app.appPath }),
+  );
+  chosenApps.forEach((app, id) => {
+    if (!appChoices.has(id)) appChoices.set(id, app);
+  });
+  const options = [...appChoices].map(([id, app]) => new Option(app.name, id));
+  if (bundleId && !appChoices.has(bundleId)) {
+    const name = appName(bundleId, appPath);
+    appChoices.set(bundleId, { name, appPath });
+    // A preset whose app has gone. An app chosen by hand can't be checked
+    // from here, so it keeps its plain name.
+    const missing = byId("project-action-id").value.startsWith("open-");
+    options.push(new Option(missing ? `${name} (not installed)` : name, bundleId));
+  }
+  options.push(new Option("Choose App…", CHOOSE_APP));
+  const select = byId("project-action-app");
+  select.replaceChildren(...options);
+  select.value = bundleId;
+  appBeforeChoosing = bundleId;
+}
+
+function selectedAppId() {
+  const value = byId("project-action-app").value;
+  return value === CHOOSE_APP ? "" : value;
+}
+
+async function changeActionApp(select) {
+  const previous = appChoices.get(appBeforeChoosing)?.name;
+  if (select.value !== CHOOSE_APP) {
+    appBeforeChoosing = select.value;
+    nameAfterApp(previous, appChoices.get(select.value)?.name);
+    return;
+  }
+  // The picker can be cancelled, so the previous app stays until it returns.
+  select.value = appBeforeChoosing;
+  try {
+    const chosen = await invoke("choose_application");
+    if (!chosen) return;
+    chosenApps.set(chosen.bundleId, { name: chosen.name, appPath: chosen.appPath });
+    fillAppSelect(chosen.bundleId, chosen.appPath);
+    nameAfterApp(previous, appChoices.get(chosen.bundleId)?.name);
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+/** An empty title, or one still reading "Open in <the previous app>",
+ * follows the app. A title you wrote yourself is left alone. */
+function nameAfterApp(previous, name) {
+  if (!name) return;
+  const title = byId("project-action-title");
+  const current = title.value.trim();
+  if (!current || (previous && current === `Open in ${previous}`)) title.value = `Open in ${name}`;
+}
+
+function renderSteps(steps, focusIndex = -1) {
+  const list = byId("project-action-steps");
+  list.replaceChildren(...steps.map((step, index) => stepRow(step, index, steps.length)));
+  list.children[focusIndex]?.querySelector("input")?.focus();
+}
+
+function stepRow(step, index, count) {
+  const row = document.createElement("div");
+  row.className = "step";
+  const number = document.createElement("span");
+  number.className = "step-number";
+  number.setAttribute("aria-hidden", "true");
+  number.textContent = String(index + 1);
+  const input = (field, label, placeholder) => {
+    const element = document.createElement("input");
+    element.type = "text";
+    element.className = field === "command" ? "field mono" : "field";
+    element.dataset.field = field;
+    element.value = step[field] || "";
+    element.placeholder = placeholder;
+    element.spellcheck = false;
+    element.autocomplete = "off";
+    element.setAttribute("aria-label", `Step ${index + 1} ${label}`);
+    return element;
+  };
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "text-button danger";
+  remove.textContent = "Remove";
+  remove.disabled = count < 2;
+  remove.setAttribute("aria-label", `Remove step ${index + 1}`);
+  remove.addEventListener("click", () => {
+    const steps = readSteps();
+    steps.splice(index, 1);
+    renderSteps(steps, Math.min(index, steps.length - 1));
+  });
+  row.append(
+    number,
+    input("title", "title", "Title"),
+    input("cwd", "folder", "Project folder"),
+    input("command", "command", "Command"),
+    remove,
+  );
+  return row;
+}
+
+function readSteps() {
+  return [...byId("project-action-steps").children].map((row) => ({
+    title: row.querySelector('[data-field="title"]').value,
+    command: row.querySelector('[data-field="command"]').value,
+    cwd: row.querySelector('[data-field="cwd"]').value,
+  }));
+}
+
+/** The action as the backend stores it: the fields of its kind only. The
+ * backend trims and checks them. */
+function readActionForm() {
+  const kind = byId("project-action-kind").value;
+  const action = { id: byId("project-action-id").value, title: byId("project-action-title").value, kind };
+  if (kind === "open") {
+    const bundleId = selectedAppId();
+    Object.assign(action, { bundleId, appPath: appChoices.get(bundleId)?.appPath || "" });
+  } else if (kind === "url") {
+    action.url = byId("project-action-url").value;
+  } else if (kind === "terminal") {
+    Object.assign(action, {
+      command: byId("project-action-command").value,
+      terminal: byId("project-action-terminal").value,
+      cwd: byId("project-action-cwd").value,
+    });
+  } else if (kind === "task") {
+    Object.assign(action, { steps: readSteps(), continueOnError: byId("project-action-continue").checked });
+  } else if (kind === "script") {
+    Object.assign(action, {
+      scripts: byId("project-action-scripts")
+        .value.split(",")
+        .map((name) => name.trim())
+        .filter(Boolean),
+      mode: byId("project-action-mode").value,
+    });
+  }
+  return action;
+}
+
+async function saveAction() {
+  if (!projectActions) return;
+  const action = readActionForm();
+  const known = new Set(projectActions.config.actions.map((item) => item.id));
+  try {
+    const config = await invoke("save_project_action", { action });
+    applyProjectConfig(config);
+    // A new action comes back under the id the backend gave it. The fields
+    // stay as typed, so focus stays where it was.
+    const saved = config.actions.find((item) => (action.id ? item.id === action.id : !known.has(item.id)));
+    if (saved) {
+      byId("project-action-id").value = saved.id;
+      byId("delete-project-action").hidden = false;
+      renderActionList();
+    }
+    showSaved("project-actions-saved");
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+async function addAction(select) {
+  const value = select.value;
+  // The pop-up is a list of things to add, so it always reads "Add Action…".
+  select.value = "";
+  if (!projectActions || !value) return;
+  if (value.startsWith("new:")) {
+    editAction({ id: "", title: "", kind: value.slice(4), mode: projectActions.config.scriptMode }, { focus: false });
+    // The pop-up hands focus back to itself as it closes; take it after.
+    setTimeout(() => byId("project-action-title").focus());
+    return;
+  }
+  const preset = projectActions.catalog.presets.find((item) => `preset:${item.id}` === value);
+  if (!preset) return;
+  try {
+    const config = await invoke("save_project_action", { action: preset });
+    applyProjectConfig(config);
+    const added = config.actions.find((item) => item.id === preset.id);
+    if (added) {
+      editAction(added, { focus: false });
+      byId("project-action-list").querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
+    }
+    showSaved("project-actions-saved", "Added");
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+async function deleteAction() {
+  const id = byId("project-action-id").value;
+  const action = projectActions?.config.actions.find((item) => item.id === id);
+  if (!action) return;
+  const confirmed = await confirmAction(
+    `Delete “${action.title}”?`,
+    "A key bound to it shows the action panel instead.",
+    "Delete",
+  );
+  if (!confirmed) return;
+  try {
+    applyProjectConfig(await invoke("delete_project_action", { id }));
+    closeActionEditor();
+    showSaved("project-actions-saved", "Deleted");
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+async function moveAction(offset) {
+  if (!projectActions) return;
+  const ids = projectActions.config.actions.map((action) => action.id);
+  const from = ids.indexOf(byId("project-action-id").value);
+  const to = from + offset;
+  if (from < 0 || to < 0 || to >= ids.length) return;
+  ids.splice(to, 0, ...ids.splice(from, 1));
+  try {
+    applyProjectConfig(await invoke("reorder_project_actions", { ids }));
+    byId("project-action-list").querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
+    showSaved("project-actions-saved");
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+async function restoreActions() {
+  if (!projectActions) return;
+  const confirmed = await confirmAction(
+    "Restore default actions?",
+    "Your actions and keys go back to what Samlu found installed, and the Running settings to their defaults.",
+    "Restore",
+  );
+  if (!confirmed) return;
+  try {
+    applyProjectConfig(await invoke("reset_project_actions"));
+    closeActionEditor();
+    showSaved("project-actions-saved", "Restored");
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+async function saveProjectPreferences() {
+  if (!projectActions) return;
+  try {
+    applyProjectConfig(
+      await invoke("set_project_action_preferences", {
+        terminal: byId("project-terminal").value,
+        scriptMode: byId("project-script-mode").value,
+        notifyTaskFinished: byId("project-notify-finished").checked,
+        notifyTaskUrl: byId("project-notify-url").checked,
+      }),
+    );
+    showSaved("project-running-saved");
+  } catch (error) {
+    toast(errorMessage(error), true);
+    renderProjectRunning();
+  }
+}
+
+async function loadProjectFolders() {
+  try {
+    projectSettings = await invoke("get_project_settings");
+    renderProjectSettings();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+function renderProjectSettings() {
+  const count = projectSettings.projectCount;
+  byId("project-count").textContent = `${count} ${count === 1 ? "project" : "projects"}`;
+  renderPathList("project-root-list", projectSettings.roots, "No folders yet.", (path) => removeProjectPath("root", path));
+  renderPathList("project-exclusion-list", projectSettings.excludedPaths, "None.", (path) =>
+    removeProjectPath("exclusion", path),
+  );
 }
 
 async function saveProjectSettings(next) {
@@ -1498,40 +2114,6 @@ async function addProjectPath(kind, button) {
   } catch (error) {
     toast(errorMessage(error), true);
   }
-}
-
-function renderSnippets(activeId = byId("snippet-id").value) {
-  const list = byId("snippet-list");
-  list.replaceChildren();
-  if (!snippets.length) {
-    list.append(emptyRow("No snippets yet."));
-    return;
-  }
-  snippets.forEach((snippet) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "snippet-item";
-    if (snippet.id === activeId) button.setAttribute("aria-current", "true");
-    const title = document.createElement("strong");
-    title.textContent = snippet.title;
-    const keyword = document.createElement("span");
-    keyword.textContent = snippet.keyword ? `;${snippet.keyword}` : "No keyword";
-    button.append(title, keyword);
-    button.addEventListener("click", () => editSnippet(snippet));
-    list.append(button);
-  });
-}
-
-function editSnippet(snippet = { id: "", title: "", keyword: "", content: "" }) {
-  byId("snippet-form").hidden = false;
-  byId("snippet-empty").hidden = true;
-  byId("snippet-id").value = snippet.id;
-  byId("snippet-title").value = snippet.title;
-  byId("snippet-keyword").value = snippet.keyword;
-  byId("snippet-content").value = snippet.content;
-  byId("delete-snippet").hidden = !snippet.id;
-  renderSnippets(snippet.id);
-  byId("snippet-title").focus();
 }
 
 /* ------------------------------------------------------------------ events */
@@ -1926,19 +2508,6 @@ function bindEvents() {
       toast(errorMessage(error), true);
     }
   });
-  byId("add-project-root").addEventListener("click", (event) => addProjectPath("root", event.currentTarget));
-  byId("add-project-exclusion").addEventListener("click", (event) =>
-    addProjectPath("exclusion", event.currentTarget),
-  );
-  byId("reindex-projects").addEventListener("click", async (event) => {
-    try {
-      const projectCount = await runButton(event.currentTarget, "Indexing…", () => invoke("reindex_projects"));
-      projectSettings.projectCount = projectCount;
-      renderProjectSettings();
-    } catch (error) {
-      toast(errorMessage(error), true);
-    }
-  });
   byId("deep-find-enabled").addEventListener("change", async (event) => {
     try {
       deepFind = await invoke("set_deep_find_enabled", { enabled: event.currentTarget.checked });
@@ -2032,6 +2601,43 @@ function bindEvents() {
       byId("snippet-empty").hidden = false;
       byId("snippet-id").value = "";
       renderSnippets("");
+    } catch (error) {
+      toast(errorMessage(error), true);
+    }
+  });
+
+  // Projects
+  document.querySelectorAll("select[data-chord]").forEach((select) => {
+    select.addEventListener("change", () => bindProjectKey(select));
+  });
+  byId("add-project-action").addEventListener("change", (event) => addAction(event.currentTarget));
+  byId("restore-project-actions").addEventListener("click", restoreActions);
+  byId("move-project-action-up").addEventListener("click", () => moveAction(-1));
+  byId("move-project-action-down").addEventListener("click", () => moveAction(1));
+  byId("project-action-kind").addEventListener("change", syncActionKind);
+  byId("project-action-app").addEventListener("change", (event) => changeActionApp(event.currentTarget));
+  byId("add-project-step").addEventListener("click", () => {
+    const steps = readSteps();
+    steps.push({ title: "", command: "", cwd: "" });
+    renderSteps(steps, steps.length - 1);
+  });
+  byId("project-action-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveAction();
+  });
+  byId("delete-project-action").addEventListener("click", deleteAction);
+  ["project-terminal", "project-script-mode", "project-notify-finished", "project-notify-url"].forEach((id) =>
+    byId(id).addEventListener("change", saveProjectPreferences),
+  );
+  byId("add-project-root").addEventListener("click", (event) => addProjectPath("root", event.currentTarget));
+  byId("add-project-exclusion").addEventListener("click", (event) =>
+    addProjectPath("exclusion", event.currentTarget),
+  );
+  byId("reindex-projects").addEventListener("click", async (event) => {
+    try {
+      const projectCount = await runButton(event.currentTarget, "Indexing…", () => invoke("reindex_projects"));
+      projectSettings.projectCount = projectCount;
+      renderProjectSettings();
     } catch (error) {
       toast(errorMessage(error), true);
     }
