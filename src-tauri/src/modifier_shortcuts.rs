@@ -6,6 +6,7 @@
 //! other shortcut, so a chord only counts while nothing else is pressed: a
 //! key or click with it held hands the chord back to whatever it was part of.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,10 @@ const COMMAND: u8 = 8;
 /// Holding ⌃ ⌥ ⇧ passes through ⌃⌥ on the way, so a voice chord waits this
 /// long for more modifiers before it starts Normal instead of Summary.
 const VOICE_SETTLE: Duration = Duration::from_millis(90);
+
+/// How often to look for an Accessibility grant while a saved chord waits on
+/// one, so it starts working without a relaunch.
+const ACCESS_POLL: Duration = Duration::from_secs(2);
 
 extern "C" {
     fn samlu_start_modifier_monitor(handler: extern "C" fn(i32, u32)) -> bool;
@@ -89,6 +94,7 @@ static MONITOR: Mutex<Monitor> = Mutex::new(Monitor {
     generation: 0,
 });
 static APP: OnceLock<AppHandle> = OnceLock::new();
+static WAITING_FOR_ACCESS: AtomicBool = AtomicBool::new(false);
 
 impl Monitor {
     fn voice_mode(&self, mask: u8) -> Option<Mode> {
@@ -265,9 +271,45 @@ fn ensure_started(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     crate::macos::request_accessibility_access();
+    wait_for_access();
     Err("To use a shortcut made only of modifier keys, allow Samlu in System Settings > Privacy & Security > Accessibility.".to_string())
 }
 
+fn anything_bound() -> bool {
+    let monitor = MONITOR.lock().unwrap();
+    monitor.launcher.is_some() || monitor.voice.is_some()
+}
+
+/// The tap can only be created once Samlu is allowed under Accessibility, and
+/// macOS says nothing when that happens, so check now and then while a chord
+/// is bound and start the tap as soon as it is. Stops once the tap runs, or
+/// when nothing is bound any more; binding again starts a new watch.
+fn wait_for_access() {
+    if WAITING_FOR_ACCESS.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(ACCESS_POLL);
+        if !anything_bound() {
+            WAITING_FOR_ACCESS.store(false, Ordering::Release);
+            // A bind that landed just now saw this watch still running.
+            if anything_bound() && !WAITING_FOR_ACCESS.swap(true, Ordering::AcqRel) {
+                continue;
+            }
+            return;
+        }
+        if crate::voice::get_voice_accessibility_status()
+            && unsafe { samlu_start_modifier_monitor(on_modifier_event) }
+        {
+            log::info!("Accessibility granted; modifier-only shortcuts are now active");
+            WAITING_FOR_ACCESS.store(false, Ordering::Release);
+            return;
+        }
+    });
+}
+
+/// Records the chord even when the tap cannot start yet, so it comes alive
+/// by itself once Accessibility is granted.
 fn bind(
     app: &AppHandle,
     hotkey: &str,
@@ -277,11 +319,12 @@ fn bind(
     if mask.count_ones() < 2 {
         return Err("Use at least two modifier keys, or add a regular key.".to_string());
     }
-    ensure_started(app)?;
-    let mut monitor = MONITOR.lock().unwrap();
-    apply(&mut monitor, mask)?;
-    monitor.reset_chords();
-    Ok(())
+    {
+        let mut monitor = MONITOR.lock().unwrap();
+        apply(&mut monitor, mask)?;
+        monitor.reset_chords();
+    }
+    ensure_started(app)
 }
 
 pub fn bind_launcher(app: &AppHandle, hotkey: &str) -> Result<(), String> {

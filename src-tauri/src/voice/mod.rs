@@ -602,6 +602,9 @@ pub fn set_voice_hotkey(
         .store(false, Ordering::Release);
     unregister_hotkeys(&app, &previous);
     if let Err(error) = register_hotkeys(&app, &hotkey) {
+        // A chord refused for want of Accessibility is still held, ready to
+        // start once access is granted; this one is not being saved.
+        unregister_hotkeys(&app, &hotkey);
         let _ = register_hotkeys(&app, &previous);
         return Err(error);
     }

@@ -339,6 +339,11 @@ pub fn set_launcher_hotkey(
     }
 
     if let Err(err) = register_hotkey(&app, &hotkey) {
+        // A chord refused for want of Accessibility is still held, ready to
+        // start once access is granted; this one is not being saved.
+        if crate::modifier_shortcuts::modifier_mask(&hotkey).is_some() {
+            crate::modifier_shortcuts::unbind_launcher();
+        }
         let _ = register_hotkey(&app, &previous);
         return Err(err);
     }
