@@ -53,6 +53,16 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      # A universal build keeps three target trees beside the restored cache,
+      # and the runner image ships SDKs this job never uses. Clearing them is
+      # best-effort; the log shows the space before and after.
+      - name: Free disk space
+        run: |
+          df -h "$PWD"
+          sudo rm -rf "${ANDROID_HOME:-$HOME/Library/Android/sdk}" "$HOME/Library/Android" \
+            /usr/local/share/dotnet "$HOME/.dotnet" "$HOME/.ghcup" || true
+          df -h "$PWD"
+
       - name: Resolve release tag
         id: meta
         # The dispatch input arrives as an env var rather than being expanded
@@ -237,15 +247,27 @@ jobs:
           dmg="dist/Samlu-${VERSION}-macos-universal.dmg"
           zip="dist/Samlu-${VERSION}-macos-universal.zip"
 
+          echo "Free disk before packaging:"
+          df -h "$PWD" "${TMPDIR:-/tmp}"
+
+          # The app is moved, not copied, so packaging needs no second copy of it.
           staging="$(mktemp -d "${TMPDIR:-/tmp}/samlu-dmg.XXXXXX")"
-          cp -R "$app" "$staging/Samlu.app"
+          mv "$app" "$staging/Samlu.app"
           ln -s /Applications "$staging/Applications"
-          hdiutil create -volname Samlu -srcfolder "$staging" -ov -format UDZO "$dmg"
+
+          # hdiutil's own size estimate for -srcfolder can come up short and
+          # fail with "No space left on device" inside the image, so the image
+          # is sized from the staged contents plus headroom.
+          app_mb="$(du -sm "$staging" | cut -f1)"
+          image_mb=$(( app_mb + app_mb / 4 + 32 ))
+          echo "App ${app_mb} MB, image ${image_mb} MB"
+          hdiutil create -volname Samlu -srcfolder "$staging" -size "${image_mb}m" \
+            -ov -format UDZO "$dmg"
           hdiutil verify "$dmg"
-          rm -rf "$staging"
 
           # ditto, not zip: it preserves the bundle's symlinks and metadata.
-          ditto -c -k --keepParent "$app" "$zip"
+          ditto -c -k --keepParent "$staging/Samlu.app" "$zip"
+          rm -rf "$staging"
 
           echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
           echo "zip=$zip" >> "$GITHUB_OUTPUT"
