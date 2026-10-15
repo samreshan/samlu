@@ -52,10 +52,12 @@ fn build_swift_bridge() {
 
 fn main() {
     println!("cargo:rerun-if-changed=native/color_sampler.m");
+    println!("cargo:rerun-if-changed=native/modifier_keys.m");
     println!("cargo:rerun-if-changed=native/permissions.m");
     println!("cargo:rerun-if-changed=native/signing.m");
     cc::Build::new()
         .file("native/color_sampler.m")
+        .file("native/modifier_keys.m")
         .file("native/permissions.m")
         .file("native/signing.m")
         .flag("-fobjc-arc")

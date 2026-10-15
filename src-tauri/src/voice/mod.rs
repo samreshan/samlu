@@ -235,14 +235,17 @@ fn derive_shortcuts(base: &str) -> (String, String, String) {
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .collect();
-    let key = parts.pop().unwrap_or("V").to_string();
-    let modifiers = parts.join("+");
+    // A chord made only of modifiers has no key to keep last.
+    let key = if crate::modifier_shortcuts::modifier_mask(base).is_some() {
+        None
+    } else {
+        Some(parts.pop().unwrap_or("V"))
+    };
     let with_extra = |extra: &str| {
-        if modifiers.is_empty() {
-            format!("{extra}+{key}")
-        } else {
-            format!("{modifiers}+{extra}+{key}")
-        }
+        let mut chord = parts.clone();
+        chord.push(extra);
+        chord.extend(key);
+        chord.join("+")
     };
     (base.to_string(), with_extra("Shift"), with_extra("Cmd"))
 }
@@ -284,6 +287,9 @@ pub fn register_hotkeys(app: &AppHandle, hotkey: &str) -> Result<(), String> {
     if let Some(state) = app.try_state::<Arc<VoiceState>>() {
         state.shortcut_down.store(false, Ordering::Release);
     }
+    if crate::modifier_shortcuts::modifier_mask(hotkey).is_some() {
+        return crate::modifier_shortcuts::bind_voice(app, hotkey);
+    }
     let (normal, summarize, prompt) = derive_shortcuts(hotkey);
     register_one(app, &normal, Mode::Normal)?;
     if let Err(error) = register_one(app, &summarize, Mode::Summarize) {
@@ -298,6 +304,10 @@ pub fn register_hotkeys(app: &AppHandle, hotkey: &str) -> Result<(), String> {
 }
 
 pub fn unregister_hotkeys(app: &AppHandle, hotkey: &str) {
+    if crate::modifier_shortcuts::modifier_mask(hotkey).is_some() {
+        crate::modifier_shortcuts::unbind_voice();
+        return;
+    }
     let (normal, summarize, prompt) = derive_shortcuts(hotkey);
     let _ = app.global_shortcut().unregister(normal.as_str());
     let _ = app.global_shortcut().unregister(summarize.as_str());
@@ -592,6 +602,9 @@ pub fn set_voice_hotkey(
         .store(false, Ordering::Release);
     unregister_hotkeys(&app, &previous);
     if let Err(error) = register_hotkeys(&app, &hotkey) {
+        // A chord refused for want of Accessibility is still held, ready to
+        // start once access is granted; this one is not being saved.
+        unregister_hotkeys(&app, &hotkey);
         let _ = register_hotkeys(&app, &previous);
         return Err(error);
     }
@@ -600,6 +613,12 @@ pub fn set_voice_hotkey(
 }
 
 fn voice_pressed(app: &AppHandle, mode: Mode) {
+    voice_pressed_at(app, mode, Instant::now());
+}
+
+/// `pressed_at` is when the chord went down, which for a modifier-only chord
+/// is a little before it is reported, so taps and holds are told apart fairly.
+pub fn voice_pressed_at(app: &AppHandle, mode: Mode, pressed_at: Instant) {
     let state = app.state::<Arc<VoiceState>>();
     if state.shortcut_down.swap(true, Ordering::AcqRel) {
         log::debug!("[voice] ignored repeated shortcut key-down");
@@ -638,7 +657,6 @@ fn voice_pressed(app: &AppHandle, mode: Mode) {
             if matches!(&*runtime, Runtime::Failed { .. }) {
                 log::info!("[voice] discarding failed dictation for a new recording");
             }
-            let pressed_at = Instant::now();
             let target = capture_target(app);
             state.toggle_recording.store(false, Ordering::Relaxed);
             *runtime = Runtime::Starting {
@@ -684,7 +702,7 @@ fn voice_pressed(app: &AppHandle, mode: Mode) {
     }
 }
 
-fn voice_released(app: &AppHandle) {
+pub fn voice_released(app: &AppHandle) {
     let state = app.state::<Arc<VoiceState>>();
     state.shortcut_down.store(false, Ordering::Release);
     let mut runtime = state.runtime.lock().unwrap();
@@ -711,6 +729,23 @@ fn voice_released(app: &AppHandle) {
             show_toggle_controls(app, &target, mode);
         }
         _ => {}
+    }
+}
+
+/// A modifier-only chord turned out to be the start of some other shortcut,
+/// such as ⌃⌥ plus an arrow key. A take this press started is dropped; a
+/// toggled recording it was stopping carries on to processing.
+pub fn chord_interrupted(app: &AppHandle) {
+    let state = app.state::<Arc<VoiceState>>();
+    state.shortcut_down.store(false, Ordering::Release);
+    let started_by_this_press = match &*state.runtime.lock().unwrap() {
+        Runtime::Starting { released_at, .. } => released_at.is_none(),
+        Runtime::Recording { .. } => !state.toggle_recording.load(Ordering::Relaxed),
+        _ => false,
+    };
+    if started_by_this_press {
+        log::info!("[voice] modifier chord was part of another shortcut; cancelling");
+        voice_cancel(app.clone());
     }
 }
 
@@ -1789,6 +1824,18 @@ mod tests {
                 .unwrap()
                 .model,
             "my-model"
+        );
+    }
+
+    #[test]
+    fn derives_mode_shortcuts_from_a_modifier_only_base() {
+        assert_eq!(
+            derive_shortcuts("Ctrl+Alt"),
+            (
+                "Ctrl+Alt".to_string(),
+                "Ctrl+Alt+Shift".to_string(),
+                "Ctrl+Alt+Cmd".to_string()
+            )
         );
     }
 
