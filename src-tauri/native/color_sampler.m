@@ -141,8 +141,8 @@ void samlu_end_overlay_window(void) {
 
 static void samlu_make_overlay_panel(NSWindow *window) {
   if (![window isKindOfClass:[NSPanel class]]) {
-    NSLog(@"Samlu: %@ is not a panel; it will stay off full screen Spaces",
-          NSStringFromClass(object_getClass(window)));
+    NSLog(@"Samlu: %@ (%@) is not a panel; it will stay off full screen Spaces",
+          window.title, NSStringFromClass(object_getClass(window)));
     return;
   }
   window.styleMask |= NSWindowStyleMaskNonactivatingPanel;
