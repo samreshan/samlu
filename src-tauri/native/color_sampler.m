@@ -486,6 +486,64 @@ void samlu_set_background_mode(bool backgroundMode) {
   });
 }
 
+static void samlu_activate_with_window(NSWindow *window) {
+  [NSApp activateIgnoringOtherApps:YES];
+  [window deminiaturize:nil];
+  [window makeKeyAndOrderFront:nil];
+}
+
+static BOOL samluMenuBarHandoverPending;
+
+/// The menu bar only changes owner when an app activates. Reopening Samlu from
+/// Finder, Spotlight or `open` activates it while it is still an accessory
+/// app (LaunchServices activates before the reopen event arrives), so turning
+/// regular afterwards leaves the previous app's menus up. Handing activation
+/// to that app and taking it back gives Samlu the menu bar. Settings is shown
+/// once Samlu is back, so the round trip never puts the other app's windows
+/// over it.
+static void samlu_present_after_menu_bar_handover(
+  NSWindow *window,
+  NSRunningApplication *menuBarOwner
+) {
+  samluMenuBarHandoverPending = YES;
+  __block id observer = nil;
+  void (^finish)(BOOL) = ^(BOOL timedOut) {
+    if (observer == nil) {
+      return;
+    }
+    [NSNotificationCenter.defaultCenter removeObserver:observer];
+    observer = nil;
+    samluMenuBarHandoverPending = NO;
+    if (timedOut) {
+      NSLog(@"Samlu: %@ did not take activation; showing Settings anyway",
+        menuBarOwner.localizedName);
+    }
+    samlu_activate_with_window(window);
+  };
+  observer = [NSNotificationCenter.defaultCenter
+    addObserverForName:NSApplicationDidResignActiveNotification
+                object:NSApp
+                 queue:nil
+            usingBlock:^(NSNotification *notification) {
+              (void)notification;
+              finish(NO);
+            }];
+  if (@available(macOS 14.0, *)) {
+    [NSApp yieldActivationToApplication:menuBarOwner];
+  }
+  if (![menuBarOwner activateWithOptions:0]) {
+    finish(NO);
+    return;
+  }
+  dispatch_after(
+    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(300 * NSEC_PER_MSEC)),
+    dispatch_get_main_queue(),
+    ^{
+      finish(YES);
+    }
+  );
+}
+
 /// Brings the regular Settings window forward as one AppKit transaction. The
 /// old sequence changed activation policy asynchronously and immediately asked
 /// Tauri to show/focus, which could leave Samlu active but invisible.
@@ -495,10 +553,21 @@ bool samlu_present_application_window(void *windowPointer) {
   }
   dispatch_async(dispatch_get_main_queue(), ^{
     NSWindow *window = (__bridge NSWindow *)windowPointer;
+    if (samluMenuBarHandoverPending) {
+      return;
+    }
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-    [NSApp activateIgnoringOtherApps:YES];
-    [window deminiaturize:nil];
-    [window makeKeyAndOrderFront:nil];
+    NSRunningApplication *menuBarOwner =
+      NSWorkspace.sharedWorkspace.menuBarOwningApplication;
+    if (
+      NSApp.isActive &&
+      menuBarOwner != nil &&
+      ![menuBarOwner isEqual:NSRunningApplication.currentApplication]
+    ) {
+      samlu_present_after_menu_bar_handover(window, menuBarOwner);
+      return;
+    }
+    samlu_activate_with_window(window);
   });
   return true;
 }
