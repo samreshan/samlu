@@ -41,7 +41,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 semver = "1"
 rusqlite = { version = "0.37", features = ["bundled"] }
-model2vec-rs = { version = "0.3", default-features = false, features = ["fancy-regex"] }
+model2vec-rs = { version = "0.3", default-features = false }
+# model2vec's own fancy-regex feature also turns on tokenizers' C++ esaxx
+# backend, which is built against the static C runtime; MSVC refuses to link
+# it beside whisper.cpp's dynamic one. Only tokenizer training uses esaxx, so
+# ask tokenizers for the regex engine directly.
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 notify = "8"
 walkdir = "2"
 pdf-extract = "0.12"
