@@ -109,7 +109,7 @@ pub fn launcher_toggle(app: AppHandle) -> Result<(), String> {
             // hide and let the panel turn back around where it is.
             LAUNCHER_GENERATION.fetch_add(1, Ordering::SeqCst);
             let _ = app.emit_to(LAUNCHER_LABEL, "launcher://reopen", ());
-            let _ = win.set_focus();
+            crate::platform::make_overlay_key(&win);
         } else {
             hide_launcher(&app);
         }
