@@ -467,6 +467,12 @@ pub fn focus_overlay(window: &WebviewWindow) {
     }
 }
 
+/// Gives a visible overlay keyboard focus again. Activating the app has no
+/// Space to switch to here, so this is Tauri's own focus.
+pub fn make_overlay_key(window: &WebviewWindow) {
+    let _ = window.set_focus();
+}
+
 /// Windows displays have no camera housing to hang the Island from.
 pub fn active_display_has_notch() -> bool {
     false

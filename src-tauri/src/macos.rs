@@ -12,6 +12,7 @@ extern "C" {
         top_fraction: f64,
     );
     fn samlu_focus_overlay(window: *mut std::ffi::c_void);
+    fn samlu_make_overlay_key(window: *mut std::ffi::c_void);
     fn samlu_resize_overlay_keeping_top(window: *mut std::ffi::c_void, height: f64);
     fn samlu_active_display_has_notch() -> bool;
     fn samlu_active_screen_frame(out: *mut f64) -> bool;
@@ -173,8 +174,8 @@ pub fn center_overlay_at_top(window: &WebviewWindow) {
     }
 }
 
-/// Presents and focuses a keyboard-driven overlay on the current Space without
-/// first activating an older Samlu window on another desktop.
+/// Presents and focuses a keyboard-driven overlay on the current Space, full
+/// screen Spaces included, without activating Samlu.
 pub fn present_focusable_overlay_at_cursor(
     window: &WebviewWindow,
     width: f64,
@@ -193,6 +194,15 @@ pub fn present_focusable_overlay_at_cursor(
 pub fn focus_overlay(window: &WebviewWindow) {
     if let Ok(pointer) = window.ns_window() {
         unsafe { samlu_focus_overlay(pointer) };
+    }
+}
+
+/// Gives a visible overlay keyboard focus again without activating Samlu.
+/// Tauri's `set_focus` activates the app, which switches to the Space where
+/// Settings was last open.
+pub fn make_overlay_key(window: &WebviewWindow) {
+    if let Ok(pointer) = window.ns_window() {
+        unsafe { samlu_make_overlay_key(pointer) };
     }
 }
 

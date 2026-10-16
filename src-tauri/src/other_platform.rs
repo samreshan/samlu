@@ -96,6 +96,10 @@ pub fn focus_overlay(window: &WebviewWindow) {
     let _ = window.set_focus();
 }
 
+pub fn make_overlay_key(window: &WebviewWindow) {
+    let _ = window.set_focus();
+}
+
 pub fn active_display_has_notch() -> bool {
     false
 }

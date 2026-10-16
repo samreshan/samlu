@@ -1,44 +1,133 @@
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <objc/runtime.h>
 
 typedef void (*SamluColorCallback)(const char *);
 static NSColorSampler *samluSampler;
 
-static NSWindowCollectionBehavior samlu_fullscreen_overlay_behavior(void) {
-  if (@available(macOS 26.0, *)) {
-    return NSWindowCollectionBehaviorCanJoinAllApplications;
-  }
-  return NSWindowCollectionBehaviorFullScreenAuxiliary;
-}
-
-static NSWindowCollectionBehavior samlu_passive_overlay_behavior(void) {
+/// Every Space, including other apps' full screen Spaces. The flags alone are
+/// not enough there: macOS only admits a window that cannot activate its app,
+/// so the overlays are also nonactivating panels (samlu_overlay_panel_class).
+static NSWindowCollectionBehavior samlu_overlay_behavior(void) {
   NSWindowCollectionBehavior behavior =
     NSWindowCollectionBehaviorCanJoinAllSpaces |
     NSWindowCollectionBehaviorTransient |
-    NSWindowCollectionBehaviorIgnoresCycle;
-  return behavior | samlu_fullscreen_overlay_behavior();
+    NSWindowCollectionBehaviorIgnoresCycle |
+    NSWindowCollectionBehaviorFullScreenAuxiliary;
+  if (@available(macOS 13.0, *)) {
+    behavior |= NSWindowCollectionBehaviorCanJoinAllApplications;
+  }
+  return behavior;
 }
 
-static NSWindowCollectionBehavior samlu_focusable_overlay_behavior(void) {
-  NSWindowCollectionBehavior behavior =
-    NSWindowCollectionBehaviorMoveToActiveSpace |
-    NSWindowCollectionBehaviorTransient |
-    NSWindowCollectionBehaviorIgnoresCycle;
-  return behavior | samlu_fullscreen_overlay_behavior();
+/// NSPanel closes itself on Escape, which would destroy the Tauri window. The
+/// overlay pages handle Escape themselves.
+static void samlu_panel_cancel(id self, SEL _cmd, id sender) {}
+
+static char samluPanelSourceClassKey;
+
+/// Key-value observers registered while the window still had Tauri's class are
+/// filed under that class, and NSWindow's dealloc removes them by looking them
+/// up under the class the window has then. Restoring the original class first
+/// lets it find them instead of throwing.
+static void samlu_panel_dealloc(__unsafe_unretained id self, SEL _cmd) {
+  Class source = (Class)objc_getAssociatedObject(object_getClass(self), &samluPanelSourceClassKey);
+  if (source == Nil) {
+    source = [NSPanel class];
+  } else {
+    object_setClass(self, source);
+  }
+  IMP dealloc = class_getMethodImplementation(source, _cmd);
+  ((void (*)(__unsafe_unretained id, SEL))dealloc)(self, _cmd);
+}
+
+/// An NSPanel class carrying the ivars and overrides of Tauri's window class,
+/// so an overlay can become a panel in place. While Settings is open Samlu is
+/// a regular app, and macOS then keeps its plain windows off other apps' full
+/// screen Spaces; they surface on the desktop Space instead.
+///
+/// NSPanel adds no ivars to NSWindow, so the copied ivars sit at the offsets
+/// the instance already has. Anything else returns Nil and the window is left
+/// as it is.
+static Class samlu_overlay_panel_class(Class windowClass) {
+  static NSMutableDictionary<NSString *, id> *panels;
+  if (panels == nil) {
+    panels = [NSMutableDictionary dictionary];
+  }
+  NSString *name = [@"SamluPanel_" stringByAppendingString:NSStringFromClass(windowClass)];
+  id known = panels[name];
+  if (known != nil) {
+    return known == [NSNull null] ? Nil : (Class)known;
+  }
+  panels[name] = [NSNull null];
+  if (class_getSuperclass(windowClass) != [NSWindow class] ||
+      class_getInstanceSize([NSPanel class]) != class_getInstanceSize([NSWindow class])) {
+    return Nil;
+  }
+  Class panel = objc_allocateClassPair([NSPanel class], name.UTF8String, 0);
+  if (panel == Nil) {
+    return Nil;
+  }
+
+  unsigned int ivarCount = 0;
+  Ivar *ivars = class_copyIvarList(windowClass, &ivarCount);
+  for (unsigned int i = 0; i < ivarCount; i++) {
+    const char *type = ivar_getTypeEncoding(ivars[i]);
+    NSUInteger size = 0;
+    NSUInteger alignment = 0;
+    NSGetSizeAndAlignment(type, &size, &alignment);
+    uint8_t alignmentLog2 = alignment > 1 ? (uint8_t)__builtin_ctzl(alignment) : 0;
+    class_addIvar(panel, ivar_getName(ivars[i]), size, alignmentLog2, type);
+  }
+  unsigned int methodCount = 0;
+  Method *methods = class_copyMethodList(windowClass, &methodCount);
+  for (unsigned int i = 0; i < methodCount; i++) {
+    class_addMethod(
+      panel,
+      method_getName(methods[i]),
+      method_getImplementation(methods[i]),
+      method_getTypeEncoding(methods[i])
+    );
+  }
+  free(methods);
+  class_addMethod(panel, @selector(cancel:), (IMP)samlu_panel_cancel, "v@:@");
+  class_addMethod(panel, sel_registerName("dealloc"), (IMP)samlu_panel_dealloc, "v@:");
+  objc_registerClassPair(panel);
+
+  BOOL sameLayout = class_getInstanceSize(panel) == class_getInstanceSize(windowClass);
+  for (unsigned int i = 0; i < ivarCount && sameLayout; i++) {
+    Ivar copy = class_getInstanceVariable(panel, ivar_getName(ivars[i]));
+    sameLayout = copy != NULL && ivar_getOffset(copy) == ivar_getOffset(ivars[i]);
+  }
+  free(ivars);
+  if (!sameLayout) {
+    objc_disposeClassPair(panel);
+    return Nil;
+  }
+  objc_setAssociatedObject(panel, &samluPanelSourceClassKey, windowClass, OBJC_ASSOCIATION_ASSIGN);
+  panels[name] = panel;
+  return panel;
+}
+
+static void samlu_make_overlay_panel(NSWindow *window) {
+  if (![window isKindOfClass:[NSPanel class]]) {
+    Class panel = samlu_overlay_panel_class(object_getClass(window));
+    if (panel == Nil) {
+      NSLog(@"Samlu: %@ cannot become a panel; it will stay off full screen Spaces",
+            NSStringFromClass(object_getClass(window)));
+      return;
+    }
+    object_setClass(window, panel);
+  }
+  window.styleMask |= NSWindowStyleMaskNonactivatingPanel;
 }
 
 static void samlu_apply_overlay_behavior(NSWindow *window) {
   // Status-level windows remain visible above normal and fullscreen app
   // content without activating Samlu or pulling focus from the editor.
+  samlu_make_overlay_panel(window);
   window.level = NSStatusWindowLevel;
-  window.collectionBehavior = samlu_passive_overlay_behavior();
-  window.hidesOnDeactivate = NO;
-  window.animationBehavior = NSWindowAnimationBehaviorNone;
-}
-
-static void samlu_apply_focusable_overlay_behavior(NSWindow *window) {
-  window.level = NSStatusWindowLevel;
-  window.collectionBehavior = samlu_focusable_overlay_behavior();
+  window.collectionBehavior = samlu_overlay_behavior();
   window.hidesOnDeactivate = NO;
   window.animationBehavior = NSWindowAnimationBehaviorNone;
 }
@@ -246,9 +335,10 @@ void samlu_configure_overlay_window(void *windowPointer) {
   });
 }
 
-/// Moves a keyboard-driven overlay to the active Space and display before
-/// making it key. Doing this as one AppKit operation prevents focusing
-/// Samlu from switching back to the Space where Settings was last open.
+/// Shows a keyboard-driven overlay on the active display and makes it key
+/// without activating Samlu, as Spotlight does. The app you were in stays
+/// frontmost, and activating Samlu would switch to the Space where Settings
+/// was last open.
 void samlu_present_focusable_overlay_at_cursor(
   void *windowPointer,
   double width,
@@ -261,7 +351,7 @@ void samlu_present_focusable_overlay_at_cursor(
   dispatch_async(dispatch_get_main_queue(), ^{
     NSWindow *window = (__bridge NSWindow *)windowPointer;
     [window orderOut:nil];
-    samlu_apply_focusable_overlay_behavior(window);
+    samlu_apply_overlay_behavior(window);
     NSScreen *targetScreen = samlu_active_screen();
 
     [window setContentSize:NSMakeSize(width, height)];
@@ -274,7 +364,17 @@ void samlu_present_focusable_overlay_at_cursor(
       [window setFrameOrigin:origin];
     }
     [window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+  });
+}
+
+/// Gives a visible overlay keyboard focus again without activating Samlu.
+void samlu_make_overlay_key(void *windowPointer) {
+  if (windowPointer == NULL) {
+    return;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow *window = (__bridge NSWindow *)windowPointer;
+    [window makeKeyAndOrderFront:nil];
   });
 }
 
@@ -307,6 +407,9 @@ void samlu_resize_overlay_keeping_top(void *windowPointer, double height) {
   }
 }
 
+/// Makes an overlay key and activates Samlu. The voice editor needs the
+/// activation: inserting its text re-activates the app dictation began in,
+/// which is what takes keyboard focus back from the overlay before ⌘V.
 void samlu_focus_overlay(void *windowPointer) {
   if (windowPointer == NULL) {
     return;
@@ -314,7 +417,7 @@ void samlu_focus_overlay(void *windowPointer) {
   dispatch_async(dispatch_get_main_queue(), ^{
     NSWindow *window = (__bridge NSWindow *)windowPointer;
     [window orderOut:nil];
-    samlu_apply_focusable_overlay_behavior(window);
+    samlu_apply_overlay_behavior(window);
     [window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
   });
