@@ -25,7 +25,11 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
     app.state::<Arc<UpdaterState>>()
         .set_menu_item(update_item.clone());
 
+    // The only status item: tauri.conf.json has no `trayIcon`, which Tauri
+    // would add as a second, menu-less one.
     let tray = TrayIconBuilder::with_id("main-tray")
+        .icon(tauri::include_image!("icons/icon.png"))
+        .icon_as_template(true)
         .tooltip("Samlu")
         .menu(&menu);
     // On Windows a left click on a tray icon opens the app, and the menu is
