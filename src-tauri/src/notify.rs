@@ -56,7 +56,7 @@ pub fn island_init(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window(ISLAND_LABEL).is_some() {
         return Ok(());
     }
-    WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         app,
         ISLAND_LABEL,
         WebviewUrl::App("agent-island/island.html".into()),
@@ -72,12 +72,12 @@ pub fn island_init(app: &AppHandle) -> Result<(), String> {
     .resizable(false)
     .shadow(false)
     .focused(false)
-    .visible(false)
-    .build()
-    .map(|window| {
-        crate::platform::configure_overlay(&window);
-    })
-    .map_err(|error| error.to_string())
+    .visible(false);
+    crate::platform::create_overlay(|| builder.build())
+        .map(|window| {
+            crate::platform::configure_overlay(&window);
+        })
+        .map_err(|error| error.to_string())
 }
 
 pub fn handle_event(app: AppHandle, state: Arc<AppState>, event: AgentEvent) {

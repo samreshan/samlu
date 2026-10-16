@@ -7,7 +7,7 @@ static NSColorSampler *samluSampler;
 
 /// Every Space, including other apps' full screen Spaces. The flags alone are
 /// not enough there: macOS only admits a window that cannot activate its app,
-/// so the overlays are also nonactivating panels (samlu_overlay_panel_class).
+/// so the overlays are nonactivating panels (samlu_begin_overlay_window).
 static NSWindowCollectionBehavior samlu_overlay_behavior(void) {
   NSWindowCollectionBehavior behavior =
     NSWindowCollectionBehaviorCanJoinAllSpaces |
@@ -22,33 +22,19 @@ static NSWindowCollectionBehavior samlu_overlay_behavior(void) {
 
 /// NSPanel closes itself on Escape, which would destroy the Tauri window. The
 /// overlay pages handle Escape themselves.
-static void samlu_panel_cancel(id self, SEL _cmd, id sender) {}
-
-static char samluPanelSourceClassKey;
-
-/// Key-value observers registered while the window still had Tauri's class are
-/// filed under that class, and NSWindow's dealloc removes them by looking them
-/// up under the class the window has then. Restoring the original class first
-/// lets it find them instead of throwing.
-static void samlu_panel_dealloc(__unsafe_unretained id self, SEL _cmd) {
-  Class source = (Class)objc_getAssociatedObject(object_getClass(self), &samluPanelSourceClassKey);
-  if (source == Nil) {
-    source = [NSPanel class];
-  } else {
-    object_setClass(self, source);
-  }
-  IMP dealloc = class_getMethodImplementation(source, _cmd);
-  ((void (*)(__unsafe_unretained id, SEL))dealloc)(self, _cmd);
+static void samlu_panel_cancel(id self, SEL _cmd, id sender) {
+  (void)self;
+  (void)_cmd;
+  (void)sender;
 }
 
 /// An NSPanel class carrying the ivars and overrides of Tauri's window class,
-/// so an overlay can become a panel in place. While Settings is open Samlu is
-/// a regular app, and macOS then keeps its plain windows off other apps' full
-/// screen Spaces; they surface on the desktop Space instead.
+/// so Tauri can drive an overlay that is a panel. While Settings is open Samlu
+/// is a regular app, and macOS then keeps its plain windows off other apps'
+/// full screen Spaces and never gives them the keyboard there.
 ///
 /// NSPanel adds no ivars to NSWindow, so the copied ivars sit at the offsets
-/// the instance already has. Anything else returns Nil and the window is left
-/// as it is.
+/// Tauri's class uses. Anything else returns Nil and the window stays plain.
 static Class samlu_overlay_panel_class(Class windowClass) {
   static NSMutableDictionary<NSString *, id> *panels;
   if (panels == nil) {
@@ -91,7 +77,6 @@ static Class samlu_overlay_panel_class(Class windowClass) {
   }
   free(methods);
   class_addMethod(panel, @selector(cancel:), (IMP)samlu_panel_cancel, "v@:@");
-  class_addMethod(panel, sel_registerName("dealloc"), (IMP)samlu_panel_dealloc, "v@:");
   objc_registerClassPair(panel);
 
   BOOL sameLayout = class_getInstanceSize(panel) == class_getInstanceSize(windowClass);
@@ -104,20 +89,61 @@ static Class samlu_overlay_panel_class(Class windowClass) {
     objc_disposeClassPair(panel);
     return Nil;
   }
-  objc_setAssociatedObject(panel, &samluPanelSourceClassKey, windowClass, OBJC_ASSOCIATION_ASSIGN);
   panels[name] = panel;
   return panel;
 }
 
-static void samlu_make_overlay_panel(NSWindow *window) {
-  if (![window isKindOfClass:[NSPanel class]]) {
-    Class panel = samlu_overlay_panel_class(object_getClass(window));
-    if (panel == Nil) {
-      NSLog(@"Samlu: %@ cannot become a panel; it will stay off full screen Spaces",
-            NSStringFromClass(object_getClass(window)));
+/// Set on the main thread while an overlay window is being built.
+static BOOL samluBuildingOverlay;
+static IMP samluWindowAllocWithZone;
+
+/// Tauri's window class allocates a panel twin while an overlay is being
+/// built. A window cannot become a panel after it is built: WebKit observes it
+/// by then, and its class is a key-value observing subclass that cannot be
+/// swapped without breaking those observers.
+static id samlu_window_alloc_with_zone(id self, SEL _cmd, NSZone *zone) {
+  Class windowClass = (Class)self;
+  if (samluBuildingOverlay && [NSThread isMainThread]) {
+    Class panel = samlu_overlay_panel_class(windowClass);
+    if (panel != Nil) {
+      windowClass = panel;
+    }
+  }
+  return ((id (*)(id, SEL, NSZone *))samluWindowAllocWithZone)(windowClass, _cmd, zone);
+}
+
+/// Brackets building an overlay window on the main thread, so it is created as
+/// a nonactivating panel.
+void samlu_begin_overlay_window(void) {
+  if (samluWindowAllocWithZone == NULL) {
+    Class windowClass = objc_getClass("TaoWindow");
+    if (windowClass == Nil) {
+      NSLog(@"Samlu: no TaoWindow class; overlays will stay off full screen Spaces");
       return;
     }
-    object_setClass(window, panel);
+    samluWindowAllocWithZone = class_getMethodImplementation(
+      object_getClass([NSWindow class]),
+      @selector(allocWithZone:)
+    );
+    class_addMethod(
+      object_getClass(windowClass),
+      @selector(allocWithZone:),
+      (IMP)samlu_window_alloc_with_zone,
+      "@@:^{_NSZone=}"
+    );
+  }
+  samluBuildingOverlay = [NSThread isMainThread];
+}
+
+void samlu_end_overlay_window(void) {
+  samluBuildingOverlay = NO;
+}
+
+static void samlu_make_overlay_panel(NSWindow *window) {
+  if (![window isKindOfClass:[NSPanel class]]) {
+    NSLog(@"Samlu: %@ is not a panel; it will stay off full screen Spaces",
+          NSStringFromClass(object_getClass(window)));
+    return;
   }
   window.styleMask |= NSWindowStyleMaskNonactivatingPanel;
 }

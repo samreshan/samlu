@@ -4,6 +4,8 @@ use std::ffi::CString;
 use tauri::WebviewWindow;
 
 extern "C" {
+    fn samlu_begin_overlay_window();
+    fn samlu_end_overlay_window();
     fn samlu_configure_overlay_window(window: *mut std::ffi::c_void);
     fn samlu_present_focusable_overlay_at_cursor(
         window: *mut std::ffi::c_void,
@@ -117,6 +119,16 @@ pub fn post_paste_shortcut() -> bool {
 /// Signed with a Developer ID rather than ad hoc. See `native/signing.m`.
 pub fn is_developer_id_signed() -> bool {
     unsafe { samlu_is_developer_id_signed() }
+}
+
+/// Builds an overlay window as a nonactivating panel, which is what lets it
+/// take the keyboard over any app, full screen ones included, without
+/// activating Samlu. `build` must create the window on the main thread.
+pub fn create_overlay<T>(build: impl FnOnce() -> T) -> T {
+    unsafe { samlu_begin_overlay_window() };
+    let window = build();
+    unsafe { samlu_end_overlay_window() };
+    window
 }
 
 pub fn configure_overlay(window: &WebviewWindow) {

@@ -62,5 +62,12 @@ pub fn hide_to_background(app: &AppHandle) {
             log::warn!("could not hide Settings: {error}");
         }
     }
-    crate::platform::set_background_mode(true);
+    // The setup guide is a regular window too; it keeps the Dock icon, and
+    // finishing it comes back here.
+    let guide_open = app
+        .get_webview_window(crate::onboarding::LABEL)
+        .is_some_and(|window| window.is_visible().unwrap_or(false));
+    if !guide_open {
+        crate::platform::set_background_mode(true);
+    }
 }

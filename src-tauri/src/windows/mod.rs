@@ -216,6 +216,10 @@ pub fn is_developer_id_signed() -> bool {
     true
 }
 
+pub fn create_overlay<T>(build: impl FnOnce() -> T) -> T {
+    build()
+}
+
 /// Keeps an overlay above other windows and out of the taskbar and Alt+Tab.
 pub fn configure_overlay(window: &WebviewWindow) {
     let _ = window.set_always_on_top(true);

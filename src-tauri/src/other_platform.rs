@@ -55,6 +55,10 @@ pub fn is_developer_id_signed() -> bool {
     true
 }
 
+pub fn create_overlay<T>(build: impl FnOnce() -> T) -> T {
+    build()
+}
+
 pub fn configure_overlay(_window: &WebviewWindow) {}
 
 #[derive(Clone, Copy, Debug, PartialEq)]

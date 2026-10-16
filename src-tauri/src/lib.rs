@@ -188,7 +188,20 @@ pub fn run() {
     let initial_codex_payload =
         adapters::codex::payload_from_args(&initial_args).map(str::to_string);
 
-    let app = tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
+    // On macOS Samlu starts in the background like other menu bar utilities:
+    // Settings is created hidden and opens from the menu bar icon, the
+    // launcher, or by opening Samlu again. Windows still shows it at launch.
+    #[cfg(target_os = "macos")]
+    for window in &mut context.config_mut().app.windows {
+        if window.label == lifecycle::MAIN_LABEL {
+            window.visible = false;
+        }
+    }
+
+    #[allow(unused_mut)]
+    let mut app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(payload) = adapters::codex::payload_from_args(&argv) {
                 match adapters::codex::parse_cli_payload(payload) {
@@ -487,8 +500,14 @@ pub fn run() {
                 }
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while running Samlu");
+
+    // No Dock icon until Settings opens (see lifecycle.rs). Applied as the app
+    // finishes launching, before any window exists; LSUIElement in Info.plist
+    // keeps the Dock tile away until then.
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
     app.run(|app, event| match event {
         #[cfg(target_os = "macos")]

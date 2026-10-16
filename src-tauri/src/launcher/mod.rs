@@ -82,7 +82,7 @@ pub fn launcher_init(app: &AppHandle) -> Result<(), String> {
     .shadow(false)
     .visible(false);
 
-    let window = builder.build().map_err(|e| e.to_string())?;
+    let window = crate::platform::create_overlay(|| builder.build()).map_err(|e| e.to_string())?;
     crate::platform::configure_overlay(&window);
     Ok(())
 }
