@@ -1,0 +1,7 @@
+# On Windows, esaxx-rs (C++ that Descriptive Find's tokenizer pulls in)
+# always builds against the static C runtime, and MSVC refuses to link it
+# with code built against the DLL one. Building everything against the
+# static runtime keeps whisper.cpp, SQLite and the rest in step with it, and
+# the installed app needs no Visual C++ redistributable.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
