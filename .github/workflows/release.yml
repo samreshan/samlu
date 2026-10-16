@@ -1,6 +1,7 @@
 name: Release
 
-# Every push to main publishes a downloadable macOS build once CI passes.
+# Every push to main publishes downloadable macOS and Windows builds once CI
+# passes.
 # Signing is optional: with no secrets configured this produces an ad-hoc
 # signed universal build that anyone can download and run after clearing
 # quarantine (see the generated release notes). Adding the APPLE_* secrets
@@ -42,26 +43,18 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  release:
+  # One version for every platform's build.
+  meta:
     needs: ci
-    runs-on: macos-26
-    env:
-      TARGET: universal-apple-darwin
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      # A universal build keeps three target trees beside the restored cache,
-      # and the runner image ships SDKs this job never uses. Clearing them is
-      # best-effort; the log shows the space before and after.
-      - name: Free disk space
-        run: |
-          df -h "$PWD"
-          sudo rm -rf "${ANDROID_HOME:-$HOME/Library/Android/sdk}" "$HOME/Library/Android" \
-            /usr/local/share/dotnet "$HOME/.dotnet" "$HOME/.ghcup" || true
-          df -h "$PWD"
 
       - name: Resolve release tag
         id: meta
@@ -94,6 +87,93 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
           echo "Publishing $tag"
+
+  # The Windows installer, handed to the release job below. Its updater
+  # signature uses the same key as the macOS archive.
+  windows:
+    needs: meta
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2.0.0" --locked
+
+      # tauri.windows.conf.json switches the bundle to an NSIS installer.
+      - name: Build installer
+        working-directory: src-tauri
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${UPDATER_KEY}" ]; then
+            export TAURI_SIGNING_PRIVATE_KEY="$UPDATER_KEY"
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${UPDATER_KEY_PASSWORD:-}"
+            create_updater=true
+          else
+            create_updater=false
+          fi
+          cargo tauri build --bundles nsis \
+            --config "{\"version\":\"${VERSION}\",\"bundle\":{\"createUpdaterArtifacts\":${create_updater}}}"
+
+      - name: Collect installer
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          bundle_dir="src-tauri/target/release/bundle/nsis"
+          installer="$(find "$bundle_dir" -maxdepth 1 -name '*-setup.exe' | head -1)"
+          test -f "$installer"
+          mkdir -p dist
+          name="Samlu-${VERSION}-windows-x64-setup.exe"
+          cp "$installer" "dist/${name}"
+          if [ -f "${installer}.sig" ]; then
+            cp "${installer}.sig" "dist/${name}.sig"
+          fi
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/
+          if-no-files-found: error
+
+  # The macOS build publishes the release, with the Windows installer when
+  # its build succeeded. A failed Windows build is reported but does not
+  # hold back the macOS release.
+  release:
+    needs: [meta, windows]
+    if: ${{ !cancelled() && needs.meta.result == 'success' }}
+    runs-on: macos-26
+    env:
+      TARGET: universal-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # A universal build keeps three target trees beside the restored cache,
+      # and the runner image ships SDKs this job never uses. Clearing them is
+      # best-effort; the log shows the space before and after.
+      - name: Free disk space
+        run: |
+          df -h "$PWD"
+          sudo rm -rf "${ANDROID_HOME:-$HOME/Library/Android/sdk}" "$HOME/Library/Android" \
+            /usr/local/share/dotnet "$HOME/.dotnet" "$HOME/.ghcup" || true
+          df -h "$PWD"
 
       # Secrets cannot be tested directly in a job-level `if`, so capability is
       # resolved once here and every signing step keys off it.
@@ -173,7 +253,7 @@ jobs:
       - name: Build universal app bundle
         working-directory: src-tauri
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.meta.outputs.version }}
           SIGNED: ${{ steps.signing.outputs.signed }}
           NOTARIZE: ${{ steps.signing.outputs.notarize }}
           UPDATER: ${{ steps.signing.outputs.updater }}
@@ -220,10 +300,33 @@ jobs:
           cargo tauri build --target "$TARGET" --bundles app \
             --config "{\"version\":\"${VERSION}\",\"bundle\":{\"createUpdaterArtifacts\":${create_updater}}}"
 
+      - name: Fetch Windows installer
+        if: needs.windows.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: dist
+
+      - name: Locate Windows installer
+        id: windows
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          name="Samlu-${VERSION}-windows-x64-setup.exe"
+          if [ -f "dist/${name}" ]; then
+            echo "installer=dist/${name}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The Windows build failed, so this release has no Windows installer."
+          fi
+          if [ -f "dist/${name}.sig" ]; then
+            echo "signature=dist/${name}.sig" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Package disk image and archive
         id: package
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
           app="src-tauri/target/${TARGET}/release/bundle/macos/Samlu.app"
@@ -276,8 +379,8 @@ jobs:
         id: feed
         if: steps.signing.outputs.updater == 'true'
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
-          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          TAG: ${{ needs.meta.outputs.tag }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -302,20 +405,32 @@ jobs:
           [ -n "$notes" ] || notes="See the release notes on GitHub."
 
           # One universal archive serves both architectures. The -app keys are
-          # what an installed .app looks for first.
+          # what an installed .app looks for first. Windows updates through
+          # its installer, listed when the Windows build signed one.
           url="https://github.com/${REPOSITORY}/releases/download/${TAG}/${name}"
+          windows_name="Samlu-${VERSION}-windows-x64-setup.exe"
+          windows_url="https://github.com/${REPOSITORY}/releases/download/${TAG}/${windows_name}"
+          windows_signature=""
+          if [ -f "dist/${windows_name}.sig" ]; then
+            windows_signature="$(cat "dist/${windows_name}.sig")"
+          fi
           jq -n \
             --arg version "$VERSION" \
             --arg notes "$notes" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg url "$url" \
             --arg signature "$(cat "dist/${name}.sig")" \
-            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: {
+            --arg windows_url "$windows_url" \
+            --arg windows_signature "$windows_signature" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: ({
               "darwin-aarch64": {url: $url, signature: $signature},
               "darwin-x86_64": {url: $url, signature: $signature},
               "darwin-aarch64-app": {url: $url, signature: $signature},
               "darwin-x86_64-app": {url: $url, signature: $signature}
-            }}' > dist/latest.json
+            } + (if $windows_signature == "" then {} else {
+              "windows-x86_64": {url: $windows_url, signature: $windows_signature},
+              "windows-x86_64-nsis": {url: $windows_url, signature: $windows_signature}
+            } end))}' > dist/latest.json
           jq . dist/latest.json
 
           {
@@ -343,13 +458,17 @@ jobs:
 
       - name: Write release notes
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.meta.outputs.version }}
           SIGNED: ${{ steps.signing.outputs.notarize }}
           UPDATER: ${{ steps.signing.outputs.updater }}
+          WINDOWS_INSTALLER: ${{ steps.windows.outputs.installer }}
         run: |
           set -euo pipefail
           {
             echo "Samlu ${VERSION} for macOS - a universal build for Apple Silicon and Intel."
+            if [ -n "$WINDOWS_INSTALLER" ]; then
+              echo "Also for Windows 10 and 11 (64-bit)."
+            fi
             echo
             echo "## Install"
             echo
@@ -357,6 +476,17 @@ jobs:
             echo "2. Drag **Samlu** into your Applications folder."
             echo "3. Launch it. Samlu lives in the menu bar, not the Dock."
             echo
+            if [ -n "$WINDOWS_INSTALLER" ]; then
+              echo "### Windows"
+              echo
+              echo "1. Download \`$(basename "$WINDOWS_INSTALLER")\` below and run it."
+              echo "2. It installs for your account only; no administrator rights needed."
+              echo "3. Samlu lives in the system tray. Left-click its icon for Settings."
+              echo
+              echo "> The installer isn't code-signed yet, so Microsoft Defender SmartScreen"
+              echo "> may warn on first run. Choose **More info**, then **Run anyway**."
+              echo
+            fi
             if [ "$SIGNED" != "true" ]; then
               echo "> [!IMPORTANT]"
               echo "> This build is **not signed with an Apple Developer ID**, so macOS"
@@ -395,8 +525,8 @@ jobs:
             echo
             echo "## Requirements"
             echo
-            echo "- macOS 11 Big Sur or later"
-            echo "- An API key is needed only for cloud engines (stored in your Keychain)"
+            echo "- macOS 11 Big Sur or later, or Windows 10/11 (64-bit)"
+            echo "- An API key is needed only for cloud engines (stored in your Keychain, or Credential Manager on Windows)"
           } > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
 
@@ -410,11 +540,13 @@ jobs:
           ARCHIVE: ${{ steps.feed.outputs.archive }}
           SIGNATURE: ${{ steps.feed.outputs.signature }}
           FEED: ${{ steps.feed.outputs.feed }}
+          WINDOWS_INSTALLER: ${{ steps.windows.outputs.installer }}
+          WINDOWS_SIGNATURE: ${{ steps.windows.outputs.signature }}
         run: |
           set -euo pipefail
           {
             echo "list<<FILES"
-            for file in "$DMG" "$ZIP" "$ARCHIVE" "$SIGNATURE" "$FEED"; do
+            for file in "$DMG" "$ZIP" "$ARCHIVE" "$SIGNATURE" "$FEED" "$WINDOWS_INSTALLER" "$WINDOWS_SIGNATURE"; do
               if [ -n "$file" ]; then
                 test -f "$file"
                 echo "$file"
@@ -426,9 +558,9 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
+          tag_name: ${{ needs.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Samlu ${{ steps.meta.outputs.version }}
+          name: Samlu ${{ needs.meta.outputs.version }}
           body_path: RELEASE_NOTES.md
           generate_release_notes: true
           draft: false

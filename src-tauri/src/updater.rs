@@ -109,7 +109,7 @@ impl UpdaterState {
                 notified: None,
             }),
             menu_item: Mutex::new(None),
-            signed_build: crate::macos::is_developer_id_signed(),
+            signed_build: crate::platform::is_developer_id_signed(),
         }
     }
 
@@ -489,6 +489,17 @@ fn current_bundle() -> Option<PathBuf> {
 
 /// Why this copy cannot install updates at all. `None` means it can, possibly
 /// after an administrator password.
+#[cfg(not(target_os = "macos"))]
+pub fn install_blocker() -> Option<String> {
+    // The Windows installer updates Samlu wherever it was installed. It also
+    // closes Samlu while it runs, which is why there is no bundle to swap
+    // silently and updates only install when asked.
+    None
+}
+
+/// Why this copy cannot install updates at all. `None` means it can, possibly
+/// after an administrator password.
+#[cfg(target_os = "macos")]
 pub fn install_blocker() -> Option<String> {
     let Some(bundle) = current_bundle() else {
         return Some(

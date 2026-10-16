@@ -71,7 +71,7 @@
         <section class="step" data-step="2">
           <p class="eyebrow">Permission 2 of 2</p>
           <h1>Let Samlu put text back.</h1>
-          <p class="lede narrow">
+          <p class="lede narrow" data-windows="Samlu types the result into the exact field where recording began. Windows needs no permission for that.">
             Accessibility lets Samlu return text to the exact field where recording began. Without
             it, results are copied instead.
           </p>
@@ -80,13 +80,13 @@
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
             </span>
             <span class="permission-copy">
-              <strong>Accessibility</strong>
+              <strong data-windows="Text insertion">Accessibility</strong>
               <small>Automatic insertion into the app you were already using.</small>
             </span>
             <span class="pill good" id="acc-granted" hidden>Allowed</span>
             <button class="primary-button" id="grant-acc" type="button">Open Settings</button>
           </div>
-          <p class="note">
+          <p class="note" data-windows="Nothing to allow here on Windows.">
             You can skip this. Samlu will copy results to the clipboard until it's granted.
           </p>
         </section>
@@ -158,7 +158,7 @@
                 <span class="screen"><span class="banner"></span></span>
               </span>
               <strong>System notification</strong>
-              <small>Standard macOS banner, kept in Notification Center.</small>
+              <small data-windows="Standard Windows notification, kept in the notification center.">Standard macOS banner, kept in Notification Center.</small>
             </button>
           </div>
           <p class="note">
@@ -178,7 +178,7 @@
           <div class="summary-grid">
             <div class="summary-row">
               <kbd data-voice-hotkey>⌥V</kbd>
-              <span><strong>Dictate</strong><small>Add ⇧ to summarize, ⌘ for a prompt</small></span>
+              <span><strong>Dictate</strong><small data-windows="Add Shift to summarize, Win for a prompt">Add ⇧ to summarize, ⌘ for a prompt</small></span>
             </div>
             <div class="summary-row">
               <kbd data-launcher-hotkey>⌥H</kbd>
@@ -206,6 +206,7 @@
     </main>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="../platform.js"></script>
     <script src="../samlu-select.js"></script>
     <script src="./onboarding.js"></script>
   </body>

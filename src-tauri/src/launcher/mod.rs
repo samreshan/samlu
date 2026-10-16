@@ -83,7 +83,7 @@ pub fn launcher_init(app: &AppHandle) -> Result<(), String> {
     .visible(false);
 
     let window = builder.build().map_err(|e| e.to_string())?;
-    crate::macos::configure_overlay(&window);
+    crate::platform::configure_overlay(&window);
     Ok(())
 }
 
@@ -121,7 +121,7 @@ pub fn launcher_toggle(app: AppHandle) -> Result<(), String> {
         // hidden, then plays its entrance once the window has focus.
         let _ = app.emit_to(LAUNCHER_LABEL, "launcher://present", ());
         let rest = LAUNCHER_REST_H.load(Ordering::Relaxed) as f64;
-        if !crate::macos::present_focusable_overlay_at_cursor(
+        if !crate::platform::present_focusable_overlay_at_cursor(
             &win,
             LAUNCHER_W,
             rest,
@@ -189,7 +189,7 @@ pub fn launcher_resize(app: AppHandle, height: f64, resting: bool) {
         LAUNCHER_REST_H.store(clamped.round() as u64, Ordering::Relaxed);
     }
     if let Some(win) = app.get_webview_window(LAUNCHER_LABEL) {
-        crate::macos::resize_overlay_keeping_top(&win, clamped);
+        crate::platform::resize_overlay_keeping_top(&win, clamped);
     }
 }
 
@@ -283,7 +283,10 @@ pub fn launcher_activate(
 #[tauri::command]
 pub fn launcher_reveal(kind: String, target: String) -> Result<(), String> {
     if !matches!(kind.as_str(), "app" | "file" | "project" | "content") {
-        return Err("Only apps, files and projects can be shown in Finder.".to_string());
+        return Err(format!(
+            "Only apps, files and projects can be shown in {}.",
+            crate::project_actions::model::FILE_MANAGER
+        ));
     }
     crate::reveal_path(&target)
 }
@@ -362,6 +365,37 @@ pub fn get_project_settings(
         "excludedPaths": config.excluded_project_paths(),
         "projectCount": index.len(),
     })
+}
+
+#[cfg(not(windows))]
+/// The Windows folder picker.
+#[cfg(windows)]
+#[tauri::command]
+pub async fn choose_project_folder(
+    app: AppHandle,
+    prompt: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    tauri::async_runtime::spawn_blocking(move || {
+        let prompt = if prompt.trim().is_empty() {
+            "Choose a project folder".to_string()
+        } else {
+            prompt
+        };
+        app.dialog()
+            .file()
+            .set_title(prompt)
+            .blocking_pick_folder()
+            .map(|folder| {
+                folder
+                    .into_path()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .map_err(|error| format!("Windows folder picker failed: {error}"))
+            })
+            .transpose()
+    })
+    .await
+    .map_err(|error| format!("folder picker task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -445,6 +479,12 @@ fn normalize_directories(paths: Vec<String>) -> Result<Vec<String>, String> {
         }
         let path = path.canonicalize().unwrap_or(path);
         let path = path.to_string_lossy().to_string();
+        // Windows canonical paths start `\\?\`, which nothing else expects.
+        #[cfg(windows)]
+        let path = path
+            .strip_prefix(r"\\?\")
+            .map(str::to_string)
+            .unwrap_or(path);
         if !normalized.contains(&path) {
             normalized.push(path);
         }
@@ -472,12 +512,24 @@ fn run_action(app: &AppHandle, action: &str) -> Result<(), String> {
             crate::updater::check_from_menu(app);
             Ok(())
         }
+        #[cfg(not(windows))]
         "open_terminal" => std::process::Command::new("/usr/bin/open")
             .args(["-a", "Terminal"])
             .spawn()
             .map(|_| ())
             .map_err(|error| error.to_string()),
+        #[cfg(windows)]
+        "open_terminal" => crate::project_actions::open_terminal(app),
         "color_picker" => {
+            // AppKit shows its own loupe; on Windows the next click picks, so
+            // say so.
+            #[cfg(windows)]
+            let _ = app
+                .notification()
+                .builder()
+                .title("Pick a color")
+                .body("Click anywhere on the screen. Esc or a right click cancels.")
+                .show();
             let app = app.clone();
             tauri::async_runtime::spawn_blocking(move || match color_picker::pick() {
                 Ok(color) => {

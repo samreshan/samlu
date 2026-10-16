@@ -18,7 +18,7 @@ pub fn show(app: &AppHandle) -> Result<(), String> {
         window
             .unminimize()
             .map_err(|error| format!("could not restore the setup guide: {error}"))?;
-        return crate::macos::present_application_window(&window)
+        return crate::platform::present_application_window(&window)
             .then_some(())
             .ok_or_else(|| "could not access the native setup-guide window".to_string());
     }
@@ -37,7 +37,7 @@ pub fn show(app: &AppHandle) -> Result<(), String> {
     if let Some(config) = app.try_state::<Arc<AppConfig>>() {
         crate::settings::apply_window_theme(app, &config.appearance());
     }
-    crate::macos::present_application_window(&window)
+    crate::platform::present_application_window(&window)
         .then_some(())
         .ok_or_else(|| "could not access the native setup-guide window".to_string())
 }
@@ -50,7 +50,7 @@ pub fn onboarding_state(
     voice: tauri::State<'_, Arc<VoiceConfig>>,
 ) -> serde_json::Value {
     serde_json::json!({
-        "microphone": crate::macos::microphone_access().as_str(),
+        "microphone": crate::platform::microphone_access().as_str(),
         "accessibility": crate::voice::get_voice_accessibility_status(),
         "voiceReady": voice.stt_ready(),
         "appleAvailable": crate::voice::apple_available(),
@@ -63,16 +63,16 @@ pub fn onboarding_state(
 
 #[tauri::command]
 pub fn onboarding_request_microphone() -> &'static str {
-    let status = crate::macos::microphone_access();
-    if status == crate::macos::MicrophoneAccess::NotDetermined {
-        crate::macos::request_microphone_access();
+    let status = crate::platform::microphone_access();
+    if status == crate::platform::MicrophoneAccess::NotDetermined {
+        crate::platform::request_microphone_access();
     }
     status.as_str()
 }
 
 #[tauri::command]
 pub fn onboarding_open_microphone_settings() -> Result<(), String> {
-    crate::open_path("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+    crate::voice::open_voice_microphone_settings()
 }
 
 #[tauri::command]

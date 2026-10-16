@@ -8,6 +8,7 @@
 //! cheap enough (low single-digit milliseconds for a few hundred bundles)
 //! that no file-watching is needed for a v1.
 
+#[cfg(not(windows))]
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -49,6 +50,8 @@ impl AppIndex {
                 apps.push(entry);
             }
         }
+        #[cfg(windows)]
+        apps.extend(store_apps::entries());
         let mut seen = HashSet::new();
         apps.retain(|entry| seen.insert(entry.path.clone()));
         *self.apps.lock().unwrap() = apps;
@@ -59,6 +62,7 @@ impl AppIndex {
     }
 }
 
+#[cfg(not(windows))]
 fn app_directories() -> Vec<PathBuf> {
     let mut dirs = vec![
         PathBuf::from("/Applications"),
@@ -84,6 +88,7 @@ fn app_directories() -> Vec<PathBuf> {
 }
 
 /// Apps people expect to find that live outside the scanned folders.
+#[cfg(not(windows))]
 fn standalone_apps() -> Vec<PathBuf> {
     vec![PathBuf::from("/System/Library/CoreServices/Finder.app")]
 }
@@ -92,6 +97,7 @@ fn standalone_apps() -> Vec<PathBuf> {
 /// own Contents/ (that's where helper/background apps like
 /// Xcode.app/Contents/Applications/Simulator.app live, which aren't meant to
 /// be launched directly from a top-level search).
+#[cfg(not(windows))]
 fn scan_directory(dir: &Path, out: &mut Vec<AppEntry>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -103,6 +109,7 @@ fn scan_directory(dir: &Path, out: &mut Vec<AppEntry>) {
     }
 }
 
+#[cfg(not(windows))]
 fn entry_for(path: &Path) -> Option<AppEntry> {
     if path.extension().and_then(|ext| ext.to_str()) != Some("app") || !path.exists() {
         return None;
@@ -131,6 +138,7 @@ fn entry_for(path: &Path) -> Option<AppEntry> {
     })
 }
 
+#[cfg(not(windows))]
 #[derive(Deserialize, Default)]
 struct InfoPlist {
     #[serde(rename = "CFBundleDisplayName")]
@@ -142,6 +150,7 @@ struct InfoPlist {
 /// The bundle's own names from Info.plist, which can differ from the file
 /// name ("Code" for "Visual Studio Code.app"). Malformed or missing plists
 /// simply contribute nothing.
+#[cfg(not(windows))]
 fn bundle_names(app_path: &Path) -> Vec<String> {
     let Ok(info) = plist::from_file::<_, InfoPlist>(app_path.join("Contents/Info.plist")) else {
         return Vec::new();
@@ -152,4 +161,181 @@ fn bundle_names(app_path: &Path) -> Vec<String> {
         .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
         .collect()
+}
+
+/// The Start Menu, for everyone and for this user: each app installs a
+/// shortcut there.
+#[cfg(windows)]
+fn app_directories() -> Vec<PathBuf> {
+    const PROGRAMS: &str = r"Microsoft\Windows\Start Menu\Programs";
+    [
+        std::env::var_os("ProgramData").map(|folder| PathBuf::from(folder).join(PROGRAMS)),
+        dirs::data_dir().map(|folder| folder.join(PROGRAMS)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+#[cfg(windows)]
+fn standalone_apps() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// Shortcuts sit in folders per vendor, a level or two down.
+#[cfg(windows)]
+fn scan_directory(dir: &Path, out: &mut Vec<AppEntry>) {
+    for entry in walkdir::WalkDir::new(dir)
+        .max_depth(4)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(app) = entry_for(entry.path()) {
+            out.push(app);
+        }
+    }
+}
+
+/// A Start Menu shortcut, named as Windows shows it. Uninstallers, readmes
+/// and help files that installers put next to the app are left out.
+#[cfg(windows)]
+fn entry_for(path: &Path) -> Option<AppEntry> {
+    let is_shortcut = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"));
+    if !is_shortcut {
+        return None;
+    }
+    let name = path.file_stem()?.to_string_lossy().to_string();
+    let lower = name.to_lowercase();
+    if ["uninstall", "readme", "release notes", "documentation"]
+        .iter()
+        .any(|word| lower.contains(word))
+        || lower == "help"
+        || lower.ends_with(" help")
+    {
+        return None;
+    }
+    Some(AppEntry {
+        name,
+        path: path.to_string_lossy().to_string(),
+        aliases: Vec::new(),
+    })
+}
+
+/// Microsoft Store apps have no shortcut file. Windows lists them through
+/// `Get-StartApps`, which takes a moment, so the list is refreshed in the
+/// background and joins the index once it arrives. Each opens through
+/// `shell:AppsFolder`.
+#[cfg(windows)]
+mod store_apps {
+    use super::AppEntry;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    const REFRESH_EVERY: Duration = Duration::from_secs(10 * 60);
+
+    struct Cache {
+        refreshed: Option<Instant>,
+        running: bool,
+        apps: Vec<AppEntry>,
+    }
+
+    static CACHE: Mutex<Cache> = Mutex::new(Cache {
+        refreshed: None,
+        running: false,
+        apps: Vec::new(),
+    });
+
+    pub fn entries() -> Vec<AppEntry> {
+        let mut cache = CACHE.lock().unwrap();
+        let stale = cache
+            .refreshed
+            .is_none_or(|refreshed| refreshed.elapsed() > REFRESH_EVERY);
+        if stale && !cache.running {
+            cache.running = true;
+            std::thread::spawn(refresh);
+        }
+        cache.apps.clone()
+    }
+
+    fn refresh() {
+        let apps = list().unwrap_or_default();
+        let mut cache = CACHE.lock().unwrap();
+        cache.running = false;
+        cache.refreshed = Some(Instant::now());
+        if !apps.is_empty() {
+            cache.apps = apps;
+        }
+    }
+
+    fn list() -> Option<Vec<AppEntry>> {
+        use std::os::windows::process::CommandExt;
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "ConvertTo-Json -Compress -InputObject @(Get-StartApps)",
+            ])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| parse(&String::from_utf8_lossy(&output.stdout)))
+    }
+
+    #[derive(serde::Deserialize)]
+    struct StartApp {
+        #[serde(rename = "Name")]
+        name: String,
+        #[serde(rename = "AppID")]
+        app_id: String,
+    }
+
+    /// Store apps are the ones whose id names a package (`Package!App`);
+    /// the rest have Start Menu shortcuts already.
+    pub(super) fn parse(json: &str) -> Vec<AppEntry> {
+        serde_json::from_str::<Vec<StartApp>>(json.trim())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|app| app.app_id.contains('!') && !app.name.trim().is_empty())
+            .map(|app| AppEntry {
+                name: app.name.trim().to_string(),
+                path: format!(r"shell:AppsFolder\{}", app.app_id),
+                aliases: Vec::new(),
+            })
+            .collect()
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn store_apps_are_the_packaged_ones() {
+        let apps = store_apps::parse(
+            r#"[{"Name":"Calculator","AppID":"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"},{"Name":"Visual Studio Code","AppID":"{6D809377-6AF0-444B-8957-A3773F02200E}\\Microsoft VS Code\\Code.exe"}]"#,
+        );
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "Calculator");
+        assert_eq!(
+            apps[0].path,
+            r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"
+        );
+    }
+
+    #[test]
+    fn shortcuts_are_apps_and_uninstallers_are_not() {
+        let app = entry_for(Path::new(r"C:\Start\Programs\Zed\Zed.lnk")).unwrap();
+        assert_eq!(
+            (app.name.as_str(), app.path.as_str()),
+            ("Zed", r"C:\Start\Programs\Zed\Zed.lnk")
+        );
+        assert!(entry_for(Path::new(r"C:\Start\Programs\Zed\Uninstall Zed.lnk")).is_none());
+        assert!(entry_for(Path::new(r"C:\Start\Programs\Zed\notes.txt")).is_none());
+    }
 }

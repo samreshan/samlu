@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 pub const NOT_INSTALLED: &str =
     "Apple speech for this language isn't installed yet. Install it in Voice settings.";
 
+#[cfg(target_os = "macos")]
 extern "C" {
     fn samlu_apple_speech_available() -> bool;
     fn samlu_apple_install(locale: *const c_char, out: *mut *mut c_char) -> i32;
@@ -19,6 +20,46 @@ extern "C" {
     ) -> i32;
     fn samlu_apple_free(pointer: *mut c_char);
 }
+
+/// SpeechAnalyzer is a macOS framework. Elsewhere these stand in for the
+/// Swift bridge and report it unavailable, so everything below is shared.
+#[cfg(not(target_os = "macos"))]
+mod unavailable {
+    use std::ffi::{c_char, CString};
+
+    const MESSAGE: &str = "Apple on-device speech is only available on macOS.";
+
+    unsafe fn fail(out: *mut *mut c_char) -> i32 {
+        *out = CString::new(MESSAGE).unwrap_or_default().into_raw();
+        4
+    }
+
+    pub unsafe fn samlu_apple_speech_available() -> bool {
+        false
+    }
+
+    pub unsafe fn samlu_apple_install(_locale: *const c_char, out: *mut *mut c_char) -> i32 {
+        fail(out)
+    }
+
+    pub unsafe fn samlu_apple_transcribe(
+        _path: *const c_char,
+        _locale: *const c_char,
+        _terms: *const c_char,
+        out: *mut *mut c_char,
+    ) -> i32 {
+        fail(out)
+    }
+
+    pub unsafe fn samlu_apple_free(pointer: *mut c_char) {
+        if !pointer.is_null() {
+            drop(CString::from_raw(pointer));
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+use unavailable::*;
 
 pub fn available() -> bool {
     // SAFETY: takes no arguments; returns false before macOS 26.

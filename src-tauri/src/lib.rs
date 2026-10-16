@@ -1,8 +1,11 @@
+// Linux builds exist only to run the portable code's tests; native features
+// are stand-ins there, which leaves code that only macOS and Windows reach.
+#![cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+
 mod adapters;
 mod events;
 mod launcher;
 mod lifecycle;
-mod macos;
 mod modifier_shortcuts;
 mod notify;
 mod onboarding;
@@ -14,6 +17,18 @@ mod state;
 mod tray;
 mod updater;
 mod voice;
+
+// Native behaviour each platform supplies behind the same functions: AppKit on
+// macOS, Win32 on Windows, and inert stand-ins anywhere else.
+#[cfg(target_os = "macos")]
+#[path = "macos.rs"]
+mod platform;
+#[cfg(windows)]
+#[path = "windows/mod.rs"]
+mod platform;
+#[cfg(not(any(target_os = "macos", windows)))]
+#[path = "other_platform.rs"]
+mod platform;
 
 use state::AppState;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -203,6 +218,8 @@ pub fn run() {
                     .build(),
             )?;
             log::info!("Samlu {} starting", app.package_info().version);
+            #[cfg(windows)]
+            platform::init();
 
             let app_data_dir = app.path().app_data_dir()?;
             let app_config = Arc::new(settings::AppConfig::load(&app_data_dir));

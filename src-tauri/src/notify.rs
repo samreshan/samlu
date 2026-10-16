@@ -75,7 +75,7 @@ pub fn island_init(app: &AppHandle) -> Result<(), String> {
     .visible(false)
     .build()
     .map(|window| {
-        crate::macos::configure_overlay(&window);
+        crate::platform::configure_overlay(&window);
     })
     .map_err(|error| error.to_string())
 }
@@ -167,7 +167,7 @@ fn show_island_update(app: &AppHandle, event: &AgentEvent, summary: String) {
         return;
     };
     // Follows the display you are working on, not the one under the pointer.
-    crate::macos::center_overlay_at_top(&window);
+    crate::platform::center_overlay_at_top(&window);
     let kind = match event.kind {
         AgentEventKind::NeedsInput => "needs_input",
         AgentEventKind::Completed => "completed",
@@ -185,10 +185,10 @@ fn show_island_update(app: &AppHandle, event: &AgentEvent, summary: String) {
         project: event.project_label(),
         summary,
         persistent: event.kind == AgentEventKind::NeedsInput,
-        has_notch: crate::macos::active_display_has_notch(),
+        has_notch: crate::platform::active_display_has_notch(),
         style: app.state::<Arc<AppConfig>>().island_style(),
     };
-    crate::macos::order_front_without_activating(&window);
+    crate::platform::order_front_without_activating(&window);
     if let Some(state) = app.try_state::<Arc<IslandState>>() {
         state.present_or_queue(app, payload);
     } else {

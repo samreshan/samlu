@@ -9,16 +9,20 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder}
 pub const MAIN_LABEL: &str = "main";
 
 /// Mirrors the "main" window in tauri.conf.json: a full-height sidebar under
-/// the window controls, as in System Settings.
+/// the window controls, as in System Settings. Windows keeps its standard
+/// title bar.
 fn create_main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
-    let window = WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("index.html".into()))
+    let builder = WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("index.html".into()))
         .title("Samlu")
         .inner_size(820.0, 640.0)
         .min_inner_size(720.0, 520.0)
-        .resizable(true)
+        .resizable(true);
+    #[cfg(target_os = "macos")]
+    let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
-        .traffic_light_position(tauri::LogicalPosition::new(20.0, 24.0))
+        .traffic_light_position(tauri::LogicalPosition::new(20.0, 24.0));
+    let window = builder
         .center()
         .build()
         .map_err(|error| format!("could not recreate Settings: {error}"))?;
@@ -43,7 +47,7 @@ pub fn present_settings(app: &AppHandle) -> Result<(), String> {
     window
         .unminimize()
         .map_err(|error| format!("could not restore minimized Settings: {error}"))?;
-    if !crate::macos::present_application_window(&window) {
+    if !crate::platform::present_application_window(&window) {
         return Err("could not access the native Settings window".to_string());
     }
     Ok(())
@@ -58,5 +62,5 @@ pub fn hide_to_background(app: &AppHandle) {
             log::warn!("could not hide Settings: {error}");
         }
     }
-    crate::macos::set_background_mode(true);
+    crate::platform::set_background_mode(true);
 }

@@ -24,9 +24,18 @@ pub fn config_path() -> Result<PathBuf, String> {
         .ok_or_else(|| "could not determine your home directory".to_string())
 }
 
+#[cfg(not(windows))]
 fn curl_command(port: u16, token: &str, route: &str) -> String {
     format!(
         "/usr/bin/curl --silent --show-error --max-time 3 -X POST -H 'Content-Type: application/json' --data-binary @- 'http://127.0.0.1:{port}/hooks/gemini-cli/{route}/{token}' >/dev/null 2>&1 || true"
+    )
+}
+
+/// Hook commands run through `cmd.exe` on Windows, which ships `curl.exe`.
+#[cfg(windows)]
+fn curl_command(port: u16, token: &str, route: &str) -> String {
+    format!(
+        "curl.exe --silent --show-error --max-time 3 -X POST -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:{port}/hooks/gemini-cli/{route}/{token}\" >NUL 2>&1 || exit /b 0"
     )
 }
 

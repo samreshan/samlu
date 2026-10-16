@@ -50,7 +50,9 @@ fn build_swift_bridge() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
 }
 
-fn main() {
+/// Compiles the Objective-C helpers and the Swift speech bridge. Only macOS
+/// builds need them; every other platform has its own implementations in Rust.
+fn build_macos_native() {
     println!("cargo:rerun-if-changed=native/color_sampler.m");
     println!("cargo:rerun-if-changed=native/modifier_keys.m");
     println!("cargo:rerun-if-changed=native/permissions.m");
@@ -68,5 +70,11 @@ fn main() {
     println!("cargo:rustc-link-lib=framework=AVFoundation");
     println!("cargo:rustc-link-lib=framework=Security");
     build_swift_bridge();
+}
+
+fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        build_macos_native();
+    }
     tauri_build::build()
 }

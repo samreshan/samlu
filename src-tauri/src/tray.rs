@@ -25,9 +25,14 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
     app.state::<Arc<UpdaterState>>()
         .set_menu_item(update_item.clone());
 
-    let _tray = TrayIconBuilder::with_id("main-tray")
+    let tray = TrayIconBuilder::with_id("main-tray")
         .tooltip("Samlu")
-        .menu(&menu)
+        .menu(&menu);
+    // On Windows a left click on a tray icon opens the app, and the menu is
+    // for a right click.
+    #[cfg(windows)]
+    let tray = tray.show_menu_on_left_click(false);
+    let _tray = tray
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main(app),
             "update" => crate::updater::check_from_menu(app),
