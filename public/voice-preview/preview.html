@@ -59,7 +59,7 @@
         </span>
         <div class="notice-copy">
           <strong id="notice-title">Copied instead</strong>
-          <p id="notice-detail">Paste with ⌘V</p>
+          <p id="notice-detail" data-windows="Paste with Ctrl+V">Paste with ⌘V</p>
         </div>
       </section>
 
@@ -94,7 +94,7 @@
         </header>
         <textarea id="text" class="text" aria-label="Voice result" spellcheck="true"></textarea>
         <footer class="editor-actions">
-          <span class="hint"><kbd class="samlu-kbd">⌘</kbd><kbd class="samlu-kbd">↵</kbd> insert</span>
+          <span class="hint"><kbd class="samlu-kbd" data-windows="Ctrl">⌘</kbd><kbd class="samlu-kbd">↵</kbd> insert</span>
           <div class="buttons">
             <button class="quiet-button" id="cancel-preview" type="button">Copy &amp; close</button>
             <button class="primary-button" id="insert-preview" type="button">Insert</button>
@@ -102,6 +102,7 @@
         </footer>
       </section>
     </main>
+    <script src="../platform.js"></script>
     <script src="./preview.js"></script>
   </body>
 </html>

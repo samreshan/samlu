@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -445,29 +446,10 @@ impl VoiceConfig {
             .keychain_service_for_role(role)
             .ok_or_else(|| "This speech engine does not use an API key.".to_string())?;
         if key.trim().is_empty() {
-            let _ = Command::new("/usr/bin/security")
-                .args(["delete-generic-password", "-a", "samlu", "-s", &service])
-                .status();
+            delete_keychain(&service);
             return Ok(());
         }
-        let status = Command::new("/usr/bin/security")
-            .args([
-                "add-generic-password",
-                "-a",
-                "samlu",
-                "-s",
-                &service,
-                "-w",
-                key.trim(),
-                "-U",
-            ])
-            .status()
-            .map_err(|error| format!("could not write macOS Keychain: {error}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("macOS Keychain returned {status}"))
-        }
+        write_keychain(&service, key.trim())
     }
 
     fn save(&self) {
@@ -482,6 +464,36 @@ impl VoiceConfig {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn write_keychain(service: &str, key: &str) -> Result<(), String> {
+    let status = Command::new("/usr/bin/security")
+        .args([
+            "add-generic-password",
+            "-a",
+            "samlu",
+            "-s",
+            service,
+            "-w",
+            key,
+            "-U",
+        ])
+        .status()
+        .map_err(|error| format!("could not write macOS Keychain: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("macOS Keychain returned {status}"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn delete_keychain(service: &str) {
+    let _ = Command::new("/usr/bin/security")
+        .args(["delete-generic-password", "-a", "samlu", "-s", service])
+        .status();
+}
+
+#[cfg(target_os = "macos")]
 fn read_keychain(service: &str) -> Result<String, String> {
     let output = Command::new("/usr/bin/security")
         .args(["find-generic-password", "-a", "samlu", "-s", service, "-w"])
@@ -491,6 +503,37 @@ fn read_keychain(service: &str) -> Result<String, String> {
         return Err("No API key saved for this endpoint.".to_string());
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Windows keeps the keys in Credential Manager, under the same names.
+#[cfg(windows)]
+fn write_keychain(service: &str, key: &str) -> Result<(), String> {
+    crate::platform::write_secret(service, key)
+}
+
+#[cfg(windows)]
+fn delete_keychain(service: &str) {
+    crate::platform::delete_secret(service);
+}
+
+#[cfg(windows)]
+fn read_keychain(service: &str) -> Result<String, String> {
+    crate::platform::read_secret(service)
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| "No API key saved for this endpoint.".to_string())
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn write_keychain(_service: &str, _key: &str) -> Result<(), String> {
+    Err("Saving API keys isn't supported on this platform.".to_string())
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn delete_keychain(_service: &str) {}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn read_keychain(_service: &str) -> Result<String, String> {
+    Err("No API key saved for this endpoint.".to_string())
 }
 
 fn keychain_service(provider: &str, base_url: &str) -> String {

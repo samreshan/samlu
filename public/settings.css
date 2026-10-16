@@ -132,6 +132,16 @@ code {
   flex: none;
 }
 
+/* Windows draws its own title bar above the page, so the room macOS keeps
+   for the window controls isn't needed. */
+html[data-platform="windows"] .sidebar-drag {
+  height: 16px;
+}
+
+html[data-platform="windows"] .mac-only {
+  display: none !important;
+}
+
 .identity {
   padding: 2px 8px 16px;
   display: flex;

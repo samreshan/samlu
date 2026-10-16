@@ -44,6 +44,9 @@ function errorMessage(error) {
   return error?.message || "Something went wrong.";
 }
 
+const PLATFORM = window.SAMLU_PLATFORM;
+const T = PLATFORM.text;
+
 const SYMBOLS = {
   cmd: "⌘",
   command: "⌘",
@@ -89,8 +92,8 @@ function formatHotkey(hotkey) {
     .split("+")
     .map((part) => part.trim())
     .filter(Boolean)
-    .map((part) => SYMBOLS[part.toLowerCase()] || part.toUpperCase())
-    .join("");
+    .map((part) => PLATFORM.hotkeySymbols[part.toLowerCase()] || SYMBOLS[part.toLowerCase()] || part.toUpperCase())
+    .join(PLATFORM.keyJoiner);
 }
 
 function applyHotkeyLabels() {
@@ -132,9 +135,13 @@ function renderMicrophone() {
   const button = byId("grant-mic");
   button.hidden = granted;
   button.textContent = blocked ? "Open Settings" : "Allow microphone";
-  byId("mic-note").textContent = blocked
-    ? "Microphone access was declined earlier. Enable Samlu under Privacy & Security › Microphone, then come back."
-    : "macOS will show its own dialog. Samlu never records outside the shortcut.";
+  byId("mic-note").textContent = PLATFORM.windows
+    ? blocked
+      ? "Microphone access is off. Turn on “Let desktop apps access your microphone” under Settings › Privacy & security › Microphone, then come back."
+      : "Windows lets desktop apps use the microphone. Samlu never records outside the shortcut."
+    : blocked
+      ? "Microphone access was declined earlier. Enable Samlu under Privacy & Security › Microphone, then come back."
+      : "macOS will show its own dialog. Samlu never records outside the shortcut.";
 }
 
 function renderAccessibility() {
@@ -281,7 +288,7 @@ function showVoiceSetup(kind) {
     note.textContent = "Uses Apple's on-device speech. macOS downloads the language once.";
     go.textContent = "Use Apple speech";
   } else {
-    note.textContent = "Downloads an open Whisper model once. Nothing leaves this Mac.";
+    note.textContent = T("Downloads an open Whisper model once. Nothing leaves this Mac.");
     go.textContent = "Download model";
   }
 }
@@ -339,7 +346,7 @@ byId("save-voice-key").addEventListener("click", async () => {
     });
     await invoke("set_voice_api_key", { role: "transcription", key });
     input.value = "";
-    toast("Key saved to Keychain.");
+    toast(T("Key saved to Keychain."));
     await refresh();
     byId("try-hint").textContent = "Hold the shortcut, then let go.";
   } catch (error) {

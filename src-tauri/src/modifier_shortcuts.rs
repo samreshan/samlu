@@ -27,8 +27,32 @@ const VOICE_SETTLE: Duration = Duration::from_millis(90);
 /// one, so it starts working without a relaunch.
 const ACCESS_POLL: Duration = Duration::from_secs(2);
 
+#[cfg(target_os = "macos")]
 extern "C" {
     fn samlu_start_modifier_monitor(handler: extern "C" fn(i32, u32)) -> bool;
+}
+
+#[cfg(target_os = "macos")]
+const MONITOR_UNAVAILABLE: &str = "To use a shortcut made only of modifier keys, allow Samlu in System Settings > Privacy & Security > Accessibility.";
+#[cfg(not(target_os = "macos"))]
+const MONITOR_UNAVAILABLE: &str =
+    "Samlu couldn't start listening for modifier keys. Add a regular key to the shortcut instead.";
+
+/// Starts the native listener: an event tap on macOS, low-level keyboard and
+/// mouse hooks on Windows.
+#[cfg(target_os = "macos")]
+fn start_monitor() -> bool {
+    unsafe { samlu_start_modifier_monitor(on_modifier_event) }
+}
+
+#[cfg(windows)]
+fn start_monitor() -> bool {
+    crate::platform::start_modifier_monitor(on_modifier_event)
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn start_monitor() -> bool {
+    false
 }
 
 /// The modifier mask for `hotkey` when it is made only of modifiers, in the
@@ -267,12 +291,12 @@ extern "C" fn on_modifier_event(kind: i32, modifiers: u32) {
 
 fn ensure_started(app: &AppHandle) -> Result<(), String> {
     let _ = APP.set(app.clone());
-    if unsafe { samlu_start_modifier_monitor(on_modifier_event) } {
+    if start_monitor() {
         return Ok(());
     }
-    crate::macos::request_accessibility_access();
+    crate::platform::request_accessibility_access();
     wait_for_access();
-    Err("To use a shortcut made only of modifier keys, allow Samlu in System Settings > Privacy & Security > Accessibility.".to_string())
+    Err(MONITOR_UNAVAILABLE.to_string())
 }
 
 fn anything_bound() -> bool {
@@ -298,9 +322,7 @@ fn wait_for_access() {
             }
             return;
         }
-        if crate::voice::get_voice_accessibility_status()
-            && unsafe { samlu_start_modifier_monitor(on_modifier_event) }
-        {
+        if crate::voice::get_voice_accessibility_status() && start_monitor() {
             log::info!("Accessibility granted; modifier-only shortcuts are now active");
             WAITING_FOR_ACCESS.store(false, Ordering::Release);
             return;

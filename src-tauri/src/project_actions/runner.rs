@@ -2,13 +2,13 @@
 //! process groups, with their output, status and URLs kept for the launcher.
 
 use super::model::{ResolvedStep, TaskDetail, TaskSpec, TaskStatus, TaskSummary};
-use super::shell::ShellEnv;
+use super::process_group::{exit_code, ProcessGroup};
+use super::shell::{command_for, ShellEnv};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -67,8 +67,8 @@ struct RunState {
     /// Lines not yet sent in a `Log` event.
     pending: Vec<String>,
     log: Option<File>,
-    /// The process group of the step running now.
-    group: Option<libc::pid_t>,
+    /// The process tree of the step running now.
+    group: Option<ProcessGroup>,
     stop_requested: bool,
     /// Every step has ended; only the final report is left.
     steps_done: bool,
@@ -284,8 +284,8 @@ impl Run {
             return;
         }
         state.stop_requested = true;
-        if let Some(group) = state.group {
-            signal(group, libc::SIGTERM);
+        if let Some(group) = &state.group {
+            group.terminate();
         }
     }
 
@@ -301,8 +301,8 @@ impl Run {
             })
             .unwrap();
         if timeout.timed_out() {
-            if let Some(group) = state.group {
-                signal(group, libc::SIGKILL);
+            if let Some(group) = &state.group {
+                group.kill();
             }
         }
     }
@@ -394,18 +394,16 @@ fn execute(run: Arc<Run>, env: ShellEnv, sink: EventSink) {
 /// Runs one step in its own process group and returns its exit code, or 128
 /// plus the signal that ended it.
 fn run_step(run: &Arc<Run>, env: &ShellEnv, step: &ResolvedStep, sink: &EventSink) -> i32 {
-    let mut command = Command::new(&env.shell);
+    let mut command = command_for(env, &step.command);
     command
-        .arg("-c")
-        .arg(&step.command)
         .env_clear()
         .envs(env.vars.iter().map(|(name, value)| (name, value)))
         .envs(run.spec.env.iter().map(|(name, value)| (name, value)))
         .current_dir(&step.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
+    ProcessGroup::prepare(&mut command);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -415,11 +413,12 @@ fn run_step(run: &Arc<Run>, env: &ShellEnv, step: &ResolvedStep, sink: &EventSin
     };
     {
         let mut state = run.state.lock().unwrap();
-        let group = child.id() as libc::pid_t;
-        state.group = Some(group);
+        state.group = ProcessGroup::adopt(&child);
         // Stop arrived while the step was starting.
         if state.stop_requested {
-            signal(group, libc::SIGTERM);
+            if let Some(group) = &state.group {
+                group.terminate();
+            }
         }
     }
 
@@ -461,17 +460,8 @@ fn run_step(run: &Arc<Run>, env: &ShellEnv, step: &ResolvedStep, sink: &EventSin
     run.state.lock().unwrap().group = None;
     run.flush(sink);
     match status {
-        Ok(status) => status
-            .code()
-            .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)),
+        Ok(status) => exit_code(status),
         Err(_) => 1,
-    }
-}
-
-fn signal(group: libc::pid_t, signal: libc::c_int) {
-    // A group that has already exited just returns ESRCH.
-    unsafe {
-        libc::killpg(group, signal);
     }
 }
 
@@ -602,9 +592,24 @@ mod tests {
 
     fn test_env() -> EnvSource {
         Arc::new(|| ShellEnv {
-            shell: "/bin/sh".into(),
+            shell: if cfg!(windows) {
+                std::env::var_os("ComSpec")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
+            } else {
+                "/bin/sh".into()
+            },
             vars: std::env::vars().collect(),
         })
+    }
+
+    /// The same step for the shell each platform runs commands with.
+    fn sh(unix: &'static str, windows: &'static str) -> &'static str {
+        if cfg!(windows) {
+            windows
+        } else {
+            unix
+        }
     }
 
     fn runner(name: &str) -> (Arc<TaskRunner>, Arc<Mutex<Vec<String>>>) {
@@ -674,8 +679,11 @@ mod tests {
             .start(spec(
                 "basic",
                 &[
-                    "echo hello \"$SAMLU_PROJECT_NAME\"",
-                    "echo oops >&2; exit 3",
+                    sh(
+                        "echo hello \"$SAMLU_PROJECT_NAME\"",
+                        "echo hello %SAMLU_PROJECT_NAME%",
+                    ),
+                    sh("echo oops >&2; exit 3", "(echo oops)1>&2 & exit 3"),
                 ],
                 false,
             ))
@@ -708,7 +716,7 @@ mod tests {
         let stopped = finish(
             &runner,
             &runner
-                .start(spec("halt", &["false", "echo after"], false))
+                .start(spec("halt", &[sh("false", "exit 1"), "echo after"], false))
                 .unwrap()
                 .id,
         );
@@ -717,7 +725,7 @@ mod tests {
         let kept_going = finish(
             &runner,
             &runner
-                .start(spec("go", &["false", "echo after"], true))
+                .start(spec("go", &[sh("false", "exit 1"), "echo after"], true))
                 .unwrap()
                 .id,
         );
@@ -727,7 +735,7 @@ mod tests {
         let fine = finish(
             &runner,
             &runner
-                .start(spec("fine", &["true", "echo done"], false))
+                .start(spec("fine", &[sh("true", "exit 0"), "echo done"], false))
                 .unwrap()
                 .id,
         );
@@ -735,6 +743,7 @@ mod tests {
         assert_eq!(fine.summary.exit_code, Some(0));
     }
 
+    #[cfg(unix)]
     #[test]
     fn stop_kills_the_whole_process_group() {
         let (runner, events) = runner("stop");
@@ -770,13 +779,49 @@ mod tests {
         assert_eq!(runner.stop("nope").unwrap_err(), "That task is gone.");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn stop_kills_the_whole_process_tree() {
+        let (runner, events) = runner("stop");
+        // A grandchild in the background writes a heartbeat every second.
+        let spec = spec(
+            "stop",
+            &[
+                r#"start /b cmd /d /c "for /l %i in (1,1,600) do ((echo %i)>beat.txt & ping -n 2 127.0.0.1 >nul)" & ping -n 60 127.0.0.1 >nul"#,
+            ],
+            false,
+        );
+        let beat = spec.steps[0].cwd.join("beat.txt");
+        let read = || std::fs::read_to_string(&beat).unwrap_or_default();
+        let task = runner.start(spec).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while read().trim().parse::<u32>().unwrap_or(0) < 2 {
+            assert!(Instant::now() < deadline, "grandchild never started");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        runner.stop(&task.id).unwrap();
+        assert_eq!(
+            finish(&runner, &task.id).summary.status,
+            TaskStatus::Stopped
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        let after_stop = read();
+        std::thread::sleep(Duration::from_millis(2_500));
+        assert_eq!(read(), after_stop, "the grandchild kept running");
+        wait_for_event(&events, "finished Stopped");
+        assert_eq!(runner.stop("nope").unwrap_err(), "That task is gone.");
+    }
+
     #[test]
     fn urls_are_collected_once_each() {
         let (runner, events) = runner("urls");
         let task = runner
             .start(spec(
                 "urls",
-                &["echo 'Your quick Tunnel: https://abc-def.trycloudflare.com.'; echo again https://abc-def.trycloudflare.com; echo '  Local: http://localhost:3000/'"],
+                &[sh(
+                    "echo 'Your quick Tunnel: https://abc-def.trycloudflare.com.'; echo again https://abc-def.trycloudflare.com; echo '  Local: http://localhost:3000/'",
+                    "(echo Your quick Tunnel: https://abc-def.trycloudflare.com.)&(echo again https://abc-def.trycloudflare.com)&(echo   Local: http://localhost:3000/)",
+                )],
                 false,
             ))
             .unwrap();
@@ -839,7 +884,10 @@ mod tests {
             &runner
                 .start(spec(
                     "cap",
-                    &["i=0; while [ $i -lt 5000 ]; do echo line $i; i=$((i+1)); done"],
+                    &[sh(
+                        "i=0; while [ $i -lt 5000 ]; do echo line $i; i=$((i+1)); done",
+                        "for /l %i in (0,1,4999) do @echo line %i",
+                    )],
                     false,
                 ))
                 .unwrap()
@@ -858,7 +906,13 @@ mod tests {
         let second = runner.rerun(&first.id).unwrap();
         assert_ne!(second.id, first.id);
         finish(&runner, &second.id);
-        let slow = runner.start(spec("slow", &["sleep 5"], false)).unwrap();
+        let slow = runner
+            .start(spec(
+                "slow",
+                &[sh("sleep 5", "ping -n 6 127.0.0.1 >nul")],
+                false,
+            ))
+            .unwrap();
         assert_eq!(runner.list()[0].id, slow.id);
         runner.clear_finished();
         assert_eq!(

@@ -9,6 +9,7 @@
 
 pub mod catalog;
 pub mod model;
+pub mod process_group;
 pub mod runner;
 pub mod scripts;
 pub mod shell;
@@ -216,8 +217,8 @@ impl ProjectActions {
         };
         if !terminal.runs_commands {
             return Err(format!(
-                "Samlu can't run commands in {} yet. Choose Warp, Ghostty, iTerm or Terminal in Settings › Projects.",
-                terminal.name
+                "Samlu can't run commands in {} yet. Choose {} in Settings › Projects.",
+                terminal.name, COMMAND_TERMINAL_NAMES
             ));
         }
         terminal::run_in_terminal(terminal, command, folder, title, &self.terminal_dir)?;
@@ -289,8 +290,16 @@ impl ProjectActions {
 
 /* ------------------------------------------------------------ dispatch */
 
+/// The terminals an action can run commands in, for messages.
+#[cfg(not(windows))]
+const COMMAND_TERMINAL_NAMES: &str = "Warp, Ghostty, iTerm or Terminal";
+#[cfg(windows)]
+const COMMAND_TERMINAL_NAMES: &str =
+    "Windows Terminal, PowerShell, Command Prompt, WezTerm or Alacritty";
+
 /// `open -b` (or `-a`) and wait for its answer, so a missing app is reported
 /// instead of failing silently.
+#[cfg(not(windows))]
 fn open_with(
     bundle_id: &str,
     app_path: &str,
@@ -314,6 +323,46 @@ fn open_with(
     Err(format!(
         "The app for “{title}” isn't installed. Choose another in Settings › Projects."
     ))
+}
+
+/// Starts the app with the folder, so a missing app is reported instead of
+/// failing silently. Terminals open a window at the folder.
+#[cfg(windows)]
+fn open_with(
+    bundle_id: &str,
+    app_path: &str,
+    target: &str,
+    title: &str,
+) -> Result<RunOutcome, String> {
+    let missing =
+        || format!("The app for “{title}” isn't installed. Choose another in Settings › Projects.");
+    if app_path.is_empty() || !catalog::is_present(Path::new(app_path)) {
+        return Err(missing());
+    }
+    if let Some(terminal) = catalog::terminal_id(bundle_id) {
+        terminal::open_folder(terminal, app_path, Path::new(target))?;
+        return Ok(RunOutcome::default());
+    }
+    Command::new(app_path)
+        .args(catalog::open_arguments(bundle_id, target))
+        .spawn()
+        .map(|_| RunOutcome::default())
+        .map_err(|_| missing())
+}
+
+/// Opens the default terminal in the home folder, for the launcher's Open
+/// Terminal command.
+#[cfg(windows)]
+pub fn open_terminal(app: &AppHandle) -> Result<(), String> {
+    let state = app
+        .try_state::<Arc<ProjectActions>>()
+        .ok_or_else(|| "Samlu is still starting.".to_string())?;
+    let catalog = state.catalog(false);
+    let terminal = catalog
+        .terminal(&catalog.default_terminal)
+        .ok_or_else(|| "No terminal is installed.".to_string())?;
+    let home = dirs::home_dir().unwrap_or_default();
+    terminal::open_folder(&terminal.id, &terminal.app_path, &home)
 }
 
 /// The project folder, or `relative` inside it.
@@ -341,7 +390,7 @@ fn subtitle_for(action: &ProjectAction) -> String {
             .file_stem()
             .map(|stem| stem.to_string_lossy().to_string())
             .unwrap_or_else(|| bundle_id.clone()),
-        ActionKind::Reveal => "Finder".into(),
+        ActionKind::Reveal => model::FILE_MANAGER.into(),
         ActionKind::CopyPath => "Path to the clipboard".into(),
         ActionKind::Url { url } => url.clone(),
         ActionKind::Terminal { command, .. } => command.clone(),
@@ -637,11 +686,16 @@ pub fn task_open_log(state: State<'_>, id: String) -> Result<(), String> {
         .into_iter()
         .find(|task| task.id == id)
         .ok_or_else(|| "That task is gone.".to_string())?;
-    Command::new("/usr/bin/open")
+    #[cfg(not(windows))]
+    let opened = Command::new("/usr/bin/open")
         .args(["-t", &task.log_path])
         .spawn()
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    // Windows opens `.log` files in Notepad unless the user chose otherwise.
+    #[cfg(windows)]
+    let opened = crate::open_path(&task.log_path);
+    opened
 }
 
 #[tauri::command]
@@ -784,8 +838,43 @@ pub async fn reset_project_actions(state: State<'_>) -> Result<ActionsConfig, St
     .await
 }
 
+/// The Windows file picker, for an action that opens a project in an app
+/// Samlu has no preset for.
+#[cfg(windows)]
+#[tauri::command]
+pub async fn choose_application(app: AppHandle) -> Result<Option<ChosenApp>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    blocking(move || {
+        let Some(chosen) = app
+            .dialog()
+            .file()
+            .set_title("Choose an app to open projects with")
+            .add_filter("Apps", &["exe"])
+            .blocking_pick_file()
+        else {
+            return Ok(None);
+        };
+        let path = chosen
+            .into_path()
+            .map_err(|error| format!("That doesn't look like an app: {error}"))?;
+        let name = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+            .ok_or_else(|| "That doesn't look like an app.".to_string())?;
+        let app_path = path.to_string_lossy().to_string();
+        Ok(Some(ChosenApp {
+            name,
+            // Windows apps have no bundle identifier; the path stands in.
+            bundle_id: app_path.clone(),
+            app_path,
+        }))
+    })
+    .await
+}
+
 /// The macOS app picker, for an action that opens a project in an app Samlu
 /// has no preset for.
+#[cfg(not(windows))]
 #[tauri::command]
 pub async fn choose_application() -> Result<Option<ChosenApp>, String> {
     blocking(|| {

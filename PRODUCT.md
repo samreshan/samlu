@@ -2,8 +2,8 @@
 
 ## Current release
 
-Samlu is a macOS-only AI development kit for developers using Claude Code and
-Codex. It should let someone speak an instruction, find a developer utility,
+Samlu is an AI development kit for macOS and Windows, for developers using
+Claude Code and Codex. It should let someone speak an instruction, find a developer utility,
 or leave an agent running without monitoring a terminal.
 
 The current release has three surfaces:
@@ -22,7 +22,8 @@ The current release has three surfaces:
 
 ## Deferred work
 
-- Windows support
+- Linux support
+- Code-signed Windows installer
 - Full Spotlight replacement behavior
 - iPhone companion app
 - Hosted APNs relay
@@ -34,15 +35,18 @@ else is still deferred.
 
 ## Product principles
 
-1. macOS native first. Keychain, menu bar behavior, native notifications,
-   global shortcuts, and system color sampling should feel at home on macOS.
+1. Native on each platform. Keychain, menu bar behavior, native notifications,
+   global shortcuts, and system color sampling should feel at home on macOS;
+   on Windows the same jobs fall to Credential Manager, the system tray,
+   Windows notifications and the platform's own keys and terminals.
 2. Developer-focused and compact. Favor fast keyboard interaction, high
    information density, direct copy, and predictable behavior.
 3. User-controlled interruption. Notification triggers, summaries, voice
    previews, and clipboard capture are explicit preferences.
 4. Preserve user configuration. Agent integration edits are previewable,
    merged, and backed up.
-5. Keep secrets out of preference files. Credentials belong in Keychain.
+5. Keep secrets out of preference files. Credentials belong in Keychain, or
+   Credential Manager on Windows.
 6. Make cloud boundaries visible. Voice data goes to the configured provider;
    future mobile content is encrypted before it reaches the relay.
 

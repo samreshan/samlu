@@ -9,21 +9,23 @@
 
 **Speak an instruction. Find any tool. Leave an agent running.**
 
-A macOS development kit for people working with Claude Code and Codex —
+A development kit for macOS and Windows, for people working with Claude Code and Codex —
 global voice dictation, a keyboard-driven developer launcher, and agent
 completion signals that reach you without watching a terminal.
 
 [![Download](https://img.shields.io/github/v/release/samreshan/samlu?style=for-the-badge&label=Download&color=efd01d&labelColor=44390c)](https://github.com/samreshan/samlu/releases/latest)
 
 [![macOS 11+](https://img.shields.io/badge/macOS-11%2B-44390c?style=flat-square)](https://github.com/samreshan/samlu/releases/latest)
+[![Windows 10+](https://img.shields.io/badge/Windows-10%2B%20x64-44390c?style=flat-square)](https://github.com/samreshan/samlu/releases/latest)
 [![Universal](https://img.shields.io/badge/Apple%20Silicon%20%2B%20Intel-universal-44390c?style=flat-square)](https://github.com/samreshan/samlu/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/samreshan/samlu/total?style=flat-square&color=44390c)](https://github.com/samreshan/samlu/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-44390c?style=flat-square)](LICENSE)
 
 </div>
 
-This release intentionally targets macOS only. Windows and iOS are outside the
-current build boundary.
+Samlu runs on macOS 11 or later and on Windows 10 and 11 (64-bit). iOS is
+outside the current build boundary. This README describes the Mac; [On
+Windows](#on-windows) lists what differs there.
 
 ## Download
 
@@ -60,6 +62,23 @@ System Settings → Privacy & Security:
 | --- | --- |
 | Microphone | Recording dictation. Audio stays on this Mac with on-device engines, or goes only to the speech provider you configure. |
 | Accessibility | Returning the result to the field you were typing in. |
+
+### Windows
+
+Download `Samlu-<version>-windows-x64-setup.exe` from the same
+[Releases page](https://github.com/samreshan/samlu/releases/latest) and run it.
+It installs for your account only, so no administrator rights are needed, and
+fetches Microsoft Edge WebView2 if the PC doesn't have it yet. Samlu lives in
+the system tray: left-click the icon for Settings, right-click it for the menu.
+
+> [!NOTE]
+> The installer isn't code-signed yet, so Microsoft Defender SmartScreen may
+> warn the first time it runs. Choose **More info**, then **Run anyway**.
+
+Windows asks for no permissions up front. Dictation needs **Settings › Privacy
+& security › Microphone › Let desktop apps access your microphone**, which is
+on by default; Samlu links there if it is off. Pasting the result needs no
+permission at all.
 
 ## What works
 
@@ -175,6 +194,29 @@ search app built on EmbeddingGemma 2. Samlu uses its own implementation, offers
 EmbeddingGemma 2 or a lighter model, and searches text-bearing files rather
 than photos, audio or video.
 
+### On Windows
+
+Everything above works on Windows 10 and 11 (64-bit). What differs:
+
+| | macOS | Windows |
+| --- | --- | --- |
+| Global shortcuts | Option and Command (`Option+V`, `Option+H`) | Alt and Win (`Alt+V`, `Alt+H`) |
+| Shortcuts in Samlu's windows | Command | Ctrl: Ctrl-Enter shows a project in File Explorer, Ctrl-K lists its actions |
+| On-device speech | Whisper on Metal, Apple speech (macOS 26+) | Whisper on the CPU |
+| API keys | Keychain | Windows Credential Manager, under the same names |
+| Putting the result back | Accessibility permission | Ctrl+V into the window you started in; no permission |
+| Modifier-only shortcuts | Accessibility permission | No permission needed |
+| Launcher apps | Applications folders | Start Menu shortcuts and Microsoft Store apps |
+| File search | Spotlight | A quick walk of Desktop, Documents, Downloads and your home folder |
+| Color picker | The macOS color sampler | Click anywhere on screen; Esc or a right click cancels |
+| Project terminals | Terminal, iTerm, Warp, Ghostty | Windows Terminal, PowerShell, Command Prompt, WezTerm, Alacritty |
+| Project commands run in | Your login shell, with its PATH | `cmd.exe` (as npm scripts do), with PATH as Windows has it now |
+| Samlu Island | Hangs from the notch or the menu bar | Top centre of the active display |
+| Updates | Replaced in place, applied on restart | Through the installer, which restarts Samlu |
+
+Gemini CLI and Antigravity hooks call `curl.exe`, which Windows 10 and 11
+include. Claude Code hooks are HTTP hooks and need nothing extra.
+
 ### Updates
 
 Samlu checks the latest GitHub release every few hours (Settings → General →
@@ -183,7 +225,9 @@ downloaded, verified against Samlu's signing key, and installed in place; the
 new version starts the next time Samlu does, and **Restart to Update** applies
 it straight away. Automatic checks and automatic installs can each be turned
 off. Samlu never asks for an administrator password on its own: if it cannot
-replace itself silently, it waits for you to choose Install.
+replace itself silently, it waits for you to choose Install. On Windows the
+installer closes Samlu while it runs, so updates there always wait for
+Install.
 
 ### Agent notifications
 
@@ -210,6 +254,12 @@ Requirements:
 - Xcode Command Line Tools
 - Tauri CLI v2 for bundled builds
 
+On Windows: Rust stable with the MSVC toolchain, the Visual Studio C++ build
+tools, CMake (for whisper.cpp) and the Tauri CLI v2. The same commands below
+work there, and `cargo tauri build` writes the installer under
+`src-tauri/target/release/bundle/nsis/`. A Linux build compiles and runs the
+tests, with native features stubbed out; it is not a supported platform.
+
 Run a development build:
 
 ```bash
@@ -228,7 +278,8 @@ cargo test
 
 ### Releases
 
-Every push to `main` runs CI and, if it passes, publishes a universal release
+Every push to `main` runs CI on macOS and Windows and, if it passes, publishes
+a release with a universal macOS build and a Windows installer
 (`.github/workflows/release.yml`). The version in `src-tauri/tauri.conf.json`
 ships first; later pushes bump the patch number (0.2.0, 0.2.1, …). Raise that
 version to start a new minor or major series.
@@ -237,8 +288,9 @@ Self-update needs the updater signing key in the repository's Actions secrets
 as `TAURI_SIGNING_PRIVATE_KEY` (the contents of the private key file) and, if
 the key has a password, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Its public half
 is `plugins.updater.pubkey` in `tauri.conf.json`. With the secret set, each
-release also carries `Samlu-<version>-macos-universal.app.tar.gz`, its `.sig`
-and the `latest.json` feed that installed copies read. Keep the private key
+release also carries `Samlu-<version>-macos-universal.app.tar.gz` and the
+Windows installer's `.sig`, plus the `latest.json` feed that installed copies
+read on both platforms. Keep the private key
 backed up: a release signed with any other key cannot update existing installs.
 
 To try an update end to end without publishing, run a debug bundle with

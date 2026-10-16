@@ -69,7 +69,7 @@ struct TargetContext {
     app: paste::TargetApp,
     /// The display you were working on when the shortcut fired. The capsule
     /// stays on it for the whole session.
-    display: Option<crate::macos::ScreenFrame>,
+    display: Option<crate::platform::ScreenFrame>,
 }
 
 enum Runtime {
@@ -129,7 +129,7 @@ pub struct VoiceState {
     drag_offset: Mutex<(f64, f64)>,
     /// Where the capsule currently sits: its display and window size, so a
     /// drag can move it without asking AppKit where it is.
-    placement: Mutex<Option<(crate::macos::ScreenFrame, f64, f64)>>,
+    placement: Mutex<Option<(crate::platform::ScreenFrame, f64, f64)>>,
     /// The current recording was started by a tap rather than a hold.
     toggle_recording: AtomicBool,
     last_history_id: Mutex<Option<String>>,
@@ -206,7 +206,7 @@ pub fn voice_preview_init(app: &AppHandle) -> Result<(), String> {
     .visible(false)
     .build()
     .map(|window| {
-        crate::macos::configure_overlay(&window);
+        crate::platform::configure_overlay(&window);
     })
     .map_err(|error| error.to_string())
 }
@@ -537,21 +537,25 @@ pub async fn voice_apple_install(language: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn get_voice_microphone_status() -> &'static str {
-    crate::macos::microphone_access().as_str()
+    crate::platform::microphone_access().as_str()
 }
 
 #[tauri::command]
 pub fn request_voice_microphone() -> &'static str {
-    let status = crate::macos::microphone_access();
-    if status == crate::macos::MicrophoneAccess::NotDetermined {
-        crate::macos::request_microphone_access();
+    let status = crate::platform::microphone_access();
+    if status == crate::platform::MicrophoneAccess::NotDetermined {
+        crate::platform::request_microphone_access();
     }
     status.as_str()
 }
 
 #[tauri::command]
 pub fn open_voice_microphone_settings() -> Result<(), String> {
-    crate::open_path("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+    #[cfg(target_os = "macos")]
+    let page = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
+    #[cfg(not(target_os = "macos"))]
+    let page = "ms-settings:privacy-microphone";
+    crate::open_path(page)
 }
 
 #[tauri::command]
@@ -561,9 +565,17 @@ pub fn get_voice_accessibility_status() -> bool {
 
 #[tauri::command]
 pub fn request_voice_accessibility() -> bool {
-    crate::macos::request_accessibility_access()
+    crate::platform::request_accessibility_access()
 }
 
+/// Windows has no Accessibility grant, so there is nothing to open.
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn open_voice_accessibility_settings() -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 #[tauri::command]
 pub fn open_voice_accessibility_settings() -> Result<(), String> {
     std::process::Command::new("/usr/bin/open")
@@ -591,10 +603,11 @@ pub fn set_voice_hotkey(
             || part.eq_ignore_ascii_case("meta")
     });
     if reserved_modifier {
-        return Err(
-            "Use Option and/or Control for the base shortcut. Shift and Command are reserved for Summary and Prompt."
-                .to_string(),
-        );
+        #[cfg(target_os = "macos")]
+        let message = "Use Option and/or Control for the base shortcut. Shift and Command are reserved for Summary and Prompt.";
+        #[cfg(not(target_os = "macos"))]
+        let message = "Use Alt and/or Ctrl for the base shortcut. Shift and Win are reserved for Summary and Prompt.";
+        return Err(message.to_string());
     }
     let previous = config.hotkey();
     app.state::<Arc<VoiceState>>()
@@ -612,6 +625,23 @@ pub fn set_voice_hotkey(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+mod microphone_text {
+    pub const PROMPT: &str =
+        "Allow microphone access in the macOS prompt, then use the shortcut again.";
+    pub const DENIED: &str =
+        "Microphone access is off. Enable Samlu in System Settings > Privacy & Security > Microphone.";
+    pub const RESTRICTED: &str = "Microphone access is restricted by this Mac’s privacy policy.";
+}
+
+#[cfg(not(target_os = "macos"))]
+mod microphone_text {
+    pub const PROMPT: &str = "Allow microphone access, then use the shortcut again.";
+    pub const DENIED: &str = "Microphone access is off. Turn on “Let desktop apps access your microphone” in Settings > Privacy & security > Microphone.";
+    pub const RESTRICTED: &str =
+        "Microphone access is turned off for this device in Windows privacy settings.";
+}
+
 fn voice_pressed(app: &AppHandle, mode: Mode) {
     voice_pressed_at(app, mode, Instant::now());
 }
@@ -624,28 +654,19 @@ pub fn voice_pressed_at(app: &AppHandle, mode: Mode, pressed_at: Instant) {
         log::debug!("[voice] ignored repeated shortcut key-down");
         return;
     }
-    match crate::macos::microphone_access() {
-        crate::macos::MicrophoneAccess::Authorized => {}
-        crate::macos::MicrophoneAccess::NotDetermined => {
-            crate::macos::request_microphone_access();
-            fail(
-                app,
-                "Allow microphone access in the macOS prompt, then use the shortcut again.",
-            );
+    match crate::platform::microphone_access() {
+        crate::platform::MicrophoneAccess::Authorized => {}
+        crate::platform::MicrophoneAccess::NotDetermined => {
+            crate::platform::request_microphone_access();
+            fail(app, microphone_text::PROMPT);
             return;
         }
-        crate::macos::MicrophoneAccess::Denied => {
-            fail(
-                app,
-                "Microphone access is off. Enable Samlu in System Settings > Privacy & Security > Microphone.",
-            );
+        crate::platform::MicrophoneAccess::Denied => {
+            fail(app, microphone_text::DENIED);
             return;
         }
-        crate::macos::MicrophoneAccess::Restricted => {
-            fail(
-                app,
-                "Microphone access is restricted by this Mac’s privacy policy.",
-            );
+        crate::platform::MicrophoneAccess::Restricted => {
+            fail(app, microphone_text::RESTRICTED);
             return;
         }
     }
@@ -1320,14 +1341,14 @@ fn show_status(
         let already_visible = window.is_visible().unwrap_or(false);
         let interactive =
             editable || matches!(state_name, "recovery" | "failed") || state_name == "listening";
-        crate::macos::set_ignores_mouse_events(&window, !interactive);
+        crate::platform::set_ignores_mouse_events(&window, !interactive);
         // Re-presenting orders the window out and back in, which reads as a
         // flicker mid-session. Only do it for a genuine arrival; while the
         // capsule is already up, resizing in place lets the webview animate
         // one surface from one state into the next.
         place_window(&window, target, width, height, !already_visible);
         if editable {
-            crate::macos::focus_overlay(&window);
+            crate::platform::focus_overlay(&window);
         }
     }
     app.state::<Arc<VoiceState>>()
@@ -1511,7 +1532,7 @@ fn capture_target(_app: &AppHandle) -> TargetContext {
         // NSWorkspace target capture is permission-independent and preserves
         // the original editor even when Accessibility is granted mid-session.
         app: paste::frontmost_target(),
-        display: crate::macos::active_screen_frame(),
+        display: crate::platform::active_screen_frame(),
     }
 }
 
@@ -1551,7 +1572,7 @@ fn place_window(
     height: f64,
     present: bool,
 ) {
-    let Some(display) = target.display.or_else(crate::macos::active_screen_frame) else {
+    let Some(display) = target.display.or_else(crate::platform::active_screen_frame) else {
         let _ = window.set_size(LogicalSize::new(width, height));
         if present {
             let _ = window.show();
@@ -1565,7 +1586,7 @@ fn place_window(
     let (x, y) = capsule_origin(&display, width, height, &mut offset);
     *state.placement.lock().unwrap() = Some((display, width, height));
     drop(offset);
-    if !crate::macos::set_overlay_frame(window, x, y, width, height, present) {
+    if !crate::platform::set_overlay_frame(window, x, y, width, height, present) {
         let _ = window.set_size(LogicalSize::new(width, height));
         if present {
             let _ = window.show();
@@ -1578,7 +1599,7 @@ fn place_window(
 /// to what was actually applied, so dragging into an edge never banks travel
 /// that has to be dragged back out.
 fn capsule_origin(
-    display: &crate::macos::ScreenFrame,
+    display: &crate::platform::ScreenFrame,
     width: f64,
     height: f64,
     offset: &mut (f64, f64),
@@ -1597,7 +1618,7 @@ fn clamp_to_display(
     y: f64,
     width: f64,
     height: f64,
-    display: &crate::macos::ScreenFrame,
+    display: &crate::platform::ScreenFrame,
 ) -> (f64, f64) {
     let max_x = display.x + (display.width - width).max(0.0);
     let max_y = display.y + (display.height - height).max(0.0);
@@ -1624,7 +1645,7 @@ pub fn voice_preview_drag(app: AppHandle, dx: f64, dy: f64) {
     offset.1 += dy;
     let (x, y) = capsule_origin(&display, width, height, &mut offset);
     drop(offset);
-    crate::macos::set_overlay_frame(&window, x, y, width, height, false);
+    crate::platform::set_overlay_frame(&window, x, y, width, height, false);
 }
 
 fn mode_label(mode: Mode) -> &'static str {
@@ -1737,10 +1758,10 @@ mod tests {
     use super::*;
     use config::{SttEngine, SttSettings};
 
-    fn display() -> crate::macos::ScreenFrame {
+    fn display() -> crate::platform::ScreenFrame {
         // A secondary display to the left of the primary one, as AppKit
         // reports it: negative x, its own bottom edge.
-        crate::macos::ScreenFrame {
+        crate::platform::ScreenFrame {
             x: -1920.0,
             y: 120.0,
             width: 1920.0,

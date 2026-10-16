@@ -13,6 +13,10 @@
 
 const tauri = window.__TAURI__ || {};
 const invoke = tauri.core?.invoke || (async () => null);
+const PLATFORM = window.SAMLU_PLATFORM;
+const T = PLATFORM.text;
+/** The key shortcuts inside the launcher use: ⌘ on macOS, Ctrl on Windows. */
+const PRIMARY = PLATFORM.actionSymbols.cmd;
 const listen = tauri.event?.listen || (async () => () => {});
 
 window.addEventListener("error", (event) => console.error("[launcher]", event.error || event.message));
@@ -84,7 +88,7 @@ const REVEALABLE = new Set(["app", "file", "project", "content"]);
 // footer's verb for it, and the footer's word while it runs.
 const ACTION_KINDS = {
   open: { label: "App", verb: "Open", busy: "Opening…" },
-  reveal: { label: "Finder", verb: "Show", busy: "Opening…" },
+  reveal: { label: T("Finder"), verb: "Show", busy: "Opening…" },
   copy_path: { label: "Clipboard", verb: "Copy", busy: "Copying…" },
   url: { label: "Link", verb: "Open", busy: "Opening…" },
   terminal: { label: "Terminal", verb: "Run", busy: "Starting…" },
@@ -235,7 +239,8 @@ function renderHotkey(hotkey) {
       .filter(Boolean)
       .map((part) => {
         const key = document.createElement("kbd");
-        key.textContent = HOTKEY_SYMBOLS[part.toLowerCase()] || part.toUpperCase();
+        key.textContent =
+          PLATFORM.hotkeySymbols[part.toLowerCase()] || HOTKEY_SYMBOLS[part.toLowerCase()] || part.toUpperCase();
         return key;
       }),
   );
@@ -733,10 +738,10 @@ function returnHint(result) {
   }
   if (result.kind === "script") {
     if (!held.cmd) return ["Run", ["↩"]];
-    return [panel?.scriptMode === "task" ? "Run in Terminal" : "Run in Background", ["⌘", "↩"]];
+    return [panel?.scriptMode === "task" ? "Run in Terminal" : "Run in Background", [PRIMARY, "↩"]];
   }
   const reveal = held.cmd && REVEALABLE.has(result.kind);
-  return [reveal ? "Show in Finder" : KINDS[result.kind]?.verb || "Open", reveal ? ["⌘", "↩"] : ["↩"]];
+  return [reveal ? T("Show in Finder") : KINDS[result.kind]?.verb || "Open", reveal ? [PRIMARY, "↩"] : ["↩"]];
 }
 
 function taskHints() {
@@ -744,11 +749,11 @@ function taskHints() {
   if (!task) return [];
   const hints = [];
   if (flash) hints.push([flash, []]);
-  else if (task.urls?.length) hints.push(held.cmd ? ["Copy Link", ["⌘", "↩"]] : ["Open Link", ["↩"]]);
+  else if (task.urls?.length) hints.push(held.cmd ? ["Copy Link", [PRIMARY, "↩"]] : ["Open Link", ["↩"]]);
   if (stopping) hints.push(["Stopping…", []]);
-  else if (task.status === "running") hints.push(["Stop", ["⌘", "."]]);
-  else hints.push(["Run Again", ["⌘", "R"]]);
-  hints.push(["Open Log", ["⌘", "O"]], ["Back", ["⎋"]]);
+  else if (task.status === "running") hints.push(["Stop", [PRIMARY, "."]]);
+  else hints.push(["Run Again", [PRIMARY, "R"]]);
+  hints.push(["Open Log", [PRIMARY, "O"]], ["Back", ["⎋"]]);
   return hints;
 }
 
@@ -862,7 +867,7 @@ function activate(index, event) {
   if (result.kind === "project") runProject(result, chordFrom(event));
   else if (result.kind === "task") showTask(result.target);
   else if (result.kind === "project_action" || result.kind === "script") runPanelRow(result, event);
-  else activateResult(result, Boolean(event?.metaKey));
+  else activateResult(result, PLATFORM.primary(event));
 }
 
 async function activateResult(result, reveal) {
@@ -900,13 +905,23 @@ function loadBindings() {
     .catch((error) => console.error("[launcher] launcher_project_bindings failed", error));
 }
 
-/** The chord a key or click makes: modifiers in ⌃⌥⇧⌘ order, then "enter". */
+/** The chord a key or click makes. On Windows Ctrl stands in for ⌘. */
 function chordFrom(event) {
+  return chordOf({
+    ctrl: PLATFORM.secondary(event),
+    alt: event?.altKey,
+    shift: event?.shiftKey,
+    cmd: PLATFORM.primary(event),
+  });
+}
+
+/** Modifiers in ⌃⌥⇧⌘ order, then "enter". */
+function chordOf(modifiers) {
   return [
-    event?.ctrlKey && "ctrl",
-    event?.altKey && "alt",
-    event?.shiftKey && "shift",
-    event?.metaKey && "cmd",
+    modifiers.ctrl && "ctrl",
+    modifiers.alt && "alt",
+    modifiers.shift && "shift",
+    modifiers.cmd && "cmd",
     "enter",
   ]
     .filter(Boolean)
@@ -915,12 +930,12 @@ function chordFrom(event) {
 
 /** The chord Return would make with the modifiers held now. */
 function heldChord() {
-  return chordFrom({ ctrlKey: held.ctrl, altKey: held.alt, shiftKey: held.shift, metaKey: held.cmd });
+  return chordOf(held);
 }
 
 /** "alt+enter" → ["⌥", "↩"]. */
 function chordKeys(chord) {
-  return chord.split("+").map((part) => HOTKEY_SYMBOLS[part] || part);
+  return chord.split("+").map((part) => PLATFORM.actionSymbols[part] || HOTKEY_SYMBOLS[part] || part);
 }
 
 /** Return on a project, with or without modifiers: the action bound to that
@@ -1043,7 +1058,7 @@ function runPanelRow(result, event) {
     const other = panel.scriptMode === "task" ? "terminal" : "task";
     run(
       "launcher_run_script",
-      { ...project, scriptId: result.target, mode: event?.metaKey ? other : panel.scriptMode },
+      { ...project, scriptId: result.target, mode: PLATFORM.primary(event) ? other : panel.scriptMode },
       "Starting…",
     );
   } else {
@@ -1240,7 +1255,7 @@ function linkChip(url) {
   chip.tabIndex = -1;
   chip.title = url;
   chip.textContent = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
-  chip.addEventListener("click", (event) => openLink(url, event.metaKey));
+  chip.addEventListener("click", (event) => openLink(url, PLATFORM.primary(event)));
   return chip;
 }
 
@@ -1378,7 +1393,7 @@ el.query.addEventListener("keydown", (event) => {
   const count = results.length;
   const down = event.key === "ArrowDown" || (event.ctrlKey && event.key === "n");
   const up = event.key === "ArrowUp" || (event.ctrlKey && event.key === "p");
-  const commandK = event.metaKey && event.key.toLowerCase() === "k";
+  const commandK = PLATFORM.primary(event) && event.key.toLowerCase() === "k";
   if (down || up) {
     event.preventDefault();
     if (count) setSelected((selectedIndex + (down ? 1 : count - 1)) % count, true);
@@ -1416,12 +1431,12 @@ function taskKeydown(event) {
   if (event.key === "Escape" || (event.key === "Tab" && event.shiftKey)) {
     back();
   } else if (event.key === "Enter") {
-    if (!event.repeat) openLink(shownTask?.urls?.[0], event.metaKey);
-  } else if (event.metaKey && key === ".") {
+    if (!event.repeat) openLink(shownTask?.urls?.[0], PLATFORM.primary(event));
+  } else if (PLATFORM.primary(event) && key === ".") {
     stopTask();
-  } else if (event.metaKey && key === "r") {
+  } else if (PLATFORM.primary(event) && key === "r") {
     if (!event.repeat) rerunTask();
-  } else if (event.metaKey && key === "o") {
+  } else if (PLATFORM.primary(event) && key === "o") {
     if (!event.repeat) openLog();
   } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
     log.scrollTop += event.key === "ArrowUp" ? -LOG_STEP : LOG_STEP;
@@ -1442,7 +1457,12 @@ el.taskLog.addEventListener("scroll", () => {
 });
 
 function trackModifiers(event) {
-  const next = { ctrl: event.ctrlKey, alt: event.altKey, shift: event.shiftKey, cmd: event.metaKey };
+  const next = {
+    ctrl: PLATFORM.secondary(event),
+    alt: event.altKey,
+    shift: event.shiftKey,
+    cmd: PLATFORM.primary(event),
+  };
   if (Object.keys(next).every((key) => next[key] === held[key])) return;
   held = next;
   updateAction();

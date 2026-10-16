@@ -16,6 +16,12 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 const TARGET_RESTORE_TIMEOUT: Duration = Duration::from_millis(1_200);
 const ACCESSIBILITY_ERROR: &str =
     "Copied to clipboard, but Samlu doesn't have Accessibility permission yet";
+#[cfg(target_os = "macos")]
+const REJECTED_PASTE: &str =
+    "because macOS rejected the paste shortcut — paste manually with Cmd+V.";
+#[cfg(not(target_os = "macos"))]
+const REJECTED_PASTE: &str =
+    "because Windows rejected the paste keystroke — paste manually with Ctrl+V.";
 
 #[derive(Clone, Debug, Default)]
 pub struct TargetApp {
@@ -39,11 +45,8 @@ fn simulate_paste() -> Result<(), String> {
     }
 
     log::info!("[voice] paste: posting native Cmd+V");
-    if !crate::macos::post_paste_shortcut() {
-        return Err(format!(
-            "{ACCESSIBILITY_ERROR} because macOS rejected the paste shortcut — paste manually \
-             with Cmd+V."
-        ));
+    if !crate::platform::post_paste_shortcut() {
+        return Err(format!("{ACCESSIBILITY_ERROR} {REJECTED_PASTE}"));
     }
 
     Ok(())
@@ -63,7 +66,7 @@ pub fn is_accessibility_error(error: &str) -> bool {
 }
 
 pub fn frontmost_target() -> TargetApp {
-    let Some(application) = crate::macos::frontmost_application() else {
+    let Some(application) = crate::platform::frontmost_application() else {
         return TargetApp::default();
     };
     if application.bundle_id.as_deref() == Some("com.samlu.desktop") {
@@ -90,7 +93,7 @@ fn restore_target(target: &TargetApp) -> Result<(), String> {
     if target_is_frontmost(target) {
         return Ok(());
     }
-    if !crate::macos::activate_application(pid, target.bundle_id.as_deref()) {
+    if !crate::platform::activate_application(pid, target.bundle_id.as_deref()) {
         return Err("could not restore the app where dictation began".to_string());
     }
     let started = Instant::now();
@@ -105,7 +108,7 @@ fn restore_target(target: &TargetApp) -> Result<(), String> {
 }
 
 fn target_is_frontmost(target: &TargetApp) -> bool {
-    let Some(current) = crate::macos::frontmost_application() else {
+    let Some(current) = crate::platform::frontmost_application() else {
         return false;
     };
     target_matches_application(target, &current)
@@ -113,7 +116,7 @@ fn target_is_frontmost(target: &TargetApp) -> bool {
 
 fn target_matches_application(
     target: &TargetApp,
-    current: &crate::macos::FrontmostApplication,
+    current: &crate::platform::FrontmostApplication,
 ) -> bool {
     target.pid == Some(current.pid)
         || target
@@ -127,12 +130,19 @@ fn target_matches_application(
 /// rather than just trying the paste and hoping for the best, since a
 /// privacy-gated operation is worth confirming explicitly rather than
 /// discovering via however it happens to fail.
+#[cfg(target_os = "macos")]
 pub fn accessibility_trusted() -> bool {
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXIsProcessTrusted() -> bool;
     }
     unsafe { AXIsProcessTrusted() }
+}
+
+/// Posting a keystroke needs no grant on Windows.
+#[cfg(not(target_os = "macos"))]
+pub fn accessibility_trusted() -> bool {
+    cfg!(windows)
 }
 
 #[cfg(test)]
@@ -145,15 +155,15 @@ mod tests {
             pid: Some(42),
             bundle_id: Some("dev.example.Editor".to_string()),
         };
-        let same_pid = crate::macos::FrontmostApplication {
+        let same_pid = crate::platform::FrontmostApplication {
             pid: 42,
             bundle_id: Some("dev.other.Editor".to_string()),
         };
-        let same_bundle = crate::macos::FrontmostApplication {
+        let same_bundle = crate::platform::FrontmostApplication {
             pid: 84,
             bundle_id: Some("dev.example.Editor".to_string()),
         };
-        let different = crate::macos::FrontmostApplication {
+        let different = crate::platform::FrontmostApplication {
             pid: 84,
             bundle_id: Some("dev.other.Editor".to_string()),
         };

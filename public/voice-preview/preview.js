@@ -220,8 +220,9 @@ function render(payload) {
 
   if (state === "copied") {
     el.noticeTitle.textContent = "Copied instead";
-    el.noticeDetail.textContent = "Paste it with ⌘V.";
-    announce("Copied instead. Paste with Command V.");
+    const windows = window.SAMLU_PLATFORM?.windows;
+    el.noticeDetail.textContent = windows ? "Paste it with Ctrl+V." : "Paste it with ⌘V.";
+    announce(windows ? "Copied instead. Paste with Control V." : "Copied instead. Paste with Command V.");
   }
 
   if (state === "error") {
@@ -436,7 +437,7 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     if (currentState === "preview") invoke("voice_preview_cancel").catch(console.error);
     else invoke("voice_cancel").catch(console.error);
-  } else if (event.key === "Enter" && event.metaKey && currentState === "preview") {
+  } else if (event.key === "Enter" && window.SAMLU_PLATFORM.primary(event) && currentState === "preview") {
     event.preventDefault();
     insertPreview().catch(console.error);
   }

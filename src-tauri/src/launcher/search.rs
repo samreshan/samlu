@@ -8,7 +8,9 @@ use super::snippets::{Snippet, SnippetStore};
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+#[cfg(not(windows))]
 use std::io::{BufRead, BufReader};
+#[cfg(not(windows))]
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
@@ -21,6 +23,7 @@ const ALLOWED_FILE_EXTENSIONS: &[&str] = &[
     "pdf", "fig", "psd", "ai",
 ];
 /// Folders whose files are never what someone means to open by name.
+#[cfg(not(windows))]
 const NOISY_PATH_PARTS: &[&str] = &[
     "/Library/",
     "/node_modules/",
@@ -441,6 +444,7 @@ fn finish(scored: &mut Vec<(i64, LauncherResult)>, limit: usize) -> Vec<Launcher
         .collect()
 }
 
+#[cfg(not(windows))]
 fn search_files(query: &str) -> Vec<LauncherResult> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
@@ -462,6 +466,7 @@ fn search_files(query: &str) -> Vec<LauncherResult> {
         .collect()
 }
 
+#[cfg(not(windows))]
 fn extension_predicate(query: &str) -> String {
     let query = query.replace(['"', '\\', '*'], "");
     ALLOWED_FILE_EXTENSIONS
@@ -471,6 +476,7 @@ fn extension_predicate(query: &str) -> String {
         .join(" || ")
 }
 
+#[cfg(not(windows))]
 fn run_mdfind(scopes: &[&str], predicate: &str) -> Vec<String> {
     let mut command = Command::new("/usr/bin/mdfind");
     for scope in scopes {
@@ -496,6 +502,83 @@ fn run_mdfind(scopes: &[&str], predicate: &str) -> Vec<String> {
     results
 }
 
+/// Folders whose files are never what someone means to open by name, on
+/// Windows.
+#[cfg(windows)]
+const SKIPPED_FOLDERS: &[&str] = &["AppData", "node_modules", "target", "dist", "$Recycle.Bin"];
+
+/// Windows has no Spotlight to ask, so the usual places are walked for
+/// names that match, for a moment at most, the most likely folders first.
+#[cfg(windows)]
+fn search_files(query: &str) -> Vec<LauncherResult> {
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+    let query = query.trim().to_lowercase();
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let likely: Vec<PathBuf> = [
+        dirs::desktop_dir(),
+        dirs::document_dir(),
+        dirs::download_dir(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let deadline = Instant::now() + Duration::from_millis(400);
+    let mut found: Vec<String> = Vec::new();
+    for root in likely.iter().chain(std::iter::once(&home)) {
+        let walker = walkdir::WalkDir::new(root)
+            .max_depth(6)
+            .into_iter()
+            .filter_entry(|entry| {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                let name = entry.file_name().to_string_lossy();
+                let skipped = name.starts_with('.')
+                    || SKIPPED_FOLDERS
+                        .iter()
+                        .any(|folder| name.eq_ignore_ascii_case(folder));
+                // The likely folders inside home were walked already.
+                let walked = root == &home && likely.iter().any(|folder| folder == entry.path());
+                !skipped && !walked
+            });
+        for entry in walker.flatten() {
+            if found.len() >= RAW_SCAN_LIMIT || Instant::now() > deadline {
+                break;
+            }
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            let Some((stem, extension)) = name.rsplit_once('.') else {
+                continue;
+            };
+            if stem.contains(&query) && ALLOWED_FILE_EXTENSIONS.contains(&extension) {
+                found.push(entry.path().to_string_lossy().to_string());
+            }
+        }
+    }
+    found
+        .into_iter()
+        .map(|path| LauncherResult {
+            id: format!("file:{path}"),
+            kind: "file".into(),
+            title: std::path::Path::new(&path)
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone()),
+            subtitle: parent_folder(&path),
+            target: path,
+            section: None,
+        })
+        .collect()
+}
+
 /// The folder holding `path`, with the home directory written as `~`.
 fn parent_folder(path: &str) -> String {
     let parent = std::path::Path::new(path)
@@ -505,10 +588,11 @@ fn parent_folder(path: &str) -> String {
     match dirs::home_dir() {
         Some(home) => {
             let home = home.to_string_lossy().to_string();
+            let separator = std::path::MAIN_SEPARATOR;
             if parent == home {
                 "~".to_string()
-            } else if let Some(rest) = parent.strip_prefix(&format!("{home}/")) {
-                format!("~/{rest}")
+            } else if let Some(rest) = parent.strip_prefix(&format!("{home}{separator}")) {
+                format!("~{separator}{rest}")
             } else {
                 parent
             }
@@ -635,12 +719,18 @@ mod tests {
 
     #[test]
     fn parent_folder_abbreviates_home() {
-        let home = dirs::home_dir().unwrap().to_string_lossy().to_string();
-        assert_eq!(parent_folder(&format!("{home}/Code/samlu")), "~/Code");
-        assert_eq!(parent_folder(&format!("{home}/notes.md")), "~");
+        let home = dirs::home_dir().unwrap();
+        let inside = |path: std::path::PathBuf| path.to_string_lossy().to_string();
+        let separator = std::path::MAIN_SEPARATOR;
+        assert_eq!(
+            parent_folder(&inside(home.join("Code").join("samlu"))),
+            format!("~{separator}Code")
+        );
+        assert_eq!(parent_folder(&inside(home.join("notes.md"))), "~");
         assert_eq!(parent_folder("/opt/tools/x"), "/opt/tools");
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn mdfind_predicate_strips_wildcards_and_quotes() {
         let predicate = extension_predicate(r#"a"b*c\d"#);

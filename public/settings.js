@@ -2,6 +2,8 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 const byId = (id) => document.getElementById(id);
+const PLATFORM = window.SAMLU_PLATFORM;
+const T = PLATFORM.text;
 const PANES = ["general", "agents", "voice", "launcher", "projects", "about"];
 
 let currentPane = "general";
@@ -630,7 +632,7 @@ function renderAccessibility(trusted) {
   setPill("voice-accessibility-status", trusted ? "Allowed" : "Not allowed", trusted ? "good" : "warn");
   byId("voice-accessibility-help").textContent = trusted
     ? "Samlu can type the result into the field where you started."
-    : "Not active for this copy of Samlu. If Samlu is already listed in System Settings, remove it and add it again.";
+    : T("Not active for this copy of Samlu. If Samlu is already listed in System Settings, remove it and add it again.");
   byId("open-voice-accessibility").textContent = trusted ? "Open Settings…" : "Allow…";
 }
 
@@ -651,7 +653,7 @@ function renderMicrophonePermission(status) {
   }
   if (status === "restricted") {
     setPill("voice-microphone-status", "Restricted", "warn");
-    help.textContent = "This Mac’s privacy policy restricts microphone access.";
+    help.textContent = T("This Mac’s privacy policy restricts microphone access.");
     button.textContent = "Open Settings…";
     return;
   }
@@ -677,7 +679,7 @@ function setKeyStatus(id, hasKey) {
 }
 
 const ENGINE_DETAILS = {
-  whisper_cpp: "Whisper runs on this Mac. No account, and audio never leaves it.",
+  whisper_cpp: T("Whisper runs on this Mac. No account, and audio never leaves it."),
   apple: "Apple’s on-device speech. Audio never leaves this Mac.",
   groq: "Audio is sent to Groq for transcription.",
   openai: "Audio is sent to OpenAI for transcription.",
@@ -777,7 +779,7 @@ function renderVoiceModels() {
   if (!voiceModels.models.length) {
     list.append(emptyRow("No Whisper models yet. Download one below, or add a file you already have."));
   }
-  const sourceLabel = { downloaded: "Downloaded", discovered: "Found on this Mac", added: "Added" };
+  const sourceLabel = { downloaded: "Downloaded", discovered: T("Found on this Mac"), added: "Added" };
   voiceModels.models.forEach((model) => {
     const selected = model.path === voiceModels.selected;
     const detail = [
@@ -805,7 +807,7 @@ function renderVoiceModels() {
         async () => {
           const confirmed = await confirmAction(
             `Delete ${model.name}?`,
-            "The model file is removed from this Mac. You can download it again later.",
+            T("The model file is removed from this Mac. You can download it again later."),
             "Delete",
           );
           if (!confirmed) return;
@@ -829,7 +831,7 @@ function renderVoiceModels() {
   catalog.replaceChildren();
   voiceModels.catalog.forEach((entry) => {
     const progress = downloadProgress[entry.id];
-    const recommended = entry.id === voiceModels.recommended ? " · Recommended for this Mac" : "";
+    const recommended = entry.id === voiceModels.recommended ? T(" · Recommended for this Mac") : "";
     let detail = `${formatBytes(entry.bytes)}${recommended}`;
     let actions = [];
     let fraction = null;
@@ -1002,6 +1004,7 @@ const GLYPHS = {
   period: ".",
   slash: "/",
 };
+Object.assign(GLYPHS, PLATFORM.hotkeySymbols);
 
 function keyGlyph(part) {
   const trimmed = part.trim();
@@ -1033,7 +1036,10 @@ function renderKeys(id, shortcut) {
   const holder = byId(id);
   if (!holder) return;
   holder.replaceChildren(...keycaps(shortcut));
-  holder.setAttribute("aria-label", shortcut ? shortcut.split("+").map(keyGlyph).join("") : "Not set");
+  holder.setAttribute(
+    "aria-label",
+    shortcut ? shortcut.split("+").map(keyGlyph).join(PLATFORM.keyJoiner) : "Not set",
+  );
 }
 
 function updateVoiceShortcutGuide(hotkey) {
@@ -1111,7 +1117,7 @@ function shortcutFromEvent(event) {
   if (!key) return { hint: "Key not supported" };
   const modifiers = heldModifiers(event);
   // Function keys work alone; everything else would swallow ordinary typing.
-  if (!modifiers.length && !/^F\d+$/.test(key)) return { hint: "Add ⌃, ⌥, ⇧ or ⌘" };
+  if (!modifiers.length && !/^F\d+$/.test(key)) return { hint: PLATFORM.windows ? "Add Ctrl, Alt, Shift or Win" : "Add ⌃, ⌥, ⇧ or ⌘" };
   return { shortcut: [...modifiers, key].join("+") };
 }
 
@@ -1636,7 +1642,10 @@ async function bindProjectKey(select) {
 
 /** "cmd+enter" as one keycap, "⌘↩". */
 function chordGlyphs(chord) {
-  return chord.split("+").map(keyGlyph).join("");
+  return chord
+    .split("+")
+    .map((part) => PLATFORM.actionSymbols[part] || keyGlyph(part))
+    .join(PLATFORM.keyJoiner);
 }
 
 function boundChords(id) {
@@ -1649,7 +1658,12 @@ function boundChords(id) {
 function appName(bundleId, appPath) {
   const known = projectActions.catalog.apps.find((app) => app.bundleId === bundleId) || chosenApps.get(bundleId);
   if (known) return known.name;
-  return String(appPath || "").split("/").pop().replace(/\.app$/i, "") || bundleId;
+  return (
+    String(appPath || "")
+      .split(/[\\/]/)
+      .pop()
+      .replace(/\.(app|exe)$/i, "") || bundleId
+  );
 }
 
 function actionSubtitle(action) {
@@ -1657,7 +1671,7 @@ function actionSubtitle(action) {
     case "open":
       return appName(action.bundleId, action.appPath);
     case "reveal":
-      return "Finder";
+      return T("Finder");
     case "copy_path":
       return "Path to the clipboard";
     case "url":
@@ -2234,7 +2248,7 @@ function bindEvents() {
   byId("clear-activity").addEventListener("click", async () => {
     const confirmed = await confirmAction(
       "Clear agent activity?",
-      "Samlu’s record of recent agent events is deleted from this Mac.",
+      T("Samlu’s record of recent agent events is deleted from this Mac."),
       "Clear",
     );
     if (!confirmed) return;
@@ -2318,7 +2332,7 @@ function bindEvents() {
         invoke("set_voice_api_key", { role: "transcription", key: input.value.trim() }),
       );
       input.value = "";
-      showSaved("voice-engine-saved", "Saved to Keychain");
+      showSaved("voice-engine-saved", T("Saved to Keychain"));
       await loadVoiceSettings();
     } catch (error) {
       toast(errorMessage(error), true);
@@ -2362,7 +2376,7 @@ function bindEvents() {
         });
         const updated = await refreshMicrophonePermission();
         if (updated === "denied") {
-          toast("Microphone access is off. Opening System Settings.", true);
+          toast(T("Microphone access is off. Opening System Settings."), true);
           await invoke("open_voice_microphone_settings");
         } else if (updated === "not_determined") {
           toast("Waiting for the macOS microphone prompt.");
@@ -2422,7 +2436,7 @@ function bindEvents() {
         invoke("set_voice_api_key", { role: "transformation", key: input.value.trim() }),
       );
       input.value = "";
-      showSaved("voice-text-saved", "Saved to Keychain");
+      showSaved("voice-text-saved", T("Saved to Keychain"));
       await loadVoiceSettings();
     } catch (error) {
       toast(errorMessage(error), true);
@@ -2446,7 +2460,8 @@ function bindEvents() {
     },
     loadVoiceSettings,
     // ⇧ and ⌘ are added on top of the base chord for Summary and Prompt.
-    (hotkey) => (/(^|\+)(Shift|Cmd)(\+|$)/.test(hotkey) ? "Use ⌃ or ⌥ only" : ""),
+    (hotkey) =>
+      /(^|\+)(Shift|Cmd)(\+|$)/.test(hotkey) ? (PLATFORM.windows ? "Use Ctrl or Alt only" : "Use ⌃ or ⌥ only") : "",
   );
   [
     ["dictation", "voice-dictation-delivery"],
@@ -2480,7 +2495,7 @@ function bindEvents() {
     if (!enabled && voiceHistory.length) {
       const confirmed = await confirmAction(
         "Turn off transcript history?",
-        "Saved transcripts are deleted from this Mac.",
+        T("Saved transcripts are deleted from this Mac."),
         "Turn Off",
       );
       if (!confirmed) {
@@ -2499,7 +2514,7 @@ function bindEvents() {
   byId("clear-voice-history").addEventListener("click", async () => {
     const confirmed = await confirmAction(
       "Delete all transcripts?",
-      "Your saved dictation history is removed from this Mac.",
+      T("Your saved dictation history is removed from this Mac."),
       "Delete",
     );
     if (!confirmed) return;
@@ -2528,7 +2543,7 @@ function bindEvents() {
   byId("clear-clipboard").addEventListener("click", async () => {
     const confirmed = await confirmAction(
       "Clear clipboard history?",
-      "Every saved clip is deleted from this Mac.",
+      T("Every saved clip is deleted from this Mac."),
       "Clear",
     );
     if (!confirmed) return;

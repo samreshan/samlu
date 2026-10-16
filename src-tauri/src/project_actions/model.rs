@@ -21,7 +21,29 @@ pub const CHORDS: [&str; 5] = [
 
 /// Terminals Samlu can run a command in, in the order the default is picked
 /// from: the first one installed wins.
-pub const COMMAND_TERMINALS: [&str; 4] = ["warp", "ghostty", "iterm", "terminal"];
+#[cfg(not(windows))]
+pub const COMMAND_TERMINALS: &[&str] = &["warp", "ghostty", "iterm", "terminal"];
+#[cfg(windows)]
+pub const COMMAND_TERMINALS: &[&str] = &[
+    "windows-terminal",
+    "powershell",
+    "cmd",
+    "wezterm",
+    "alacritty",
+];
+
+/// The terminal an empty choice falls back to when none of
+/// `COMMAND_TERMINALS` is found: one that ships with the system.
+#[cfg(not(windows))]
+pub const FALLBACK_TERMINAL: &str = "terminal";
+#[cfg(windows)]
+pub const FALLBACK_TERMINAL: &str = "powershell";
+
+/// What the system's file manager is called.
+#[cfg(not(windows))]
+pub const FILE_MANAGER: &str = "Finder";
+#[cfg(windows)]
+pub const FILE_MANAGER: &str = "File Explorer";
 
 /// A project the launcher found: its folder name and absolute path.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,7 +295,7 @@ pub struct CatalogCli {
 #[serde(rename_all = "camelCase")]
 pub struct TerminalApp {
     /// "terminal", "warp", "iterm", "ghostty", "wezterm", "kitty",
-    /// "alacritty".
+    /// "alacritty"; on Windows also "windows-terminal", "powershell", "cmd".
     pub id: String,
     pub name: String,
     pub bundle_id: String,
@@ -294,7 +316,7 @@ pub struct Catalog {
     /// the generic ones (Show in Finder, Copy Path, Run Project).
     pub presets: Vec<ProjectAction>,
     /// The terminal id an empty `terminal` resolves to: the first installed
-    /// of `COMMAND_TERMINALS`, or "terminal".
+    /// of `COMMAND_TERMINALS`, or `FALLBACK_TERMINAL`.
     pub default_terminal: String,
 }
 

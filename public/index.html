@@ -336,7 +336,7 @@
                     <button class="button" id="open-voice-microphone" type="button">Allow…</button>
                   </span>
                 </div>
-                <div class="row">
+                <div class="row mac-only">
                   <span class="row-text">
                     <span class="row-label">Accessibility</span>
                     <span class="row-detail" id="voice-accessibility-help">Lets Samlu type the result into the field where you started.</span>
@@ -364,7 +364,7 @@
                     <select id="voice-stt-choice" aria-label="Speech engine">
                       <optgroup label="On this Mac">
                         <option value="whisper_cpp">Whisper</option>
-                        <option value="apple" id="voice-apple-option">Apple</option>
+                        <option value="apple" id="voice-apple-option" class="mac-only">Apple</option>
                       </optgroup>
                       <optgroup label="Cloud">
                         <option value="groq">Groq</option>
@@ -674,19 +674,19 @@
                   </span>
                 </div>
                 <div class="row">
-                  <span class="row-text"><span class="row-label">Command-Return <span class="keys" aria-hidden="true"><kbd>⌘</kbd><kbd>↩</kbd></span></span></span>
+                  <span class="row-text"><span class="row-label">Command-Return <span class="keys" aria-hidden="true"><kbd data-windows="Ctrl">⌘</kbd><kbd>↩</kbd></span></span></span>
                   <span class="row-control">
                     <select data-chord="cmd+enter" aria-label="Command-Return"><option value="">Show Actions</option></select>
                   </span>
                 </div>
                 <div class="row">
-                  <span class="row-text"><span class="row-label">Option-Return <span class="keys" aria-hidden="true"><kbd>⌥</kbd><kbd>↩</kbd></span></span></span>
+                  <span class="row-text"><span class="row-label">Option-Return <span class="keys" aria-hidden="true"><kbd data-windows="Alt">⌥</kbd><kbd>↩</kbd></span></span></span>
                   <span class="row-control">
                     <select data-chord="alt+enter" aria-label="Option-Return"><option value="">Show Actions</option></select>
                   </span>
                 </div>
                 <div class="row">
-                  <span class="row-text"><span class="row-label">Control-Return <span class="keys" aria-hidden="true"><kbd>⌃</kbd><kbd>↩</kbd></span></span></span>
+                  <span class="row-text"><span class="row-label">Control-Return <span class="keys" aria-hidden="true"><kbd data-windows="Win">⌃</kbd><kbd>↩</kbd></span></span></span>
                   <span class="row-control">
                     <select data-chord="ctrl+enter" aria-label="Control-Return"><option value="">Show Actions</option></select>
                   </span>
@@ -807,7 +807,7 @@
                 <div class="row">
                   <span class="row-text">
                     <span class="row-label">Scripts run in</span>
-                    <span class="row-detail">For Return on a script in the action panel. ⌘↩ uses the other.</span>
+                    <span class="row-detail" data-windows="For Return on a script in the action panel. Ctrl+Enter uses the other.">For Return on a script in the action panel. ⌘↩ uses the other.</span>
                   </span>
                   <span class="row-control">
                     <select id="project-script-mode" data-variant="segmented" aria-label="Scripts run in">
@@ -902,6 +902,7 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./platform.js"></script>
     <script src="./samlu-select.js"></script>
     <script src="./settings.js"></script>
   </body>
