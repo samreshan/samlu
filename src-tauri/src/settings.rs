@@ -79,6 +79,58 @@ impl Default for AgentAlertSettings {
     }
 }
 
+/// The only reminder delays the Settings page offers, in minutes.
+const REMINDER_CHOICES_MINS: [u64; 5] = [0, 1, 3, 5, 10];
+
+/// Brings a settings write into the ranges the alert code relies on. A blank
+/// shortcut or an unknown sound keeps the stored value, so a half-filled form
+/// cannot erase a working setting.
+fn normalize_agent_alerts(
+    mut next: AgentAlertSettings,
+    previous: &AgentAlertSettings,
+) -> AgentAlertSettings {
+    next.volume = next.volume.min(100);
+    next.codex_wait_secs = next.codex_wait_secs.clamp(10, 120);
+    next.reminder_mins = nearest_reminder_choice(next.reminder_mins);
+    next.approve_shortcut = keep_unless_blank(&next.approve_shortcut, &previous.approve_shortcut);
+    next.deny_shortcut = keep_unless_blank(&next.deny_shortcut, &previous.deny_shortcut);
+    next.sound_needs_input =
+        keep_unless_valid_sound(&next.sound_needs_input, &previous.sound_needs_input);
+    next.sound_completed =
+        keep_unless_valid_sound(&next.sound_completed, &previous.sound_completed);
+    next.sound_turn_finished =
+        keep_unless_valid_sound(&next.sound_turn_finished, &previous.sound_turn_finished);
+    next
+}
+
+/// Ties go to the lower choice, so 2 becomes 1 and 4 becomes 3.
+fn nearest_reminder_choice(minutes: u64) -> u64 {
+    let mut best = REMINDER_CHOICES_MINS[0];
+    for &choice in &REMINDER_CHOICES_MINS[1..] {
+        if choice.abs_diff(minutes) < best.abs_diff(minutes) {
+            best = choice;
+        }
+    }
+    best
+}
+
+fn keep_unless_blank(value: &str, previous: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        previous.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn keep_unless_valid_sound(value: &str, previous: &str) -> String {
+    if value == "none" || value.starts_with("system:") || value.starts_with("custom:") {
+        value.to_string()
+    } else {
+        previous.to_string()
+    }
+}
+
 /// Retired with the pet overlay. Kept only so older configs migrate cleanly.
 const LEGACY_DELIVERY_PET: &str = "pet";
 pub const DELIVERY_ISLAND: &str = "island";
@@ -335,11 +387,12 @@ impl AppConfig {
         self.data.lock().unwrap().agent_alerts.clone()
     }
 
-    /// Returns what was stored. Normalization lands in Task 7.
+    /// Normalizes against the stored values, saves, and returns what was
+    /// stored so the caller can echo the true state back to the page.
     pub fn set_agent_alerts(&self, settings: AgentAlertSettings) -> AgentAlertSettings {
         let stored = {
             let mut data = self.data.lock().unwrap();
-            data.agent_alerts = settings;
+            data.agent_alerts = normalize_agent_alerts(settings, &data.agent_alerts);
             data.agent_alerts.clone()
         };
         self.save();
@@ -386,8 +439,10 @@ pub fn set_agent_alert_settings(
     settings: AgentAlertSettings,
     config: tauri::State<'_, std::sync::Arc<AppConfig>>,
 ) -> AgentAlertSettings {
-    let _ = app;
-    config.set_agent_alerts(settings)
+    let stored = config.set_agent_alerts(settings);
+    use tauri::Emitter;
+    let _ = app.emit("agents://alerts-changed", stored.clone());
+    stored
 }
 
 #[tauri::command]
@@ -425,7 +480,102 @@ pub fn apply_window_theme(app: &tauri::AppHandle, appearance: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_island_style, NotificationPreferences, ISLAND_STYLE_BLOOM};
+    use super::{
+        normalize_agent_alerts, normalize_island_style, AgentAlertSettings, Data,
+        NotificationPreferences, ISLAND_STYLE_BLOOM,
+    };
+
+    #[test]
+    fn agent_alert_defaults() {
+        let defaults = AgentAlertSettings::default();
+        assert!(defaults.sounds_enabled);
+        assert_eq!(defaults.volume, 70);
+        assert_eq!(defaults.codex_wait_secs, 30);
+        assert_eq!(defaults.reminder_mins, 3);
+        assert_eq!(defaults.sound_turn_finished, "none");
+        if cfg!(windows) {
+            assert_eq!(defaults.sound_needs_input, "system:Windows Exclamation");
+            assert_eq!(
+                defaults.sound_completed,
+                "system:Windows Notify System Generic"
+            );
+            assert_eq!(defaults.approve_shortcut, "Ctrl+Alt+Y");
+            assert_eq!(defaults.deny_shortcut, "Ctrl+Alt+N");
+        } else {
+            assert_eq!(defaults.sound_needs_input, "system:Glass");
+            assert_eq!(defaults.sound_completed, "system:Hero");
+            assert_eq!(defaults.approve_shortcut, "Alt+Cmd+Y");
+            assert_eq!(defaults.deny_shortcut, "Alt+Cmd+N");
+        }
+    }
+
+    #[test]
+    fn clamps_and_normalizes() {
+        let previous = AgentAlertSettings {
+            approve_shortcut: "Cmd+Y".to_string(),
+            deny_shortcut: "Cmd+N".to_string(),
+            sound_needs_input: "custom:Ping".to_string(),
+            sound_completed: "custom:Pong".to_string(),
+            ..AgentAlertSettings::default()
+        };
+        let next = AgentAlertSettings {
+            volume: 150,
+            codex_wait_secs: 5,
+            reminder_mins: 4,
+            approve_shortcut: "  ".to_string(),
+            deny_shortcut: " Ctrl+N ".to_string(),
+            sound_needs_input: "bogus".to_string(),
+            sound_completed: "custom:Chime".to_string(),
+            ..previous.clone()
+        };
+        let got = normalize_agent_alerts(next, &previous);
+        assert_eq!(got.volume, 100);
+        assert_eq!(got.codex_wait_secs, 10);
+        assert_eq!(got.reminder_mins, 3);
+        assert_eq!(
+            got.approve_shortcut, "Cmd+Y",
+            "blank shortcut keeps previous"
+        );
+        assert_eq!(got.deny_shortcut, "Ctrl+N", "shortcut is trimmed");
+        assert_eq!(
+            got.sound_needs_input, "custom:Ping",
+            "unknown sound keeps previous"
+        );
+        assert_eq!(got.sound_completed, "custom:Chime");
+
+        let high = AgentAlertSettings {
+            codex_wait_secs: 500,
+            ..previous.clone()
+        };
+        assert_eq!(normalize_agent_alerts(high, &previous).codex_wait_secs, 120);
+    }
+
+    #[test]
+    fn reminder_snaps_to_nearest_choice_with_ties_lower() {
+        let previous = AgentAlertSettings::default();
+        let snap = |minutes: u64| {
+            normalize_agent_alerts(
+                AgentAlertSettings {
+                    reminder_mins: minutes,
+                    ..previous.clone()
+                },
+                &previous,
+            )
+            .reminder_mins
+        };
+        assert_eq!(snap(0), 0);
+        assert_eq!(snap(2), 1, "tie between 1 and 3 goes lower");
+        assert_eq!(snap(4), 3, "tie between 3 and 5 goes lower");
+        assert_eq!(snap(7), 5);
+        assert_eq!(snap(8), 10);
+        assert_eq!(snap(60), 10);
+    }
+
+    #[test]
+    fn old_config_without_alerts_loads_defaults() {
+        let data: Data = serde_json::from_str(r#"{"authToken":"abc"}"#).unwrap();
+        assert!(data.agent_alerts == AgentAlertSettings::default());
+    }
 
     #[test]
     fn island_style_accepts_only_known_styles() {
