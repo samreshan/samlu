@@ -239,6 +239,8 @@ pub fn test_agent_notification(app: AppHandle, state: tauri::State<'_, Arc<AppSt
             ),
             session_id: "samlu-notification-preview".to_string(),
             timestamp: chrono::Utc::now(),
+            origin: Default::default(),
+            outcome: None,
         },
     );
 }

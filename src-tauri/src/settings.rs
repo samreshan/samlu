@@ -34,6 +34,49 @@ struct Data {
     update_auto_install: bool,
     /// RFC 3339 time of the last finished check, successful or not.
     update_last_checked_at: Option<String>,
+    agent_alerts: AgentAlertSettings,
+}
+
+/// Sounds, shortcuts and holds for agent alerts. Defaults differ by platform
+/// because the shortcut chords and system sound names do.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentAlertSettings {
+    pub sounds_enabled: bool,
+    pub volume: u8,
+    pub sound_needs_input: String,
+    pub sound_completed: String,
+    pub sound_turn_finished: String,
+    pub codex_wait_secs: u64,
+    pub approve_shortcut: String,
+    pub deny_shortcut: String,
+    pub reminder_mins: u64,
+}
+
+impl Default for AgentAlertSettings {
+    fn default() -> Self {
+        let (needs_input, completed, approve, deny) = if cfg!(windows) {
+            (
+                "system:Windows Exclamation",
+                "system:Windows Notify System Generic",
+                "Ctrl+Alt+Y",
+                "Ctrl+Alt+N",
+            )
+        } else {
+            ("system:Glass", "system:Hero", "Alt+Cmd+Y", "Alt+Cmd+N")
+        };
+        Self {
+            sounds_enabled: true,
+            volume: 70,
+            sound_needs_input: needs_input.to_string(),
+            sound_completed: completed.to_string(),
+            sound_turn_finished: "none".to_string(),
+            codex_wait_secs: 30,
+            approve_shortcut: approve.to_string(),
+            deny_shortcut: deny.to_string(),
+            reminder_mins: 3,
+        }
+    }
 }
 
 /// Retired with the pet overlay. Kept only so older configs migrate cleanly.
@@ -84,6 +127,7 @@ impl Default for Data {
             update_auto_check: true,
             update_auto_install: true,
             update_last_checked_at: None,
+            agent_alerts: AgentAlertSettings::default(),
         }
     }
 }
@@ -287,6 +331,21 @@ impl AppConfig {
         self.save();
     }
 
+    pub fn agent_alerts(&self) -> AgentAlertSettings {
+        self.data.lock().unwrap().agent_alerts.clone()
+    }
+
+    /// Returns what was stored. Normalization lands in Task 7.
+    pub fn set_agent_alerts(&self, settings: AgentAlertSettings) -> AgentAlertSettings {
+        let stored = {
+            let mut data = self.data.lock().unwrap();
+            data.agent_alerts = settings;
+            data.agent_alerts.clone()
+        };
+        self.save();
+        stored
+    }
+
     fn save(&self) {
         let data = self.data.lock().unwrap();
         let Ok(json) = serde_json::to_string_pretty(&*data) else {
@@ -312,6 +371,23 @@ pub fn set_notification_preferences(
     config: tauri::State<'_, std::sync::Arc<AppConfig>>,
 ) {
     config.set_preferences(preferences);
+}
+
+#[tauri::command]
+pub fn get_agent_alert_settings(
+    config: tauri::State<'_, std::sync::Arc<AppConfig>>,
+) -> AgentAlertSettings {
+    config.agent_alerts()
+}
+
+#[tauri::command]
+pub fn set_agent_alert_settings(
+    app: tauri::AppHandle,
+    settings: AgentAlertSettings,
+    config: tauri::State<'_, std::sync::Arc<AppConfig>>,
+) -> AgentAlertSettings {
+    let _ = app;
+    config.set_agent_alerts(settings)
 }
 
 #[tauri::command]

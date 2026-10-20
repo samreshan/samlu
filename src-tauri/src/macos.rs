@@ -112,6 +112,31 @@ pub fn activate_application(pid: i32, bundle_id: Option<&str>) -> bool {
     }
 }
 
+/// Plays `path` at `volume` (0-100). Wired in Task 5.
+#[allow(dead_code)] // wired in Task 12
+pub fn play_sound(path: &std::path::Path, volume: u8) {
+    let _ = (path, volume);
+}
+
+/// Folder holding the system alert sounds, if this platform has one.
+#[allow(dead_code)] // wired in Task 12
+pub fn system_sound_dir() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Brings the app with `bundle_id` to the front. Wired in Task 3.
+#[allow(dead_code)] // wired in Task 12
+pub fn activate_bundle(bundle_id: &str) -> bool {
+    let _ = bundle_id;
+    false
+}
+
+/// Shows how many agents wait: tray title on macOS, tooltip on Windows.
+#[allow(dead_code)] // wired in Task 12
+pub fn set_tray_count(app: &tauri::AppHandle, count: usize) {
+    let _ = (app, count);
+}
+
 pub fn post_paste_shortcut() -> bool {
     unsafe { samlu_post_paste_shortcut() }
 }

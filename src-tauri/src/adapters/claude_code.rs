@@ -14,6 +14,8 @@
 //! }
 //! ```
 
+use crate::agents::origin::SessionOrigin;
+use crate::agents::HookMessage;
 use crate::events::{AdapterError, AgentAdapter, AgentEvent, AgentEventKind};
 use chrono::Utc;
 use serde::Deserialize;
@@ -58,13 +60,20 @@ impl AgentAdapter for ClaudeCodeAdapter {
         "claude-code"
     }
 
-    fn parse(&self, event_route: &str, body: &[u8]) -> Result<AgentEvent, AdapterError> {
-        match event_route {
+    fn parse(
+        &self,
+        event_route: &str,
+        body: &[u8],
+        origin: &SessionOrigin,
+    ) -> Result<HookMessage, AdapterError> {
+        let mut event = match event_route {
             "notification" => parse_notification(body),
             "stop" => parse_stop(body),
             "task-completed" => parse_task_completed(body),
             other => Err(AdapterError::UnknownRoute(other.to_string())),
-        }
+        }?;
+        event.origin = origin.clone();
+        Ok(HookMessage::Event(event))
     }
 }
 
@@ -98,6 +107,8 @@ fn parse_task_completed(body: &[u8]) -> Result<AgentEvent, AdapterError> {
         summary: Some(summary),
         session_id: payload.session_id,
         timestamp: Utc::now(),
+        origin: SessionOrigin::default(),
+        outcome: None,
     })
 }
 
@@ -122,6 +133,8 @@ fn parse_notification(body: &[u8]) -> Result<AgentEvent, AdapterError> {
         summary: Some(describe_notification(&payload.notification_type)),
         session_id: payload.session_id,
         timestamp: Utc::now(),
+        origin: SessionOrigin::default(),
+        outcome: None,
     })
 }
 
@@ -141,6 +154,8 @@ fn parse_stop(body: &[u8]) -> Result<AgentEvent, AdapterError> {
         summary: payload.last_assistant_message,
         session_id: payload.session_id,
         timestamp: Utc::now(),
+        origin: SessionOrigin::default(),
+        outcome: None,
     })
 }
 

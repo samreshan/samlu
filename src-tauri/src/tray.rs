@@ -70,3 +70,9 @@ pub(crate) fn show_main(app: &AppHandle) {
         log::error!("failed to present Settings: {error}");
     }
 }
+
+/// Updates the waiting count and session list in the tray. Real in Task 9.
+#[allow(dead_code)] // wired in Task 12
+pub fn refresh_agents(app: &AppHandle, sessions: &[crate::agents::sessions::SessionInfo]) {
+    let _ = (app, sessions);
+}

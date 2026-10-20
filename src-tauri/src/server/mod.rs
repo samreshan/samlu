@@ -20,6 +20,7 @@ pub mod auth;
 pub mod port;
 
 use crate::adapters::AdapterRegistry;
+use crate::agents::{origin::SessionOrigin, HookMessage};
 use crate::events::AdapterError;
 use crate::notify;
 use crate::state::AppState;
@@ -98,9 +99,13 @@ fn handle_request(
         return Response::from_string("payload too large").with_status_code(413);
     }
 
-    match adapters.parse(adapter_name, event_route, &body) {
-        Ok(event) => {
+    match adapters.parse(adapter_name, event_route, &body, &SessionOrigin::default()) {
+        Ok(HookMessage::Event(event)) => {
             notify::handle_event(app.clone(), state.clone(), event);
+            Response::from_string("").with_status_code(204)
+        }
+        // Approvals and session signals reach the hub in Task 12.
+        Ok(HookMessage::Approval(_) | HookMessage::Signal(_)) => {
             Response::from_string("").with_status_code(204)
         }
         Err(AdapterError::Ignored) => Response::from_string("").with_status_code(204),
