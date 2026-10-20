@@ -1215,19 +1215,48 @@ pub async fn voice_preview_accept(
 /// focus back. Hiding the editor is what hands the keyboard to that app
 /// before the paste shortcut is posted.
 async fn release_editor_focus(app: &AppHandle, target: &paste::TargetApp) -> bool {
-    // With no other app to hand the keyboard to, the paste lands in Samlu's
-    // own window and there is nothing to wait for.
-    if !cfg!(target_os = "macos") || target.pid.is_none() {
+    if !cfg!(target_os = "macos") {
         return true;
     }
+    // Always hide first: with the editor still key the paste lands in the
+    // editor itself, including when dictation began in another Samlu window.
     if let Some(window) = app.get_webview_window(PREVIEW_LABEL) {
         if window.hide().is_err() {
             return true;
         }
     }
-    tauri::async_runtime::spawn_blocking(|| crate::platform::wait_for_no_key_window(300))
-        .await
-        .unwrap_or(false)
+    match editor_release_wait(target.pid.is_some()) {
+        EditorRelease::PollKeyWindow => {
+            tauri::async_runtime::spawn_blocking(|| crate::platform::wait_for_no_key_window(300))
+                .await
+                .unwrap_or(false)
+        }
+        EditorRelease::Settle => {
+            // Samlu's own window is the target, so some Samlu window stays key
+            // and there is nothing to poll for; give the key hand-off a beat.
+            let _ = tauri::async_runtime::spawn_blocking(|| {
+                std::thread::sleep(Duration::from_millis(80));
+            })
+            .await;
+            true
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EditorRelease {
+    PollKeyWindow,
+    Settle,
+}
+
+/// With another app as the target, key is handed over once Samlu has no key
+/// window. With Samlu itself as the target (no pid) one stays key by design.
+fn editor_release_wait(target_has_pid: bool) -> EditorRelease {
+    if target_has_pid {
+        EditorRelease::PollKeyWindow
+    } else {
+        EditorRelease::Settle
+    }
 }
 
 #[tauri::command]
@@ -1910,6 +1939,12 @@ mod tests {
             destination(false, false, Mode::Normal),
             Destination::Configured
         );
+    }
+
+    #[test]
+    fn editor_release_polls_only_when_another_app_is_the_target() {
+        assert_eq!(editor_release_wait(true), EditorRelease::PollKeyWindow);
+        assert_eq!(editor_release_wait(false), EditorRelease::Settle);
     }
 
     #[test]
