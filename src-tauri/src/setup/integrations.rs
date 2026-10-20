@@ -61,17 +61,20 @@ pub fn get_agent_integrations(
 ) -> Vec<IntegrationStatus> {
     let claude = match claude_hooks::global_settings_path() {
         Some(path) => match claude_hooks::read_settings(&path) {
-            Ok(value) => IntegrationStatus {
-                id: "claude-code",
-                name: "Claude Code",
-                description: "Input requests, completed tasks, and stopped turns.",
-                path: path.to_string_lossy().to_string(),
-                exists: path.exists(),
-                installed: claude_hooks::is_installed(&value, state.port, &state.token),
-                // TODO(merge): use claude_hooks::status
-                needs_update: false,
-                error: None,
-            },
+            Ok(value) => {
+                let (installed, needs_update) =
+                    flags(claude_hooks::status(&value, state.port, &state.token));
+                IntegrationStatus {
+                    id: "claude-code",
+                    name: "Claude Code",
+                    description: "Input requests, completed tasks, and stopped turns.",
+                    path: path.to_string_lossy().to_string(),
+                    exists: path.exists(),
+                    installed,
+                    needs_update,
+                    error: None,
+                }
+            }
             Err(error) => unavailable(
                 "claude-code",
                 "Claude Code",

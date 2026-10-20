@@ -70,7 +70,7 @@ impl Sessions {
                     session.project_path = project_path.to_string();
                     session.project_label = project_label(project_path);
                 }
-                merge_origin(&mut session.origin, origin);
+                session.origin.merge(origin);
                 if let Some(state) = state {
                     session.state = state;
                 }
@@ -137,22 +137,6 @@ impl Sessions {
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<SessionInfo>> {
         self.sessions.lock().unwrap_or_else(|e| e.into_inner())
     }
-}
-
-/// Fields present in `newer` replace ours; absent ones keep ours. Same rule as
-/// `SessionOrigin::merge`, kept local until that stub is filled in.
-fn merge_origin(existing: &mut SessionOrigin, newer: &SessionOrigin) {
-    fn take(slot: &mut Option<String>, newer: &Option<String>) {
-        if newer.is_some() {
-            *slot = newer.clone();
-        }
-    }
-    take(&mut existing.entrypoint, &newer.entrypoint);
-    take(&mut existing.host_session, &newer.host_session);
-    take(&mut existing.warp_focus_url, &newer.warp_focus_url);
-    take(&mut existing.term_program, &newer.term_program);
-    take(&mut existing.bundle_id, &newer.bundle_id);
-    take(&mut existing.originator, &newer.originator);
 }
 
 #[cfg(test)]
