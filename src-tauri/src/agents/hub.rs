@@ -7,9 +7,10 @@ use super::sessions::{SessionInfo, Sessions};
 use super::{ApprovalRequest, HookMessage};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 pub struct AgentHub {
     app_data_dir: PathBuf,
@@ -96,4 +97,42 @@ pub fn agent_sound_preview(app: AppHandle, choice: String) {
 pub async fn agent_sound_choose_custom(app: AppHandle) -> Result<Option<String>, String> {
     let _ = app;
     Ok(None)
+}
+
+/// The listener's view of the hub.
+pub struct HubHost {
+    app: AppHandle,
+}
+
+impl HubHost {
+    pub fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
+
+    fn hub(&self) -> Arc<AgentHub> {
+        self.app.state::<Arc<AgentHub>>().inner().clone()
+    }
+}
+
+impl crate::server::HookHost for HubHost {
+    fn handle(&self, message: HookMessage) {
+        self.hub().handle(&self.app, message);
+    }
+
+    fn begin_approval(&self, request: ApprovalRequest) -> crate::server::OpenApproval {
+        let (id, decisions, hold) = self.hub().begin_approval(&self.app, request);
+        crate::server::OpenApproval {
+            id,
+            decisions,
+            hold,
+        }
+    }
+
+    fn hold_elapsed(&self, request_id: &str) {
+        self.hub().hold_elapsed(&self.app, request_id);
+    }
+
+    fn client_gone(&self, request_id: &str) {
+        self.hub().client_gone(&self.app, request_id);
+    }
 }
