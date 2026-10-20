@@ -442,6 +442,8 @@ pub fn set_agent_alert_settings(
     let stored = config.set_agent_alerts(settings);
     use tauri::Emitter;
     let _ = app.emit("agents://alerts-changed", stored.clone());
+    // New chords take effect at once if an approval is on screen.
+    crate::agents::hub::resync_shortcuts(&app);
     stored
 }
 

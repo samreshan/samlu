@@ -112,7 +112,6 @@ fn build_menu(app: &AppHandle, sessions: &[SessionInfo]) -> tauri::Result<Menu<W
 
 /// Rebuilds the Agents section and updates the waiting count shown beside
 /// the tray icon.
-#[allow(dead_code)] // wired in Task 12
 pub fn refresh_agents(app: &AppHandle, sessions: &[SessionInfo]) {
     let waiting = sessions
         .iter()

@@ -112,8 +112,7 @@ pub fn activate_application(pid: i32, bundle_id: Option<&str>) -> bool {
     }
 }
 
-/// Plays `path` at `volume` (0-100). Wired in Task 5.
-#[allow(dead_code)] // wired in Task 12
+/// Plays `path` at `volume` (0-100).
 /// Blocks until the sound ends, so call it from a worker thread.
 pub fn play_sound(path: &std::path::Path, volume: u8) {
     let volume = f32::from(volume.min(100)) / 100.0;
@@ -125,13 +124,11 @@ pub fn play_sound(path: &std::path::Path, volume: u8) {
 }
 
 /// Folder holding the system alert sounds, if this platform has one.
-#[allow(dead_code)] // wired in Task 12
 pub fn system_sound_dir() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from("/System/Library/Sounds"))
 }
 
-/// Brings the app with `bundle_id` to the front. Wired in Task 3.
-#[allow(dead_code)] // wired in Task 12
+/// Brings the app with `bundle_id` to the front.
 pub fn activate_bundle(bundle_id: &str) -> bool {
     // `open -b` asks LaunchServices to bring the app forward, launching it if needed.
     std::process::Command::new("/usr/bin/open")
@@ -142,7 +139,6 @@ pub fn activate_bundle(bundle_id: &str) -> bool {
 }
 
 /// Shows how many agents wait: tray title on macOS, tooltip on Windows.
-#[allow(dead_code)] // wired in Task 12
 pub fn set_tray_count(app: &tauri::AppHandle, count: usize) {
     let title = (count > 0).then(|| count.to_string());
     if let Some(tray) = app.tray_by_id("main-tray") {

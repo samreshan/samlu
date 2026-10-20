@@ -20,7 +20,7 @@ fn system_sound_ext() -> &'static str {
 
 /// Extensions accepted for custom imports. Windows plays through PlaySound,
 /// which only takes WAV.
-fn importable_extensions() -> &'static [&'static str] {
+pub fn importable_extensions() -> &'static [&'static str] {
     if cfg!(target_os = "macos") {
         &["aiff", "aif", "wav", "mp3", "m4a", "caf"]
     } else {

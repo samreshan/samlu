@@ -94,6 +94,7 @@ impl PendingApprovals {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn get(&self, request_id: &str) -> Option<ApprovalRequest> {
         self.lock()
             .iter()
@@ -101,12 +102,10 @@ impl PendingApprovals {
             .map(|e| e.request.clone())
     }
 
+    #[cfg(test)]
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.lock().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
 

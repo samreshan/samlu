@@ -15,7 +15,6 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 
 /// How far a hook integration is from what this build of Samlu writes.
-#[allow(dead_code)] // wired in Task 12
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallState {

@@ -173,8 +173,7 @@ pub fn activate_application(pid: i32, bundle_id: Option<&str>) -> bool {
     }
 }
 
-/// Plays `path` at `volume` (0-100). Wired in Task 5.
-#[allow(dead_code)] // wired in Task 12
+/// Plays `path` at `volume` (0-100).
 pub fn play_sound(path: &std::path::Path, volume: u8) {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Media::Audio::{
@@ -197,21 +196,18 @@ pub fn play_sound(path: &std::path::Path, volume: u8) {
 }
 
 /// Folder holding the system alert sounds, if this platform has one.
-#[allow(dead_code)] // wired in Task 12
 pub fn system_sound_dir() -> Option<std::path::PathBuf> {
     let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
     Some(std::path::PathBuf::from(windir).join("Media"))
 }
 
-/// Brings the app with `bundle_id` to the front. Wired in Task 3.
-#[allow(dead_code)] // wired in Task 12
+/// Brings the app with `bundle_id` to the front.
 pub fn activate_bundle(bundle_id: &str) -> bool {
     let _ = bundle_id;
     false
 }
 
 /// Shows how many agents wait: tray title on macOS, tooltip on Windows.
-#[allow(dead_code)] // wired in Task 12
 pub fn set_tray_count(app: &tauri::AppHandle, count: usize) {
     let tooltip = match count {
         0 => "Samlu".to_string(),

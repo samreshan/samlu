@@ -2,9 +2,6 @@
 //! `~/.codex/config.toml` (the inline `[[hooks.<Event>]]` form), keeping
 //! everything else in the file, comments included.
 
-// Wired in Task 12.
-#![allow(dead_code)]
-
 use super::{codex_notify, InstallState};
 use std::path::{Path, PathBuf};
 use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};

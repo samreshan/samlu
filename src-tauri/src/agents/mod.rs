@@ -2,9 +2,6 @@
 //! into a `HookMessage`; the hub decides what that means for sessions, cards,
 //! held approvals and sounds.
 
-// Wired in Task 12, which removes this.
-#![allow(dead_code)]
-
 pub mod action;
 pub mod approvals;
 pub mod hub;

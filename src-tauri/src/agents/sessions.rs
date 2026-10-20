@@ -119,6 +119,7 @@ impl Sessions {
         sessions
     }
 
+    #[cfg(test)]
     pub fn waiting_count(&self) -> usize {
         self.lock()
             .iter()
