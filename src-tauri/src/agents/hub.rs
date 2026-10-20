@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -135,6 +135,12 @@ pub fn sound_choice(alerts: &AgentAlertSettings, kind: SoundKind) -> Option<&str
     alerts.sounds_enabled.then_some(choice)
 }
 
+/// Which of a session's cards a retirement reaches.
+enum Scope {
+    Session,
+    Agent(Option<String>),
+}
+
 /// What a card's button asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardAction {
@@ -195,6 +201,53 @@ impl StopDedupe {
     }
 }
 
+/// How long after a PermissionRequest its twin notice is still folded away.
+const RECENT_APPROVAL: Duration = Duration::from_secs(3);
+
+/// Remembers when each session last asked for approval, so a permission
+/// notice that trails an approval answered in a hurry is still folded.
+#[derive(Default)]
+pub struct RecentApprovals {
+    seen: HashMap<(String, String), Instant>,
+}
+
+impl RecentApprovals {
+    pub fn record(&mut self, agent: &str, session_id: &str, at: Instant) {
+        self.seen
+            .retain(|_, seen| at.saturating_duration_since(*seen) <= RECENT_APPROVAL);
+        self.seen
+            .insert((agent.to_string(), session_id.to_string()), at);
+    }
+
+    pub fn recent(&self, agent: &str, session_id: &str, now: Instant) -> bool {
+        self.seen
+            .get(&(agent.to_string(), session_id.to_string()))
+            .is_some_and(|seen| now.saturating_duration_since(*seen) <= RECENT_APPROVAL)
+    }
+}
+
+/// The approve/deny chords are live only while an approval is in front and
+/// the island is on screen: a hidden island cannot be read.
+pub fn shortcuts_wanted(front_is_approval: bool, island_hidden: bool) -> bool {
+    front_is_approval && !island_hidden
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReminderAction {
+    Skip,
+    Ring,
+    /// The island was flicked away: bring it back, then ring.
+    PresentAndRing,
+}
+
+pub fn reminder_action(card_exists: bool, island_hidden: bool) -> ReminderAction {
+    match (card_exists, island_hidden) {
+        (false, _) => ReminderAction::Skip,
+        (true, false) => ReminderAction::Ring,
+        (true, true) => ReminderAction::PresentAndRing,
+    }
+}
+
 /// What the tray menu shows of a session. The list changes on every tool
 /// call (the event time), but the menu only when this does.
 fn tray_signature(sessions: &[SessionInfo]) -> Vec<(String, String, String, SessionState)> {
@@ -218,6 +271,7 @@ fn approval_card(request_id: &str, request: &ApprovalRequest, now: DateTime<Utc>
         agent: request.agent.clone(),
         agent_label: agent_label(&request.agent),
         session_id: request.session_id.clone(),
+        agent_id: request.agent_id.clone(),
         project: project_label(&request.project_path),
         title: approval_title(&request.tool_name).to_string(),
         detail: request.action.clone(),
@@ -285,11 +339,14 @@ pub struct AgentHub {
     /// an older snapshot after a newer one.
     present_lock: Mutex<()>,
     stops: Mutex<StopDedupe>,
+    recent_approvals: Mutex<RecentApprovals>,
+    /// The island was hidden (flicked away) with cards still queued.
+    island_hidden: AtomicBool,
     tray_shown: Mutex<Vec<(String, String, String, SessionState)>>,
     card_counter: AtomicU64,
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -302,6 +359,8 @@ impl AgentHub {
             queue: Mutex::new(IslandQueue::new()),
             present_lock: Mutex::new(()),
             stops: Mutex::new(StopDedupe::default()),
+            recent_approvals: Mutex::new(RecentApprovals::default()),
+            island_hidden: AtomicBool::new(false),
             tray_shown: Mutex::new(Vec::new()),
             card_counter: AtomicU64::new(0),
         }
@@ -329,6 +388,12 @@ impl AgentHub {
         lock(&self.queue).snapshot().cards.iter().any(|card| {
             card.kind == CardKind::Approval && card.agent == agent && card.session_id == session_id
         })
+    }
+
+    /// An approval for this session is pending, or was opened moments ago.
+    fn approval_seen(&self, agent: &str, session_id: &str) -> bool {
+        self.has_approval_card(agent, session_id)
+            || lock(&self.recent_approvals).recent(agent, session_id, Instant::now())
     }
 
     pub fn queue_is_empty(&self) -> bool {
@@ -364,8 +429,20 @@ impl AgentHub {
     /// its cards: it has moved on, so they are stale. Approvals that go this
     /// way read "answered in the agent" in history.
     fn retire(&self, agent: &str, session_id: &str) -> Change {
-        self.approvals.retire_session(agent, session_id);
-        let cards = lock(&self.queue).remove_session(agent, session_id);
+        self.retire_scoped(agent, session_id, Scope::Session)
+    }
+
+    fn retire_scoped(&self, agent: &str, session_id: &str, scope: Scope) -> Change {
+        let in_scope = |agent_id: &Option<String>| match &scope {
+            Scope::Session => true,
+            Scope::Agent(only) => agent_id == only,
+        };
+        self.approvals.retire_where(|r| {
+            r.agent == agent && r.session_id == session_id && in_scope(&r.agent_id)
+        });
+        let cards = lock(&self.queue).remove_where(|c| {
+            c.agent == agent && c.session_id == session_id && in_scope(&c.agent_id)
+        });
         let notes = cards
             .iter()
             .filter(|card| card.kind == CardKind::Approval)
@@ -378,16 +455,25 @@ impl AgentHub {
         }
     }
 
-    /// Registers a held approval and queues its card. A session's earlier
-    /// pending approvals are retired first: its next request means the
-    /// earlier ones were settled elsewhere.
+    /// Registers a held approval and queues its card. A live approval is
+    /// never retired by a new one (parallel subagents ask side by side), but
+    /// the same agent's stale notices and handed-back cards go.
     fn open_approval(
         &self,
         request: ApprovalRequest,
         codex_wait_secs: u64,
         now: DateTime<Utc>,
     ) -> (Opened, Change) {
-        let mut change = self.retire(&request.agent, &request.session_id);
+        let stale = lock(&self.queue).remove_where(|c| {
+            c.kind != CardKind::Approval
+                && c.agent == request.agent
+                && c.session_id == request.session_id
+                && c.agent_id == request.agent_id
+        });
+        let mut change = Change {
+            queue: !stale.is_empty(),
+            ..Change::default()
+        };
         let hold = hold_for(&request.agent, codex_wait_secs);
         let (id, decisions) = self.approvals.open(request.clone());
         let card = approval_card(&id, &request, now);
@@ -487,14 +573,15 @@ impl AgentHub {
     }
 
     /// The client dropped the held connection: the user answered in the
-    /// agent. The card leaves quietly.
-    fn abandon(&self, request_id: &str) -> Change {
+    /// agent, so the session runs on (PostToolUse or Stop corrects it). The
+    /// card leaves quietly.
+    fn abandon(&self, request_id: &str, session_state: SessionState) -> Change {
         self.approvals.answer(request_id, Decision::NoDecision);
         let Some(card) = lock(&self.queue).remove_by_request(request_id) else {
             return Change::default();
         };
         if !self.has_approval_card(&card.agent, &card.session_id) {
-            self.touch(&card.agent, &card.session_id, Some(SessionState::Idle));
+            self.touch(&card.agent, &card.session_id, Some(session_state));
         }
         Change {
             queue: true,
@@ -519,9 +606,19 @@ impl AgentHub {
                 touch(SessionState::Idle);
                 Change::default()
             }
-            SignalKind::Working | SignalKind::ToolFinished => {
+            SignalKind::Working => {
                 touch(SessionState::Working);
                 self.retire(&signal.agent, &signal.session_id)
+            }
+            // One tool call finished: only the agent that ran it has moved
+            // on, not a subagent running beside it.
+            SignalKind::ToolFinished => {
+                touch(SessionState::Working);
+                self.retire_scoped(
+                    &signal.agent,
+                    &signal.session_id,
+                    Scope::Agent(signal.agent_id.clone()),
+                )
             }
             SignalKind::Ended => {
                 self.sessions.end(&signal.agent, &signal.session_id);
@@ -558,13 +655,42 @@ impl AgentHub {
     fn present(&self, app: &AppHandle) -> Result<(), String> {
         let _guard = lock(&self.present_lock);
         let snapshot = lock(&self.queue).snapshot();
-        crate::notify::present_queue(app, snapshot)
+        let showing = !snapshot.cards.is_empty();
+        let shown = crate::notify::present_queue(app, snapshot);
+        if showing && shown.is_ok() {
+            self.island_hidden.store(false, Ordering::Release);
+        }
+        shown
+    }
+
+    /// The island left the screen (flicked away, or its open button) with
+    /// cards still queued: the chords stop answering what nobody can see.
+    /// The next present, or a reminder, brings it back.
+    pub fn island_hidden(&self, app: &AppHandle) {
+        self.island_hidden.store(true, Ordering::Release);
+        self.sync_shortcuts(app);
     }
 
     /// Registers the approve/deny chords while an approvable card is in
-    /// front, and frees them otherwise.
+    /// front and visible, and frees them otherwise. The plugin waits on the
+    /// main thread while holding its own lock, so registration only ever runs
+    /// there, one change at a time, reading the state when it runs.
     pub fn sync_shortcuts(&self, app: &AppHandle) {
-        if self.front_approval_id().is_some() {
+        let handle = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || {
+            let hub = handle.state::<Arc<AgentHub>>().inner().clone();
+            hub.apply_shortcuts(&handle);
+        }) {
+            log::warn!("could not sync approval shortcuts: {error}");
+        }
+    }
+
+    fn apply_shortcuts(&self, app: &AppHandle) {
+        let wanted = shortcuts_wanted(
+            self.front_approval_id().is_some(),
+            self.island_hidden.load(Ordering::Acquire),
+        );
+        if wanted {
             let alerts = Self::alerts(app);
             if let Err(error) = shortcuts::arm(app, &alerts.approve_shortcut, &alerts.deny_shortcut)
             {
@@ -619,7 +745,7 @@ impl AgentHub {
     /// older `notify` command.
     fn handle_event(&self, app: &AppHandle, event: AgentEvent, from_hook: bool) {
         if is_permission_prompt_notice(&event) {
-            if self.has_approval_card(&event.agent, &event.session_id) {
+            if self.approval_seen(&event.agent, &event.session_id) {
                 return;
             }
             // The PermissionRequest may be a moment behind its notice.
@@ -627,7 +753,7 @@ impl AgentHub {
             std::thread::spawn(move || {
                 std::thread::sleep(DUPLICATE_FOLD);
                 let hub = app.state::<Arc<AgentHub>>().inner().clone();
-                if !hub.has_approval_card(&event.agent, &event.session_id) {
+                if !hub.approval_seen(&event.agent, &event.session_id) {
                     hub.process_event(&app, event);
                 }
             });
@@ -690,6 +816,7 @@ impl AgentHub {
             agent: event.agent.clone(),
             agent_label: event.agent_label(),
             session_id: event.session_id.clone(),
+            agent_id: None,
             project: event.project_label(),
             title: "Waiting for you".to_string(),
             detail,
@@ -715,6 +842,7 @@ impl AgentHub {
         let action = request.action.clone();
         let now = Utc::now();
         let (opened, change) = self.open_approval(request.clone(), alerts.codex_wait_secs, now);
+        lock(&self.recent_approvals).record(&agent, &request.session_id, Instant::now());
 
         // History first, so the outcome has an event to land on.
         let event = AgentEvent {
@@ -754,7 +882,8 @@ impl AgentHub {
             }
             Err(error) => {
                 log::error!("approval released, island unavailable: {error}");
-                let released = self.abandon_with(&opened.id, OUTCOME_HANDED_BACK);
+                let released =
+                    self.abandon_with(&opened.id, OUTCOME_HANDED_BACK, SessionState::Waiting);
                 self.record_notes(app, &released.notes);
             }
         }
@@ -763,8 +892,13 @@ impl AgentHub {
     }
 
     /// Like `abandon`, with a chosen outcome for history.
-    fn abandon_with(&self, request_id: &str, outcome: &'static str) -> Change {
-        let mut change = self.abandon(request_id);
+    fn abandon_with(
+        &self,
+        request_id: &str,
+        outcome: &'static str,
+        session_state: SessionState,
+    ) -> Change {
+        let mut change = self.abandon(request_id, session_state);
         for note in &mut change.notes {
             note.outcome = outcome;
         }
@@ -777,8 +911,16 @@ impl AgentHub {
         std::thread::spawn(move || {
             std::thread::sleep(delay);
             let hub = app.state::<Arc<AgentHub>>().inner().clone();
-            if hub.card_by_id(&card_id).is_some() {
-                hub.play(&app, SoundKind::NeedsInput);
+            let hidden = hub.island_hidden.load(Ordering::Acquire);
+            match reminder_action(hub.card_by_id(&card_id).is_some(), hidden) {
+                ReminderAction::Skip => {}
+                ReminderAction::Ring => hub.play(&app, SoundKind::NeedsInput),
+                ReminderAction::PresentAndRing => {
+                    if hub.present(&app).is_ok() {
+                        hub.sync_shortcuts(&app);
+                    }
+                    hub.play(&app, SoundKind::NeedsInput);
+                }
             }
         });
     }
@@ -789,7 +931,7 @@ impl AgentHub {
     }
 
     pub fn client_gone(&self, app: &AppHandle, request_id: &str) {
-        let change = self.abandon(request_id);
+        let change = self.abandon(request_id, SessionState::Working);
         self.settle(app, &change);
     }
 
@@ -882,13 +1024,13 @@ pub fn codex_notify(app: &AppHandle, event: AgentEvent) {
 // ------------------------------------------------------------------ commands
 
 /// `approve` | `always` | `deny` | `view` | `dismiss`
-#[tauri::command]
+#[tauri::command(async)]
 pub fn agent_card_action(app: AppHandle, card_id: String, action: String) -> Result<(), String> {
     let hub = app.state::<Arc<AgentHub>>().inner().clone();
     hub.card_action(&app, &card_id, &action)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn agent_queue_step(app: AppHandle, delta: i32) {
     let hub = app.state::<Arc<AgentHub>>().inner().clone();
     hub.step_queue(&app, delta);
@@ -990,6 +1132,7 @@ mod tests {
         ApprovalRequest {
             agent: agent.to_string(),
             session_id: session.to_string(),
+            agent_id: None,
             project_path: "/Users/me/samlu".to_string(),
             tool_name: "Bash".to_string(),
             action: "curl -sI https://example.com".to_string(),
@@ -1237,16 +1380,15 @@ mod tests {
     }
 
     #[test]
-    fn a_new_request_retires_the_sessions_earlier_one() {
+    fn a_new_request_leaves_the_sessions_live_one_pending() {
         let hub = hub();
         let first = open(&hub, "claude-code", "s1");
         let (second, change) = hub.open_approval(request("claude-code", "s1"), 30, Utc::now());
-        assert_eq!(first.decisions.recv().unwrap(), Decision::NoDecision);
-        assert_eq!(change.notes.len(), 1);
-        assert_eq!(change.notes[0].outcome, "answered in the agent");
+        assert!(first.decisions.try_recv().is_err());
+        assert!(change.notes.is_empty());
         let cards = lock(&hub.queue).snapshot().cards;
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].request_id.as_deref(), Some(second.id.as_str()));
+        assert_eq!(cards.len(), 2);
+        assert_eq!(cards[1].request_id.as_deref(), Some(second.id.as_str()));
     }
 
     #[test]
@@ -1350,15 +1492,15 @@ mod tests {
     fn client_gone_removes_the_card_quietly() {
         let hub = hub();
         let opened = open(&hub, "claude-code", "s1");
-        let change = hub.abandon(&opened.id);
+        let change = hub.abandon(&opened.id, SessionState::Working);
         assert!(hub.queue_is_empty());
         assert_eq!(change.notes[0].outcome, "answered in the agent");
         assert_eq!(
             hub.sessions.get("claude-code", "s1").unwrap().state,
-            SessionState::Idle
+            SessionState::Working
         );
         // Already gone: nothing more to do.
-        assert!(!hub.abandon(&opened.id).queue);
+        assert!(!hub.abandon(&opened.id, SessionState::Working).queue);
     }
 
     #[test]
@@ -1367,6 +1509,7 @@ mod tests {
         let mine = open(&hub, "claude-code", "s1");
         let other = open(&hub, "claude-code", "s2");
         let change = hub.signal(&SessionSignal {
+            agent_id: None,
             agent: "claude-code".to_string(),
             session_id: "s1".to_string(),
             project_path: "/p".to_string(),
@@ -1389,6 +1532,7 @@ mod tests {
         let hub = hub();
         let opened = open(&hub, "codex", "t1");
         hub.signal(&SessionSignal {
+            agent_id: None,
             agent: "codex".to_string(),
             session_id: "t1".to_string(),
             project_path: String::new(),
@@ -1404,6 +1548,7 @@ mod tests {
     fn session_start_and_prompt_set_state() {
         let hub = hub();
         let signal = |kind| SessionSignal {
+            agent_id: None,
             agent: "claude-code".to_string(),
             session_id: "s1".to_string(),
             project_path: "/p".to_string(),
@@ -1431,5 +1576,107 @@ mod tests {
         assert!(hub.has_approval_card("claude-code", "s1"));
         assert!(!hub.has_approval_card("claude-code", "s2"));
         assert!(!hub.has_approval_card("codex", "s1"));
+    }
+
+    fn request_with_agent_id(session: &str, agent_id: Option<&str>) -> ApprovalRequest {
+        ApprovalRequest {
+            agent_id: agent_id.map(str::to_string),
+            ..request("claude-code", session)
+        }
+    }
+
+    fn tool_finished(session: &str, agent_id: Option<&str>) -> SessionSignal {
+        SessionSignal {
+            agent: "claude-code".to_string(),
+            session_id: session.to_string(),
+            agent_id: agent_id.map(str::to_string),
+            project_path: "/p".to_string(),
+            kind: SignalKind::ToolFinished,
+            origin: SessionOrigin::default(),
+        }
+    }
+
+    #[test]
+    fn parallel_subagent_approvals_do_not_retire_each_other() {
+        let hub = hub();
+        let (a, _) = hub.open_approval(request_with_agent_id("s1", Some("a")), 30, Utc::now());
+        let (b, _) = hub.open_approval(request_with_agent_id("s1", Some("b")), 30, Utc::now());
+        assert!(
+            a.decisions.try_recv().is_err(),
+            "B's request must not retire A"
+        );
+        assert_eq!(lock(&hub.queue).snapshot().cards.len(), 2);
+
+        // B's tool finished: only B's card goes.
+        let change = hub.signal(&tool_finished("s1", Some("b")));
+        assert_eq!(b.decisions.try_recv().unwrap(), Decision::NoDecision);
+        assert!(a.decisions.try_recv().is_err());
+        assert_eq!(change.notes.len(), 1);
+        assert_eq!(lock(&hub.queue).snapshot().cards.len(), 1);
+
+        // The parent's PostToolUse carries no agent_id: A's card stays.
+        hub.signal(&tool_finished("s1", None));
+        assert!(a.decisions.try_recv().is_err());
+        assert_eq!(lock(&hub.queue).snapshot().cards.len(), 1);
+    }
+
+    #[test]
+    fn parent_tool_finished_does_not_retire_a_subagents_request_but_its_own() {
+        let hub = hub();
+        let (parent, _) = hub.open_approval(request_with_agent_id("s1", None), 30, Utc::now());
+        let (sub, _) = hub.open_approval(request_with_agent_id("s1", Some("a")), 30, Utc::now());
+        hub.signal(&tool_finished("s1", None));
+        assert_eq!(parent.decisions.try_recv().unwrap(), Decision::NoDecision);
+        assert!(sub.decisions.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_prompt_or_session_end_still_retires_the_whole_session() {
+        let hub = hub();
+        let (a, _) = hub.open_approval(request_with_agent_id("s1", Some("a")), 30, Utc::now());
+        let (b, _) = hub.open_approval(request_with_agent_id("s1", Some("b")), 30, Utc::now());
+        hub.signal(&SessionSignal {
+            kind: SignalKind::Working,
+            ..tool_finished("s1", None)
+        });
+        assert_eq!(a.decisions.try_recv().unwrap(), Decision::NoDecision);
+        assert_eq!(b.decisions.try_recv().unwrap(), Decision::NoDecision);
+        assert!(hub.queue_is_empty());
+    }
+
+    #[test]
+    fn a_new_request_clears_the_same_agents_handed_back_card_only() {
+        let hub = hub();
+        let first = open(&hub, "codex", "t1");
+        hub.apply_action(&first.card.id, CardAction::View);
+        let other = open(&hub, "codex", "t2");
+        hub.open_approval(request("codex", "t1"), 30, Utc::now());
+        let cards = lock(&hub.queue).snapshot().cards;
+        assert_eq!(cards.len(), 2, "t1's handed-back card replaced, t2 kept");
+        assert!(cards.iter().all(|c| c.kind == CardKind::Approval));
+        assert!(other.decisions.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_notice_trailing_a_quick_answer_is_still_folded() {
+        let t0 = Instant::now();
+        let mut recent = RecentApprovals::default();
+        assert!(!recent.recent("claude-code", "s1", t0));
+        recent.record("claude-code", "s1", t0);
+        assert!(recent.recent("claude-code", "s1", t0 + Duration::from_millis(1500)));
+        assert!(recent.recent("claude-code", "s1", t0 + Duration::from_secs(3)));
+        assert!(!recent.recent("claude-code", "s1", t0 + Duration::from_millis(3001)));
+        assert!(!recent.recent("claude-code", "s2", t0));
+        assert!(!recent.recent("codex", "s1", t0));
+    }
+
+    #[test]
+    fn a_hidden_island_disarms_the_chords_and_the_reminder_brings_it_back() {
+        assert!(shortcuts_wanted(true, false));
+        assert!(!shortcuts_wanted(true, true));
+        assert!(!shortcuts_wanted(false, false));
+        assert_eq!(reminder_action(false, true), ReminderAction::Skip);
+        assert_eq!(reminder_action(true, false), ReminderAction::Ring);
+        assert_eq!(reminder_action(true, true), ReminderAction::PresentAndRing);
     }
 }

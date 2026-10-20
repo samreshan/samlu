@@ -32,6 +32,8 @@ pub enum HookMessage {
 pub struct ApprovalRequest {
     pub agent: String,
     pub session_id: String,
+    /// Set when a subagent asks: it shares its parent's `session_id`.
+    pub agent_id: Option<String>,
     pub project_path: String,
     pub tool_name: String,
     pub action: String,
@@ -44,6 +46,8 @@ pub struct ApprovalRequest {
 pub struct SessionSignal {
     pub agent: String,
     pub session_id: String,
+    /// Set when a subagent's tool call finished.
+    pub agent_id: Option<String>,
     pub project_path: String,
     pub kind: SignalKind,
     pub origin: SessionOrigin,

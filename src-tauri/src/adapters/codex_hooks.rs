@@ -19,6 +19,8 @@ pub struct CodexHooksAdapter;
 struct Payload {
     session_id: String,
     #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
     cwd: String,
     #[serde(default)]
     tool_name: String,
@@ -54,6 +56,7 @@ impl AgentAdapter for CodexHooksAdapter {
             return Ok(HookMessage::Signal(SessionSignal {
                 agent: "codex".to_string(),
                 session_id: payload.session_id,
+                agent_id: payload.agent_id,
                 project_path: payload.cwd,
                 kind,
                 origin: origin.clone(),
@@ -63,6 +66,7 @@ impl AgentAdapter for CodexHooksAdapter {
             return Ok(HookMessage::Approval(ApprovalRequest {
                 agent: "codex".to_string(),
                 session_id: payload.session_id,
+                agent_id: payload.agent_id,
                 project_path: payload.cwd,
                 action: action_line(&payload.tool_name, &payload.tool_input),
                 tool_name: payload.tool_name,

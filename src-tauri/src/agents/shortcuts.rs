@@ -61,8 +61,13 @@ fn bind(app: &AppHandle, chord: &str, approve: bool) -> Result<(), String> {
     app.global_shortcut()
         .on_shortcut(chord, move |app, _shortcut, event| {
             if event.state() == ShortcutState::Pressed {
-                let hub = app.state::<Arc<super::hub::AgentHub>>().inner().clone();
-                hub.shortcut_answer(app, approve);
+                // The plugin runs this while holding its shortcut table, and
+                // answering re-registers shortcuts: hand off and return.
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    let hub = app.state::<Arc<super::hub::AgentHub>>().inner().clone();
+                    hub.shortcut_answer(&app, approve);
+                });
             }
         })
         .map_err(|error| format!("could not register {chord}: {error}"))

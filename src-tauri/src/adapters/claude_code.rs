@@ -67,6 +67,8 @@ struct CommonPayload {
     session_id: String,
     #[serde(default)]
     cwd: String,
+    #[serde(default)]
+    agent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +76,8 @@ struct PermissionPayload {
     session_id: String,
     #[serde(default)]
     cwd: String,
+    #[serde(default)]
+    agent_id: Option<String>,
     tool_name: String,
     #[serde(default)]
     tool_input: serde_json::Value,
@@ -125,6 +129,7 @@ fn parse_permission(body: &[u8], origin: &SessionOrigin) -> Result<HookMessage, 
     Ok(HookMessage::Approval(ApprovalRequest {
         agent: "claude-code".to_string(),
         session_id: payload.session_id,
+        agent_id: payload.agent_id,
         project_path: payload.cwd,
         tool_name: payload.tool_name,
         action,
@@ -143,6 +148,7 @@ fn parse_signal(
     Ok(HookMessage::Signal(SessionSignal {
         agent: "claude-code".to_string(),
         session_id: payload.session_id,
+        agent_id: payload.agent_id,
         project_path: payload.cwd,
         kind,
         origin: origin.clone(),

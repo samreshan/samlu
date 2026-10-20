@@ -297,7 +297,8 @@ fn show_island_update(app: &AppHandle, event: &AgentEvent, summary: String) {
         queue: None,
     };
     if let Some(state) = app.try_state::<Arc<IslandState>>() {
-        *state.last_notice.lock().unwrap() = Some((event.agent.clone(), event.session_id.clone()));
+        *crate::agents::hub::lock(&state.last_notice) =
+            Some((event.agent.clone(), event.session_id.clone()));
     }
     crate::platform::order_front_without_activating(&window);
     emit_payload(app, payload);
@@ -309,11 +310,16 @@ fn emit_island(app: &AppHandle, payload: IslandPayload) {
     }
 }
 
-#[tauri::command]
+/// Hides the window and nothing else: the island's own exit already ran, and
+/// re-emitting here would bring it straight back. Cards still queued stay
+/// queued; the hub only stops the chords answering them unseen.
+#[tauri::command(async)]
 pub fn agent_island_dismiss(app: AppHandle) {
     if let Some(window) = app.get_webview_window(ISLAND_LABEL) {
         let _ = window.hide();
     }
+    let hub = app.state::<Arc<AgentHub>>().inner().clone();
+    hub.island_hidden(&app);
 }
 
 #[tauri::command]
@@ -326,12 +332,12 @@ pub fn agent_island_ready(app: AppHandle, state: tauri::State<'_, Arc<IslandStat
 
 /// The island's open button: goes to the session of the card in front, or of
 /// the notice on screen, never to a Samlu page.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn agent_island_open_activity(app: AppHandle) {
     agent_island_dismiss(app.clone());
     let target = app.state::<Arc<AgentHub>>().front_session().or_else(|| {
         app.try_state::<Arc<IslandState>>()
-            .and_then(|state| state.last_notice.lock().unwrap().clone())
+            .and_then(|state| crate::agents::hub::lock(&state.last_notice).clone())
     });
     if let Some((agent, session_id)) = target {
         crate::agents::hub::view_session(&app, &agent, &session_id);

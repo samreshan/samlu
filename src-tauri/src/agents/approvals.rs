@@ -76,12 +76,18 @@ impl PendingApprovals {
     }
 
     /// Answers every pending request of one session with `NoDecision`.
+    #[cfg(test)]
     pub fn retire_session(&self, agent: &str, session_id: &str) -> Vec<String> {
+        self.retire_where(|r| r.agent == agent && r.session_id == session_id)
+    }
+
+    /// Answers every pending request `matches` accepts with `NoDecision`.
+    pub fn retire_where(&self, matches: impl Fn(&ApprovalRequest) -> bool) -> Vec<String> {
         let removed: Vec<Entry> = {
             let mut list = self.lock();
             let (gone, keep): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut *list)
                 .into_iter()
-                .partition(|e| e.request.agent == agent && e.request.session_id == session_id);
+                .partition(|e| matches(&e.request));
             *list = keep;
             gone
         };
@@ -142,6 +148,7 @@ mod tests {
 
     fn req(agent: &str, session: &str) -> ApprovalRequest {
         ApprovalRequest {
+            agent_id: None,
             agent: agent.into(),
             session_id: session.into(),
             project_path: "/p".into(),

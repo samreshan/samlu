@@ -19,6 +19,8 @@ pub struct Card {
     pub agent: String,
     pub agent_label: String,
     pub session_id: String,
+    /// The subagent the card belongs to, if any.
+    pub agent_id: Option<String>,
     pub project: String,
     pub title: String,
     pub detail: String,
@@ -71,6 +73,16 @@ impl IslandQueue {
         Some(self.take_at(pos))
     }
 
+    /// Removes every card `matches` accepts, oldest first.
+    pub fn remove_where(&mut self, matches: impl Fn(&Card) -> bool) -> Vec<Card> {
+        let mut removed = Vec::new();
+        while let Some(pos) = self.cards.iter().position(&matches) {
+            removed.push(self.take_at(pos));
+        }
+        removed
+    }
+
+    #[cfg(test)]
     pub fn remove_session(&mut self, agent: &str, session_id: &str) -> Vec<Card> {
         let mut removed = Vec::new();
         while let Some(pos) = self
@@ -144,6 +156,7 @@ mod tests {
             agent: agent.into(),
             agent_label: agent.into(),
             session_id: session.into(),
+            agent_id: None,
             project: "p".into(),
             title: "t".into(),
             detail: "d".into(),

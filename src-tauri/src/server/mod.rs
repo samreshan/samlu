@@ -108,7 +108,7 @@ fn serve(
 /// What a request turned into: an answer now, or an approval to hold.
 enum Routed {
     Reply(Response<std::io::Cursor<Vec<u8>>>),
-    Hold(ApprovalRequest),
+    Hold(Box<ApprovalRequest>),
 }
 
 fn handle_connection(mut request: Request, context: &Context) {
@@ -116,7 +116,7 @@ fn handle_connection(mut request: Request, context: &Context) {
         Routed::Reply(response) => {
             let _ = request.respond(response);
         }
-        Routed::Hold(approval) => hold(request, context, approval),
+        Routed::Hold(approval) => hold(request, context, *approval),
     }
 }
 
@@ -178,7 +178,7 @@ fn route(context: &Context, request: &mut Request) -> Routed {
         .adapters
         .parse(adapter_name, event_route, &body, &origin)
     {
-        Ok(HookMessage::Approval(approval)) => Routed::Hold(approval),
+        Ok(HookMessage::Approval(approval)) => Routed::Hold(Box::new(approval)),
         Ok(message) => {
             context.host.handle(message);
             reply(204, "")
@@ -209,6 +209,13 @@ fn hold(request: Request, context: &Context, approval: ApprovalRequest) {
     }
 }
 
+/// The hold ran out. An answer may still have landed in the same instant;
+/// the hub has already recorded it, so it wins over "no decision".
+fn decision_at_deadline(context: &Context, opened: &OpenApproval) -> Decision {
+    context.host.hold_elapsed(&opened.id);
+    opened.decisions.try_recv().unwrap_or(Decision::NoDecision)
+}
+
 fn hold_plain(
     request: Request,
     context: &Context,
@@ -217,10 +224,7 @@ fn hold_plain(
 ) {
     let decision = match opened.decisions.recv_timeout(opened.hold) {
         Ok(decision) => decision,
-        Err(RecvTimeoutError::Timeout) => {
-            context.host.hold_elapsed(&opened.id);
-            Decision::NoDecision
-        }
+        Err(RecvTimeoutError::Timeout) => decision_at_deadline(context, &opened),
         Err(RecvTimeoutError::Disconnected) => Decision::NoDecision,
     };
     let body = response_body(&approval.agent, decision, approval);
@@ -251,8 +255,7 @@ fn hold_chunked(
             Err(RecvTimeoutError::Disconnected) => break Decision::NoDecision,
             Err(RecvTimeoutError::Timeout) => {
                 if Instant::now() >= deadline {
-                    context.host.hold_elapsed(&opened.id);
-                    break Decision::NoDecision;
+                    break decision_at_deadline(context, &opened);
                 }
                 if write_chunk(&mut writer, b" ").is_err() {
                     context.host.client_gone(&opened.id);
@@ -299,6 +302,8 @@ mod tests {
         opened: Mutex<mpsc::Sender<String>>,
         handled: Mutex<Vec<String>>,
         elapsed: Mutex<Vec<String>>,
+        /// Answers inside `hold_elapsed`, as a click landing at the deadline.
+        answer_at_deadline: Mutex<Option<Decision>>,
         gone: Mutex<Vec<String>>,
         counter: Mutex<u32>,
     }
@@ -312,6 +317,7 @@ mod tests {
                 opened: Mutex::new(opened),
                 handled: Mutex::new(Vec::new()),
                 elapsed: Mutex::new(Vec::new()),
+                answer_at_deadline: Mutex::new(None),
                 gone: Mutex::new(Vec::new()),
                 counter: Mutex::new(0),
             });
@@ -352,6 +358,9 @@ mod tests {
 
         fn hold_elapsed(&self, request_id: &str) {
             self.elapsed.lock().unwrap().push(request_id.to_string());
+            if let Some(decision) = self.answer_at_deadline.lock().unwrap().take() {
+                self.answer(request_id, decision);
+            }
         }
 
         fn client_gone(&self, request_id: &str) {
@@ -430,6 +439,7 @@ mod tests {
 
     fn request_for(agent: &str) -> ApprovalRequest {
         ApprovalRequest {
+            agent_id: None,
             agent: agent.to_string(),
             session_id: String::new(),
             project_path: String::new(),
@@ -493,6 +503,32 @@ mod tests {
         let joined = dechunk(&body).expect("valid chunked framing");
         let want = response_body("claude-code", Decision::Allow, &request_for("claude-code"));
         assert_eq!(joined.trim_start().as_bytes(), want);
+    }
+
+    #[test]
+    fn an_answer_landing_at_the_deadline_is_not_lost() {
+        for agent in ["codex", "claude-code"] {
+            let (host, _opened) = FakeHost::new(Duration::from_millis(100));
+            *host.answer_at_deadline.lock().unwrap() = Some(Decision::Allow);
+            let port = listen(host.clone());
+            let payload = if agent == "codex" {
+                codex_permission()
+            } else {
+                claude_permission()
+            };
+            let stream = post(port, &format!("/hooks/{agent}/permission/{TOKEN}"), payload);
+            let (_, body) = read_response(stream);
+            let body = if agent == "codex" {
+                body
+            } else {
+                dechunk(&body).unwrap().trim_start().to_string()
+            };
+            assert_eq!(
+                body.as_bytes(),
+                response_body(agent, Decision::Allow, &request_for(agent)),
+                "{agent}"
+            );
+        }
     }
 
     #[test]
