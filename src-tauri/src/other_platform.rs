@@ -84,6 +84,11 @@ pub fn configure_overlay(_window: &WebviewWindow) {}
 
 pub fn raise_overlay(_window: &WebviewWindow) {}
 
+/// No key-window hand-off to wait for off macOS.
+pub fn wait_for_no_key_window(_timeout_ms: i32) -> bool {
+    true
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenFrame {
     pub x: f64,

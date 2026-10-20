@@ -7,6 +7,7 @@ extern "C" {
     fn samlu_begin_overlay_window();
     fn samlu_end_overlay_window();
     fn samlu_configure_overlay_window(window: *mut std::ffi::c_void);
+    fn samlu_wait_no_key_window(timeout_ms: i32) -> bool;
     fn samlu_raise_overlay_window(window: *mut std::ffi::c_void);
     fn samlu_present_focusable_overlay_at_cursor(
         window: *mut std::ffi::c_void,
@@ -187,6 +188,12 @@ pub fn configure_overlay(window: &WebviewWindow) {
     if let Ok(pointer) = window.ns_window() {
         unsafe { samlu_configure_overlay_window(pointer) };
     }
+}
+
+/// Blocks until no Samlu window is key, or `timeout_ms` passes. `true` means
+/// the keyboard is back with the frontmost app.
+pub fn wait_for_no_key_window(timeout_ms: i32) -> bool {
+    unsafe { samlu_wait_no_key_window(timeout_ms) }
 }
 
 /// Keeps an overlay above the others, the launcher included.

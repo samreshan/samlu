@@ -269,6 +269,11 @@ pub fn create_overlay<T>(build: impl FnOnce() -> T) -> T {
 /// Windows overlays already share the topmost band; nothing to raise.
 pub fn raise_overlay(_window: &WebviewWindow) {}
 
+/// No key-window hand-off to wait for off macOS.
+pub fn wait_for_no_key_window(_timeout_ms: i32) -> bool {
+    true
+}
+
 /// Keeps an overlay above other windows and out of the taskbar and Alt+Tab.
 pub fn configure_overlay(window: &WebviewWindow) {
     let _ = window.set_always_on_top(true);

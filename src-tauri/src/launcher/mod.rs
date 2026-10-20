@@ -157,7 +157,7 @@ pub fn is_open(app: &AppHandle) -> bool {
 /// causes by clicking the capsule and must not be taken as dismissal.
 #[tauri::command]
 pub fn launcher_hide(app: AppHandle, blur: Option<bool>) -> Result<(), String> {
-    if blur.unwrap_or(false) && crate::voice::launcher_session_active(&app) {
+    if blur.unwrap_or(false) && crate::voice::launcher_blur_shielded(&app) {
         return Ok(());
     }
     hide_launcher(&app);

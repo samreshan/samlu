@@ -161,7 +161,7 @@ static void samlu_apply_overlay_behavior(NSWindow *window) {
   // front at the same level whenever it is clicked, which would otherwise
   // bury a capsule that appeared earlier.
   samlu_make_overlay_panel(window);
-  window.level = samlu_overlay_is_raised(window) ? NSPopUpMenuWindowLevel : NSStatusWindowLevel;
+  window.level = samlu_overlay_is_raised(window) ? NSStatusWindowLevel + 1 : NSStatusWindowLevel;
   window.collectionBehavior = samlu_overlay_behavior();
   window.hidesOnDeactivate = NO;
   window.animationBehavior = NSWindowAnimationBehaviorNone;
@@ -470,6 +470,32 @@ void samlu_focus_overlay(void *windowPointer) {
     samlu_apply_overlay_behavior(window);
     [window makeKeyAndOrderFront:nil];
   });
+}
+
+/// Waits, up to `timeoutMs`, for Samlu to have no key window, which is when
+/// the keyboard belongs to the frontmost app again. Called off the main
+/// thread; each probe hops to it.
+bool samlu_wait_no_key_window(int timeoutMs) {
+  int waited = 0;
+  while (true) {
+    __block BOOL none = NO;
+    void (^probe)(void) = ^{
+      none = [NSApp keyWindow] == nil;
+    };
+    if ([NSThread isMainThread]) {
+      probe();
+    } else {
+      dispatch_sync(dispatch_get_main_queue(), probe);
+    }
+    if (none) {
+      return true;
+    }
+    if (waited >= timeoutMs) {
+      return false;
+    }
+    usleep(20000);
+    waited += 20;
+  }
 }
 
 /// Lets clicks fall through to whatever is behind the overlay, so a surface

@@ -1647,14 +1647,17 @@ listen("launcher://reopen", () => {
 // at the caret, replacing any selection, and the search runs as if typed.
 listen("launcher://dictation", (event) => {
   const text = String(event.payload || "").trim();
-  if (!text) return;
   const field = el.query;
+  // The task view shows a log, not a query: its field is read-only.
+  if (!text || view === "task" || field.readOnly) return;
   const start = field.selectionStart ?? field.value.length;
   const end = field.selectionEnd ?? start;
   const before = field.value.slice(0, start);
+  const after = field.value.slice(end);
   const gap = before && !/\s$/.test(before) ? " " : "";
-  field.value = before + gap + text + field.value.slice(end);
-  const caret = before.length + gap.length + text.length;
+  const tail = after && !/^\s/.test(after) ? " " : "";
+  field.value = before + gap + text + tail + after;
+  const caret = before.length + gap.length + text.length + tail.length;
   field.focus({ preventScroll: true });
   field.setSelectionRange(caret, caret);
   field.dispatchEvent(new Event("input", { bubbles: true }));
