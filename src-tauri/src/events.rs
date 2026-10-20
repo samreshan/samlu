@@ -49,6 +49,8 @@ pub struct EventHistoryItem {
     pub summary: Option<String>,
     pub session_id: String,
     pub timestamp: DateTime<Utc>,
+    /// How a held approval ended, when known.
+    pub outcome: Option<String>,
 }
 
 impl From<&AgentEvent> for EventHistoryItem {
@@ -61,6 +63,7 @@ impl From<&AgentEvent> for EventHistoryItem {
             summary: event.summary.clone(),
             session_id: event.session_id.clone(),
             timestamp: event.timestamp,
+            outcome: event.outcome.clone(),
         }
     }
 }

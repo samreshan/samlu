@@ -732,7 +732,7 @@ function renderActivity(items) {
     title.className = "row-label";
     title.textContent = `${item.agent_label} ${item.kind_label}`;
     text.append(title);
-    const fullDetail = [item.project_label, item.summary].filter(Boolean).join(" · ");
+    const fullDetail = [item.project_label, item.summary, item.outcome].filter(Boolean).join(" · ");
     if (fullDetail) {
       const detail = document.createElement("span");
       detail.className = "row-detail";
