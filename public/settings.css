@@ -1084,6 +1084,42 @@ kbd,
   font-variant-numeric: tabular-nums;
 }
 
+.session-item {
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-item .status-dot {
+  margin-top: 5px;
+}
+
+.session-item .status-dot.working {
+  background: var(--accent, var(--success));
+}
+
+.session-item .status-dot.waiting {
+  background: var(--warning);
+}
+
+.session-item .status-dot.idle {
+  background: var(--success);
+}
+
+.range {
+  width: 140px;
+  accent-color: var(--accent, currentColor);
+}
+
+.row-control [data-sound-preview] {
+  margin-left: 8px;
+}
+
 /* ------------------------------------------------------------------ voice */
 
 .mode .keys {
