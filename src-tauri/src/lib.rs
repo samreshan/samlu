@@ -3,6 +3,7 @@
 #![cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 
 mod adapters;
+mod agents;
 mod events;
 mod launcher;
 mod lifecycle;
@@ -246,6 +247,7 @@ pub fn run() {
                 &app_data_dir,
             ));
             app.manage(app_state.clone());
+            app.manage(Arc::new(agents::hub::AgentHub::new(&app_data_dir)));
             app.manage(Arc::new(notify::IslandState::new()));
             app.manage(Arc::new(updater::UpdaterState::new()));
 
@@ -349,6 +351,15 @@ pub fn run() {
             clear_event_history,
             settings::get_notification_preferences,
             settings::set_notification_preferences,
+            settings::get_agent_alert_settings,
+            settings::set_agent_alert_settings,
+            agents::hub::agent_card_action,
+            agents::hub::agent_queue_step,
+            agents::hub::agent_sessions,
+            agents::hub::agent_session_view,
+            agents::hub::agent_sound_catalog,
+            agents::hub::agent_sound_preview,
+            agents::hub::agent_sound_choose_custom,
             settings::get_appearance,
             settings::set_appearance,
             onboarding::onboarding_state,

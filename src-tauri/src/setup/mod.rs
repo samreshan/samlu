@@ -3,6 +3,7 @@
 
 pub mod antigravity;
 pub mod claude_hooks;
+pub mod codex_hooks;
 pub mod codex_notify;
 pub mod gemini_cli;
 pub mod integrations;
@@ -12,6 +13,16 @@ use crate::state::AppState;
 use serde::Serialize;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
+
+/// How far a hook integration is from what this build of Samlu writes.
+#[allow(dead_code)] // wired in Task 12
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallState {
+    NotInstalled,
+    NeedsUpdate,
+    Installed,
+}
 
 #[derive(Serialize)]
 pub struct HookStatus {

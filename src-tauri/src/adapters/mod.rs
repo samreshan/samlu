@@ -6,9 +6,11 @@
 
 mod claude_code;
 pub mod codex;
+mod codex_hooks;
 mod hook_json;
 
-use crate::events::{AdapterError, AgentAdapter, AgentEvent};
+use crate::agents::{origin::SessionOrigin, HookMessage};
+use crate::events::{AdapterError, AgentAdapter};
 use std::collections::HashMap;
 
 pub struct AdapterRegistry {
@@ -24,6 +26,8 @@ impl AdapterRegistry {
         adapters.insert(antigravity.name(), Box::new(antigravity));
         let gemini = JsonHookAdapter::new("gemini-cli");
         adapters.insert(gemini.name(), Box::new(gemini));
+        let codex_hooks = codex_hooks::CodexHooksAdapter;
+        adapters.insert(codex_hooks.name(), Box::new(codex_hooks));
         Self { adapters }
     }
 
@@ -34,9 +38,10 @@ impl AdapterRegistry {
         adapter_name: &str,
         event_route: &str,
         body: &[u8],
-    ) -> Result<AgentEvent, AdapterError> {
+        origin: &SessionOrigin,
+    ) -> Result<HookMessage, AdapterError> {
         match self.adapters.get(adapter_name) {
-            Some(adapter) => adapter.parse(event_route, body),
+            Some(adapter) => adapter.parse(event_route, body, origin),
             None => Err(AdapterError::UnknownRoute(adapter_name.to_string())),
         }
     }
@@ -57,8 +62,15 @@ impl AgentAdapter for JsonHookAdapter {
         self.name
     }
 
-    fn parse(&self, event_route: &str, body: &[u8]) -> Result<AgentEvent, AdapterError> {
-        hook_json::parse(self.name, event_route, body)
+    fn parse(
+        &self,
+        event_route: &str,
+        body: &[u8],
+        origin: &SessionOrigin,
+    ) -> Result<HookMessage, AdapterError> {
+        let mut event = hook_json::parse(self.name, event_route, body)?;
+        event.origin = origin.clone();
+        Ok(HookMessage::Event(event))
     }
 }
 

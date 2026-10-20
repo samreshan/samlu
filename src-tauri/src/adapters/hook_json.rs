@@ -1,6 +1,7 @@
 //! Parsers shared by command-hook integrations that forward their JSON stdin
 //! to Samlu's authenticated localhost listener.
 
+use crate::agents::origin::SessionOrigin;
 use crate::events::{AdapterError, AgentEvent, AgentEventKind};
 use chrono::Utc;
 use serde_json::Value;
@@ -45,6 +46,8 @@ pub fn parse(agent: &str, route: &str, body: &[u8]) -> Result<AgentEvent, Adapte
         summary,
         session_id,
         timestamp: Utc::now(),
+        origin: SessionOrigin::default(),
+        outcome: None,
     })
 }
 

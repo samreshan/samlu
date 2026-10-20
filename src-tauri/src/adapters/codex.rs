@@ -1,6 +1,7 @@
 //! Codex CLI notification adapter. Codex appends one JSON argument to the
 //! command configured under `notify` in `~/.codex/config.toml`.
 
+use crate::agents::origin::SessionOrigin;
 use crate::events::{AgentEvent, AgentEventKind};
 use chrono::Utc;
 use serde::Deserialize;
@@ -33,6 +34,8 @@ pub fn parse_cli_payload(payload: &str) -> Result<AgentEvent, String> {
         summary: notification.last_assistant_message,
         session_id: notification.thread_id,
         timestamp: Utc::now(),
+        origin: SessionOrigin::default(),
+        outcome: None,
     })
 }
 
