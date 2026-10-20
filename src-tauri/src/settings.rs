@@ -35,6 +35,9 @@ struct Data {
     /// RFC 3339 time of the last finished check, successful or not.
     update_last_checked_at: Option<String>,
     agent_alerts: AgentAlertSettings,
+    /// A Codex hook has reached Samlu at least once, so the user has trusted
+    /// the hooks Samlu wrote to Codex's config.
+    codex_hooks_seen: bool,
 }
 
 /// Sounds, shortcuts and holds for agent alerts. Defaults differ by platform
@@ -180,6 +183,7 @@ impl Default for Data {
             update_auto_install: true,
             update_last_checked_at: None,
             agent_alerts: AgentAlertSettings::default(),
+            codex_hooks_seen: false,
         }
     }
 }
@@ -379,6 +383,22 @@ impl AppConfig {
                 "quit" => "quit".to_string(),
                 _ => "background".to_string(),
             };
+        }
+        self.save();
+    }
+
+    pub fn codex_hooks_seen(&self) -> bool {
+        self.data.lock().unwrap().codex_hooks_seen
+    }
+
+    /// Records that a Codex hook arrived. Saves only the first time.
+    pub fn mark_codex_hooks_seen(&self) {
+        {
+            let mut data = self.data.lock().unwrap();
+            if data.codex_hooks_seen {
+                return;
+            }
+            data.codex_hooks_seen = true;
         }
         self.save();
     }

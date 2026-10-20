@@ -215,7 +215,7 @@ Everything above works on Windows 10 and 11 (64-bit). What differs:
 | Samlu Island | Hangs from the notch or the menu bar | Top centre of the active display |
 | System sounds for notifications | `/System/Library/Sounds` (`.aiff`) | `C:\Windows\Media` (`.wav`) |
 | Waiting count | Number beside the menu-bar icon | Tray tooltip, "Samlu · 2 agents waiting" |
-| View | Opens the session's Warp tab, Claude or Codex conversation, or brings the agent's app forward by bundle id | Opens the session through its deep link (`claude://`, `codex://`, `warp://` where registered); otherwise says it couldn't find the session |
+| View | Opens the session's Warp tab, Claude or Codex conversation, or brings the agent's app forward by bundle id; otherwise says it couldn't find the session | Opens the session through its deep link (`claude://`, `codex://`, `warp://` where registered); otherwise says it couldn't find the session |
 | Updates | Replaced in place, applied on restart | Through the installer, which restarts Samlu |
 
 Gemini CLI and Antigravity hooks call `curl.exe`, which Windows 10 and 11
@@ -289,12 +289,14 @@ tells you when an agent needs you, finishes a turn, or completes a task.
   once, with `/hooks` in the Codex CLI or in the prompt the Codex app shows. The
   Codex row says "Waiting for Codex to trust Samlu's hooks" until the first
   Codex hook event arrives.
+- A Codex connection set up before hooks existed (only the `notify` command)
+  shows **Update needed**. **Update** adds the hooks and keeps `notify`.
 
 #### View
 
 - View opens the session itself: the Warp tab, the Claude desktop conversation,
-  or the Codex thread. If Samlu can't tell where a session is, it brings the
-  agent's app forward. If it can't find the session at all, the island says so.
+  or the Codex thread. If Samlu knows which app runs the session, it brings
+  that app forward; otherwise the island says it couldn't find the session.
   View never opens Samlu's own pages.
 
 #### Sounds
@@ -303,7 +305,7 @@ tells you when an agent needs you, finishes a turn, or completes a task.
   **task completed**, and **turn finished**. Each can be None, a macOS system
   sound, or a file of your own (Custom…). The play button previews the choice.
 - Defaults: Glass for needs you, Hero for task completed, None for turn
-  finished. The master switch and the volume (70 % by default) are in Settings
+  finished. The master switch and the volume (70% by default) are in Settings
   › Agents.
 - Samlu's own banners stay silent, so each event rings once.
 

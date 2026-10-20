@@ -30,7 +30,8 @@ const ORIGIN_HEADERS: &str = "-H \"X-Samlu-Warp-Focus: %WARP_FOCUS_URL%\" -H \"X
 
 /// The permission hook must print Codex's decision body, so only its stderr
 /// is silenced; the others discard everything. Every command ends in a
-/// success exit so a stopped Samlu never blocks Codex.
+/// success exit so a stopped Samlu never blocks Codex. `--fail` keeps the
+/// body of a 400/401/404 reply from reaching Codex's stdout as a decision.
 #[cfg(not(windows))]
 fn curl_command(port: u16, token: &str, route: &str) -> String {
     let (max_time, redirect) = if route == "permission" {
@@ -39,7 +40,7 @@ fn curl_command(port: u16, token: &str, route: &str) -> String {
         (3, ">/dev/null 2>&1")
     };
     format!(
-        "/usr/bin/curl --silent --max-time {max_time} -X POST -H 'Content-Type: application/json' {ORIGIN_HEADERS} --data-binary @- 'http://127.0.0.1:{port}/hooks/codex/{route}/{token}' {redirect} || true"
+        "/usr/bin/curl --silent --fail --max-time {max_time} -X POST -H 'Content-Type: application/json' {ORIGIN_HEADERS} --data-binary @- 'http://127.0.0.1:{port}/hooks/codex/{route}/{token}' {redirect} || true"
     )
 }
 
@@ -52,7 +53,7 @@ fn curl_command(port: u16, token: &str, route: &str) -> String {
         (3, ">NUL 2>&1")
     };
     format!(
-        "curl.exe --silent --max-time {max_time} -X POST -H \"Content-Type: application/json\" {ORIGIN_HEADERS} --data-binary @- \"http://127.0.0.1:{port}/hooks/codex/{route}/{token}\" {redirect} || exit /b 0"
+        "curl.exe --silent --fail --max-time {max_time} -X POST -H \"Content-Type: application/json\" {ORIGIN_HEADERS} --data-binary @- \"http://127.0.0.1:{port}/hooks/codex/{route}/{token}\" {redirect} || exit /b 0"
     )
 }
 
@@ -341,6 +342,14 @@ mod tests {
         assert_eq!(state(partial, 47823, "t"), InstallState::NeedsUpdate);
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn command_without_fail_needs_update() {
+        let full = merged(parse(""), 47823, "t").unwrap();
+        let old = full.to_string().replace("--silent --fail ", "--silent ");
+        assert_eq!(state(parse(&old), 47823, "t"), InstallState::NeedsUpdate);
+    }
+
     #[test]
     fn uninstall_removes_only_samlu() {
         let start = "model = \"gpt-5\"\n[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = \"command\"\ncommand = \"echo mine\"\n";
@@ -393,6 +402,7 @@ mod tests {
     fn permission_command_prints_body_and_never_fails() {
         let command = curl_command(47823, "t", "permission");
         assert!(command.contains("--max-time 125"));
+        assert!(command.contains("--silent --fail "));
         assert!(command.ends_with("|| true"));
         assert!(command.contains("2>/dev/null"));
         assert!(!command.contains(">/dev/null 2>&1"));
@@ -420,6 +430,7 @@ mod tests {
     fn windows_commands_use_cmd_syntax() {
         let permission = curl_command(47823, "t", "permission");
         assert!(permission.starts_with("curl.exe "));
+        assert!(permission.contains("--silent --fail "));
         assert!(permission.contains("2>NUL || exit /b 0"));
         assert!(!permission.contains(">NUL 2>&1"));
         assert!(permission.contains("%WARP_FOCUS_URL%"));

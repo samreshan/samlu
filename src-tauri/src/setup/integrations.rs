@@ -1,6 +1,7 @@
 //! One product-facing API for the supported agent integrations.
 
 use super::{antigravity, claude_hooks, codex_hooks, codex_notify, gemini_cli, InstallState};
+use crate::settings::AppConfig;
 use crate::state::AppState;
 use serde::Serialize;
 use std::sync::Arc;
@@ -17,6 +18,9 @@ pub struct IntegrationStatus {
     pub installed: bool,
     /// Samlu's hooks are present but differ from what this build writes.
     pub needs_update: bool,
+    /// Hooks are written but no Codex hook has reached Samlu yet: Codex
+    /// still has to be told to trust them.
+    pub waiting_for_trust: bool,
     pub error: Option<String>,
 }
 
@@ -34,6 +38,7 @@ fn unavailable(
         exists: false,
         installed: false,
         needs_update: false,
+        waiting_for_trust: false,
         error: Some(error),
     }
 }
@@ -46,11 +51,13 @@ fn flags(state: InstallState) -> (bool, bool) {
     )
 }
 
-fn state_from_bool(installed: bool) -> InstallState {
-    if installed {
-        InstallState::Installed
+/// Codex has two parts: the older `notify` command and the hooks. An install
+/// that has only `notify` (from before hooks existed) needs the hooks added.
+fn codex_state(notify_installed: bool, hooks: InstallState) -> InstallState {
+    if notify_installed && hooks == InstallState::NotInstalled {
+        InstallState::NeedsUpdate
     } else {
-        InstallState::NotInstalled
+        hooks
     }
 }
 
@@ -58,6 +65,7 @@ fn state_from_bool(installed: bool) -> InstallState {
 pub fn get_agent_integrations(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
+    config: State<'_, Arc<AppConfig>>,
 ) -> Vec<IntegrationStatus> {
     let claude = match claude_hooks::global_settings_path() {
         Some(path) => match claude_hooks::read_settings(&path) {
@@ -72,6 +80,7 @@ pub fn get_agent_integrations(
                     exists: path.exists(),
                     installed,
                     needs_update,
+                    waiting_for_trust: false,
                     error: None,
                 }
             }
@@ -94,7 +103,9 @@ pub fn get_agent_integrations(
         codex_hooks::status(state.port, &state.token).map(|hooks| (status, hooks))
     }) {
         Ok((status, hooks)) => {
+            let hooks = codex_state(status.installed, hooks);
             let (installed, needs_update) = flags(hooks);
+            let waiting_for_trust = hooks == InstallState::Installed && !config.codex_hooks_seen();
             IntegrationStatus {
                 id: "codex",
                 name: "Codex",
@@ -103,6 +114,7 @@ pub fn get_agent_integrations(
                 exists: status.exists,
                 installed,
                 needs_update,
+                waiting_for_trust,
                 error: None,
             }
         }
@@ -114,15 +126,16 @@ pub fn get_agent_integrations(
         ),
     };
 
-    let antigravity = match antigravity::status() {
+    let antigravity = match antigravity::status(state.port, &state.token) {
         Ok(status) => IntegrationStatus {
             id: "antigravity",
             name: "Antigravity",
             description: "Completion and permission/question requests from Antigravity hooks.",
             path: status.path,
             exists: status.exists,
-            installed: flags(state_from_bool(status.installed)).0,
-            needs_update: flags(state_from_bool(status.installed)).1,
+            installed: flags(status.state).0,
+            needs_update: flags(status.state).1,
+            waiting_for_trust: false,
             error: None,
         },
         Err(error) => unavailable(
@@ -133,15 +146,16 @@ pub fn get_agent_integrations(
         ),
     };
 
-    let gemini = match gemini_cli::status() {
+    let gemini = match gemini_cli::status(state.port, &state.token) {
         Ok(status) => IntegrationStatus {
             id: "gemini-cli",
             name: "Gemini CLI",
             description: "Turn completion and tool-permission requests from Gemini CLI hooks.",
             path: status.path,
             exists: status.exists,
-            installed: flags(state_from_bool(status.installed)).0,
-            needs_update: flags(state_from_bool(status.installed)).1,
+            installed: flags(status.state).0,
+            needs_update: flags(status.state).1,
+            waiting_for_trust: false,
             error: None,
         },
         Err(error) => unavailable(
@@ -232,7 +246,7 @@ pub fn remove_agent_integration(id: String, app: AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use super::{flags, state_from_bool};
+    use super::{codex_state, flags, IntegrationStatus};
     use crate::setup::InstallState;
 
     #[test]
@@ -240,7 +254,41 @@ mod tests {
         assert_eq!(flags(InstallState::NotInstalled), (false, false));
         assert_eq!(flags(InstallState::NeedsUpdate), (false, true));
         assert_eq!(flags(InstallState::Installed), (true, false));
-        assert_eq!(flags(state_from_bool(true)), (true, false));
-        assert_eq!(flags(state_from_bool(false)), (false, false));
+    }
+
+    #[test]
+    fn codex_with_only_notify_needs_the_hooks() {
+        assert_eq!(
+            codex_state(true, InstallState::NotInstalled),
+            InstallState::NeedsUpdate
+        );
+        assert_eq!(
+            codex_state(false, InstallState::NotInstalled),
+            InstallState::NotInstalled
+        );
+        assert_eq!(
+            codex_state(true, InstallState::Installed),
+            InstallState::Installed
+        );
+    }
+
+    #[test]
+    fn needs_update_serializes_in_the_shape_settings_reads() {
+        let (installed, needs_update) = flags(InstallState::NeedsUpdate);
+        let status = IntegrationStatus {
+            id: "codex",
+            name: "Codex",
+            description: "",
+            path: String::new(),
+            exists: true,
+            installed,
+            needs_update,
+            waiting_for_trust: false,
+            error: None,
+        };
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["needsUpdate"], true);
+        assert_eq!(json["installed"], false);
+        assert_eq!(json["waitingForTrust"], false);
     }
 }

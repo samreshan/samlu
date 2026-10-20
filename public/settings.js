@@ -497,10 +497,10 @@ function renderIntegrations() {
     detail.textContent = integration.error || tildePath(integration.path);
     detail.title = integration.error || integration.path;
     text.append(label, detail);
-    if (integration.id === "codex" && integration.installed && !integration.error) {
+    if (integration.id === "codex" && integration.waitingForTrust && !integration.error) {
       const note = document.createElement("span");
       note.className = "row-detail";
-      note.textContent = "Codex asks once to trust Samlu’s hooks.";
+      note.textContent = "Waiting for Codex to trust Samlu’s hooks.";
       text.append(note);
     }
 
@@ -510,7 +510,7 @@ function renderIntegrations() {
     if (integration.error) {
       pill.className = "pill warn";
       pill.textContent = "Unavailable";
-    } else if (integration.installed && integration.needsUpdate) {
+    } else if (integration.needsUpdate) {
       pill.className = "pill warn";
       pill.textContent = "Update needed";
     } else if (integration.installed) {
@@ -529,7 +529,7 @@ function renderIntegrations() {
     const primary = document.createElement("button");
     primary.type = "button";
     primary.className = "button";
-    const updating = integration.installed && integration.needsUpdate;
+    const updating = Boolean(integration.needsUpdate);
     primary.className = updating ? "button primary" : "button";
     primary.dataset.integrationAction = integration.installed && !updating ? "remove" : "apply";
     primary.dataset.integrationId = integration.id;
@@ -2913,6 +2913,9 @@ async function boot() {
   await listen("updater://state", (event) => renderUpdate(event.payload));
   await listen("agents://sessions", () => {
     if (currentPane === "agents") loadSessions();
+  });
+  await listen("agents://integrations", () => {
+    if (currentPane === "agents") loadAgents();
   });
   await listen("agent://event", () => {
     if (currentPane === "agents") loadActivity();

@@ -97,10 +97,19 @@ pub fn is_permission_prompt_notice(event: &AgentEvent) -> bool {
         && event.summary.as_deref() == Some(PERMISSION_PROMPT_SUMMARY)
 }
 
-/// Any event from a session means the agent moved on, except the permission
-/// notice that accompanies a pending approval.
-pub fn event_retires_cards(event: &AgentEvent) -> bool {
-    !is_permission_prompt_notice(event)
+/// What an agent event clears from its session's cards. The permission
+/// notice that accompanies a pending approval clears nothing. Only a turn
+/// finishing (Stop) means the agent moved on, so only it answers live
+/// approvals; a task completing or a notification leaves them waiting and
+/// clears just the notices and handed-back cards.
+fn event_retirement(event: &AgentEvent) -> Option<Scope> {
+    if is_permission_prompt_notice(event) {
+        return None;
+    }
+    Some(match event.kind {
+        AgentEventKind::TurnFinished => Scope::Session,
+        AgentEventKind::Completed | AgentEventKind::NeedsInput => Scope::Notices,
+    })
 }
 
 /// The session state an event leaves behind.
@@ -139,6 +148,8 @@ pub fn sound_choice(alerts: &AgentAlertSettings, kind: SoundKind) -> Option<&str
 enum Scope {
     Session,
     Agent(Option<String>),
+    /// Needs-input and handed-back cards; live approvals stay.
+    Notices,
 }
 
 /// What a card's button asks for.
@@ -425,6 +436,31 @@ impl AgentHub {
         );
     }
 
+    /// Any card (approval, notice, handed back) still asks about this session.
+    fn has_card(&self, agent: &str, session_id: &str) -> bool {
+        lock(&self.queue)
+            .snapshot()
+            .cards
+            .iter()
+            .any(|card| card.agent == agent && card.session_id == session_id)
+    }
+
+    /// The session keeps reading Waiting while any card for it remains.
+    fn keep_waiting(&self, agent: &str, session_id: &str) {
+        if self.has_card(agent, session_id) {
+            self.touch(agent, session_id, Some(SessionState::Waiting));
+        }
+    }
+
+    /// Sets `state`, unless another card for the session still waits.
+    fn settle_state(&self, agent: &str, session_id: &str, state: SessionState) {
+        if self.has_card(agent, session_id) {
+            self.touch(agent, session_id, Some(SessionState::Waiting));
+        } else {
+            self.touch(agent, session_id, Some(state));
+        }
+    }
+
     /// Answers the session's pending approvals "no decision" and drops all
     /// its cards: it has moved on, so they are stale. Approvals that go this
     /// way read "answered in the agent" in history.
@@ -434,14 +470,19 @@ impl AgentHub {
 
     fn retire_scoped(&self, agent: &str, session_id: &str, scope: Scope) -> Change {
         let in_scope = |agent_id: &Option<String>| match &scope {
-            Scope::Session => true,
+            Scope::Session | Scope::Notices => true,
             Scope::Agent(only) => agent_id == only,
         };
-        self.approvals.retire_where(|r| {
-            r.agent == agent && r.session_id == session_id && in_scope(&r.agent_id)
-        });
+        if !matches!(scope, Scope::Notices) {
+            self.approvals.retire_where(|r| {
+                r.agent == agent && r.session_id == session_id && in_scope(&r.agent_id)
+            });
+        }
         let cards = lock(&self.queue).remove_where(|c| {
-            c.agent == agent && c.session_id == session_id && in_scope(&c.agent_id)
+            c.agent == agent
+                && c.session_id == session_id
+                && in_scope(&c.agent_id)
+                && (!matches!(scope, Scope::Notices) || c.kind != CardKind::Approval)
         });
         let notes = cards
             .iter()
@@ -519,7 +560,7 @@ impl AgentHub {
                     if let Some(outcome) = outcome_for(decision) {
                         change.notes.push(HistoryNote::of(&card, outcome));
                     }
-                    self.touch(&card.agent, &card.session_id, Some(SessionState::Working));
+                    self.settle_state(&card.agent, &card.session_id, SessionState::Working);
                 }
             }
             CardAction::Dismiss => {
@@ -531,6 +572,11 @@ impl AgentHub {
                     change
                         .notes
                         .push(HistoryNote::of(&card, OUTCOME_HANDED_BACK));
+                }
+                // Nothing left to wait on here: the notice was all that
+                // kept the session Waiting.
+                if !self.has_card(&card.agent, &card.session_id) {
+                    self.touch(&card.agent, &card.session_id, Some(SessionState::Idle));
                 }
             }
             CardAction::View => {
@@ -580,9 +626,7 @@ impl AgentHub {
         let Some(card) = lock(&self.queue).remove_by_request(request_id) else {
             return Change::default();
         };
-        if !self.has_approval_card(&card.agent, &card.session_id) {
-            self.touch(&card.agent, &card.session_id, Some(session_state));
-        }
+        self.settle_state(&card.agent, &card.session_id, session_state);
         Change {
             queue: true,
             notes: vec![HistoryNote::of(&card, OUTCOME_ELSEWHERE)],
@@ -614,11 +658,13 @@ impl AgentHub {
             // on, not a subagent running beside it.
             SignalKind::ToolFinished => {
                 touch(SessionState::Working);
-                self.retire_scoped(
+                let change = self.retire_scoped(
                     &signal.agent,
                     &signal.session_id,
                     Scope::Agent(signal.agent_id.clone()),
-                )
+                );
+                self.keep_waiting(&signal.agent, &signal.session_id);
+                change
             }
             SignalKind::Ended => {
                 self.sessions.end(&signal.agent, &signal.session_id);
@@ -730,6 +776,7 @@ impl AgentHub {
     }
 
     pub fn handle(&self, app: &AppHandle, message: HookMessage) {
+        self.note_codex_hooks(app, &message);
         match message {
             HookMessage::Event(event) => self.handle_event(app, event, true),
             HookMessage::Signal(signal) => {
@@ -738,6 +785,22 @@ impl AgentHub {
             }
             // The listener holds approvals through `begin_approval`.
             HookMessage::Approval(_) => {}
+        }
+    }
+
+    /// The first hook message from Codex proves it trusted Samlu's hooks.
+    fn note_codex_hooks(&self, app: &AppHandle, message: &HookMessage) {
+        let agent = match message {
+            HookMessage::Event(event) => &event.agent,
+            HookMessage::Signal(signal) => &signal.agent,
+            HookMessage::Approval(request) => &request.agent,
+        };
+        if agent == "codex" {
+            let config = app.state::<Arc<AppConfig>>();
+            if !config.codex_hooks_seen() {
+                config.mark_codex_hooks_seen();
+                let _ = app.emit("agents://integrations", ());
+            }
         }
     }
 
@@ -778,11 +841,11 @@ impl AgentHub {
             Some(state_after_event(event.kind)),
             Utc::now(),
         );
-        let change = if event_retires_cards(&event) {
-            self.retire(&event.agent, &event.session_id)
-        } else {
-            Change::default()
+        let change = match event_retirement(&event) {
+            Some(scope) => self.retire_scoped(&event.agent, &event.session_id, scope),
+            None => Change::default(),
         };
+        self.keep_waiting(&event.agent, &event.session_id);
         self.settle(app, &change);
         crate::notify::present_event(app.clone(), state, event);
     }
@@ -836,7 +899,12 @@ impl AgentHub {
         app: &AppHandle,
         request: ApprovalRequest,
     ) -> (String, Receiver<Decision>, Duration) {
+        self.note_codex_hooks(app, &HookMessage::Approval(request.clone()));
         let alerts = Self::alerts(app);
+        let notify = app
+            .state::<Arc<AppConfig>>()
+            .preferences()
+            .notify_needs_input;
         let state = app.state::<Arc<AppState>>().inner().clone();
         let agent = request.agent.clone();
         let action = request.action.clone();
@@ -860,14 +928,18 @@ impl AgentHub {
         self.record_notes(app, &change.notes);
 
         self.play(app, SoundKind::NeedsInput);
-        if let Err(error) = app
-            .notification()
-            .builder()
-            .title(format!("{} needs approval", agent_label(&agent)))
-            .body(&action)
-            .show()
-        {
-            log::error!("failed to show approval notification: {error}");
+        // The banner follows the needs-input switch; the card and the sound
+        // do not (the sound has its own master switch).
+        if notify {
+            if let Err(error) = app
+                .notification()
+                .builder()
+                .title(format!("{} needs approval", agent_label(&agent)))
+                .body(&action)
+                .show()
+            {
+                log::error!("failed to show approval notification: {error}");
+            }
         }
 
         // Approvals always use the island, whatever delivery is set to: a
@@ -1221,14 +1293,14 @@ mod tests {
             "Waiting for permission to continue",
         );
         assert!(is_permission_prompt_notice(&notice));
-        assert!(!event_retires_cards(&notice));
+        assert!(event_retirement(&notice).is_none());
         let idle = event(
             "claude-code",
             AgentEventKind::NeedsInput,
             "Has been idle a while",
         );
         assert!(!is_permission_prompt_notice(&idle));
-        assert!(event_retires_cards(&idle));
+        assert!(matches!(event_retirement(&idle), Some(Scope::Notices)));
         let codex = event(
             "codex",
             AgentEventKind::NeedsInput,
@@ -1236,7 +1308,9 @@ mod tests {
         );
         assert!(!is_permission_prompt_notice(&codex));
         let stop = event("claude-code", AgentEventKind::TurnFinished, "done");
-        assert!(event_retires_cards(&stop));
+        assert!(matches!(event_retirement(&stop), Some(Scope::Session)));
+        let task = event("claude-code", AgentEventKind::Completed, "done");
+        assert!(matches!(event_retirement(&task), Some(Scope::Notices)));
     }
 
     #[test]
@@ -1578,6 +1652,25 @@ mod tests {
         assert!(!hub.has_approval_card("codex", "s1"));
     }
 
+    impl AgentHub {
+        fn push_notice_for_test(&self, agent: &str, session: &str) {
+            lock(&self.queue).push(Card {
+                id: "notice-test".to_string(),
+                kind: CardKind::NeedsInput,
+                agent: agent.to_string(),
+                agent_label: agent_label(agent),
+                session_id: session.to_string(),
+                agent_id: None,
+                project: String::new(),
+                title: String::new(),
+                detail: String::new(),
+                request_id: None,
+                always_allow_rule: None,
+                created_at: Utc::now(),
+            });
+        }
+    }
+
     fn request_with_agent_id(session: &str, agent_id: Option<&str>) -> ApprovalRequest {
         ApprovalRequest {
             agent_id: agent_id.map(str::to_string),
@@ -1642,6 +1735,53 @@ mod tests {
         assert_eq!(a.decisions.try_recv().unwrap(), Decision::NoDecision);
         assert_eq!(b.decisions.try_recv().unwrap(), Decision::NoDecision);
         assert!(hub.queue_is_empty());
+    }
+
+    #[test]
+    fn task_completed_and_notifications_leave_live_approvals_pending() {
+        let hub = hub();
+        let live = open(&hub, "claude-code", "s1");
+        hub.push_notice_for_test("claude-code", "s1");
+        let change = hub.retire_scoped("claude-code", "s1", Scope::Notices);
+        assert!(live.decisions.try_recv().is_err());
+        let cards = lock(&hub.queue).snapshot().cards;
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].kind, CardKind::Approval);
+        assert!(change.queue);
+        assert!(change.notes.is_empty());
+        // A turn finishing does answer it.
+        hub.retire_scoped("claude-code", "s1", Scope::Session);
+        assert_eq!(live.decisions.try_recv().unwrap(), Decision::NoDecision);
+    }
+
+    #[test]
+    fn session_stays_waiting_while_another_card_remains() {
+        let hub = hub();
+        let a = open(&hub, "claude-code", "s1");
+        let b = hub
+            .open_approval(request("claude-code", "s1"), 30, Utc::now())
+            .0;
+        hub.apply_action(&a.card.id, CardAction::Approve);
+        assert_eq!(
+            hub.sessions.get("claude-code", "s1").unwrap().state,
+            SessionState::Waiting
+        );
+        hub.apply_action(&b.card.id, CardAction::Approve);
+        assert_eq!(
+            hub.sessions.get("claude-code", "s1").unwrap().state,
+            SessionState::Working
+        );
+    }
+
+    #[test]
+    fn dismissing_the_last_card_sets_the_session_idle() {
+        let hub = hub();
+        let opened = open(&hub, "claude-code", "s1");
+        hub.apply_action(&opened.card.id, CardAction::Dismiss);
+        assert_eq!(
+            hub.sessions.get("claude-code", "s1").unwrap().state,
+            SessionState::Idle
+        );
     }
 
     #[test]
