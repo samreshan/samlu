@@ -696,7 +696,13 @@ function render(payload) {
 
   const signature = cardSignature(payload);
   if (visible) {
-    if (signature && signature === shownCard) return;
+    if (signature && signature === shownCard) {
+      // Same card re-sent after an action: nothing to animate, but the
+      // buttons must come back to life.
+      delete el.cardActions.dataset.busy;
+      setCardButtons(false);
+      return;
+    }
     shownCard = signature;
     swap(payload);
     return;
