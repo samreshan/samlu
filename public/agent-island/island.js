@@ -12,6 +12,9 @@ const el = {
   copy: byId("copy"),
   meta: byId("meta"),
   actions: byId("actions"),
+  cardActions: byId("card-actions"),
+  queueStep: byId("queue-step"),
+  queueCount: byId("queue-count"),
   title: byId("title"),
   agent: byId("agent"),
   project: byId("project"),
@@ -28,14 +31,18 @@ const el = {
 };
 
 const SWAP_MS = 110;
-const ISLAND_HEIGHT = 130;
+// The island is 130 tall for a plain notification and 176 while it carries
+// approval cards (the window is 420 x 184 around it).
+const ISLAND_HEIGHT_PLAIN = 130;
+const ISLAND_HEIGHT_QUEUE = 176;
+const NOTE_MS = 2500;
 // Past this much travel the island is considered thrown away rather than
 // nudged. Deliberately under half its height: by the time you have dragged a
 // notification a third of the way back into the notch, you have decided.
 const DISMISS_FRACTION = 0.34;
 // Bloom grows out of, and is drawn back into, a shape the size of the camera
 // housing (186 x 32 points) inside the 404 x 130 island.
-const HOUSING_SCALE = "scale(0.46, 0.25)";
+const housingScale = () => `scale(0.46, ${(32 / islandHeight()).toFixed(3)})`;
 
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -107,6 +114,8 @@ function stopAll() {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const isBuddy = () => el.island.dataset.style === "buddy";
+const hasQueue = () => el.island.dataset.queue === "true";
+const islandHeight = () => (hasQueue() ? ISLAND_HEIGHT_QUEUE : ISLAND_HEIGHT_PLAIN);
 
 let settleFrame = 0;
 
@@ -165,7 +174,7 @@ function rubberband(overshoot, dimension, constant = 0.55) {
 function setOffset(value) {
   el.island.style.setProperty("--drag-y", `${value.toFixed(2)}px`);
   // Bloom narrows toward the notch as it is thrown up, as if drawn back in.
-  const squeeze = !isBuddy() && value < 0 ? 1 - Math.min(1, -value / ISLAND_HEIGHT) * 0.16 : 1;
+  const squeeze = !isBuddy() && value < 0 ? 1 - Math.min(1, -value / islandHeight()) * 0.16 : 1;
   el.island.style.setProperty("--drag-squeeze", squeeze.toFixed(4));
 }
 
@@ -174,9 +183,9 @@ function setOffset(value) {
 function arriveBloom(kind) {
   // The body grows out of the camera housing on a spring with a visible
   // overshoot; the content waits for the shape, then comes into focus.
-  play(el.body, [{ transform: HOUSING_SCALE }, { transform: "none" }], { duration: 500, easing: EASE.bloom });
+  play(el.body, [{ transform: housingScale() }, { transform: "none" }], { duration: 500, easing: EASE.bloom });
   play(el.stage, [{ opacity: 0 }, { opacity: 1 }], { duration: 90, easing: "ease-out" });
-  [el.slot, el.meta, el.summary, el.actions].forEach((node, i) => {
+  [el.slot, el.meta, el.summary, el.actions, el.cardActions, el.queueStep].forEach((node, i) => {
     play(
       node,
       [
@@ -235,7 +244,7 @@ function exitBloom() {
   play(el.notification, [{ opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(4px)" }], {
     duration: 100, easing: "ease-out", fill: "forwards",
   });
-  play(el.body, [{ transform: "none" }, { transform: HOUSING_SCALE }], {
+  play(el.body, [{ transform: "none" }, { transform: housingScale() }], {
     duration: 230, delay: 30, easing: EASE.inOut, fill: "forwards",
   });
   play(el.stage, [{ opacity: 1 }, { opacity: 1, offset: 0.7 }, { opacity: 0 }], {
@@ -265,7 +274,7 @@ function arriveBuddy(kind) {
   });
   // Turns finish all day, so they skip the assembly and just appear.
   if (kind !== "turn_finished") assemble(110);
-  [el.meta, el.summary, el.actions].forEach((node, i) => {
+  [el.meta, el.summary, el.actions, el.cardActions, el.queueStep].forEach((node, i) => {
     play(node, [{ opacity: 0, transform: "translateY(-5px)" }, { opacity: 1, transform: "none" }], {
       duration: 300, delay: 90 + i * 45, easing: EASE.out, fill: "backwards",
     });
@@ -473,20 +482,138 @@ function dismiss() {
 
 /* ------------------------------------------------------------------ render */
 
+/** The queue the payload carries, or null when it is empty or absent. */
+function activeQueue(payload) {
+  const queue = payload?.queue;
+  if (!queue || !Array.isArray(queue.cards) || queue.cards.length === 0) return null;
+  const front = Math.min(Math.max(Number(queue.front) || 0, 0), queue.cards.length - 1);
+  return { cards: queue.cards, front, card: queue.cards[front] };
+}
+
+/** Cards reuse the island's two visual moods: anything that needs an answer
+ * wears the waiting accent; a handed-back turn is as quiet as a finished one. */
+const CARD_MOOD = { approval: "needs_input", needs_input: "needs_input", handed_back: "turn_finished" };
+const effectiveKind = (payload) => {
+  const queue = activeQueue(payload);
+  return queue ? CARD_MOOD[queue.card.kind] || "needs_input" : payload.kind || "completed";
+};
+
+let noteTimer = null;
+let summaryText = "";
+
+function setSummary(text) {
+  summaryText = text;
+  clearTimeout(noteTimer);
+  noteTimer = null;
+  el.summary.textContent = text;
+}
+
+/** A short message in place of the summary line, then the summary again. */
+function showNote(note) {
+  if (typeof note !== "string" || !note || !visible) return;
+  clearTimeout(noteTimer);
+  el.summary.textContent = note;
+  el.summary.removeAttribute("title");
+  noteTimer = setTimeout(() => {
+    noteTimer = null;
+    el.summary.textContent = summaryText;
+    if (el.summary.dataset.full) el.summary.title = el.summary.dataset.full;
+  }, NOTE_MS);
+}
+
+function button(label, className, onClick, title) {
+  const node = document.createElement("button");
+  node.type = "button";
+  node.className = className;
+  node.textContent = label;
+  if (title) {
+    node.title = title;
+    node.setAttribute("aria-label", label);
+  }
+  node.addEventListener("click", onClick);
+  return node;
+}
+
+function setCardButtons(disabled) {
+  el.cardActions.querySelectorAll("button").forEach((node) => {
+    node.disabled = disabled;
+  });
+}
+
+/** Sends a card action, then leaves the island as it is: the next payload
+ * decides what comes next. Buttons stay dead until that payload lands. */
+function cardAction(cardId, action) {
+  if (el.cardActions.dataset.busy === "true") return;
+  el.cardActions.dataset.busy = "true";
+  setCardButtons(true);
+  invoke("agent_card_action", { cardId, action }).catch((error) => {
+    console.error(error);
+    delete el.cardActions.dataset.busy;
+    setCardButtons(false);
+  });
+}
+
+function writeCard(queue) {
+  const { card, cards, front } = queue;
+  const act = (action) => () => cardAction(card.id, action);
+  el.title.textContent = card.title || "Agent update";
+  el.agent.textContent = card.agentLabel || card.agent || "Agent";
+  el.project.textContent = card.project || "project";
+
+  const detail = card.kind === "handed_back" ? "Answer in Codex" : card.detail || "";
+  setSummary(detail);
+  el.summary.dataset.mono = String(card.kind === "approval");
+  if (detail) {
+    el.summary.dataset.full = detail;
+    el.summary.title = detail;
+  } else {
+    delete el.summary.dataset.full;
+    el.summary.removeAttribute("title");
+  }
+
+  el.cardActions.replaceChildren();
+  delete el.cardActions.dataset.busy;
+  el.cardActions.dataset.card = card.kind;
+  if (card.kind === "approval") {
+    el.cardActions.append(button("Deny", "card-button secondary", act("deny")));
+    if (card.alwaysAllowRule) {
+      el.cardActions.append(button("Always allow", "card-button secondary", act("always"), card.alwaysAllowRule));
+    }
+    el.cardActions.append(button("Approve", "card-button primary", act("approve")));
+    el.cardActions.append(button("View", "card-button text", act("view")));
+  } else {
+    el.cardActions.append(button("Dismiss", "card-button secondary", act("dismiss")));
+    el.cardActions.append(button("View", "card-button primary", act("view")));
+  }
+
+  el.queueStep.hidden = cards.length < 2;
+  el.queueCount.textContent = `${front + 1} of ${cards.length}`;
+}
+
 function writeContent(payload) {
-  const kind = payload.kind || "completed";
-  el.island.dataset.kind = kind;
+  const queue = activeQueue(payload);
+  el.island.dataset.kind = effectiveKind(payload);
   el.island.dataset.style = payload.style === "buddy" ? "buddy" : "bloom";
   el.island.dataset.notch = String(Boolean(payload.hasNotch));
-  el.island.dataset.persistent = String(Boolean(payload.persistent));
+  el.island.dataset.queue = String(Boolean(queue));
+  el.island.dataset.persistent = String(Boolean(payload.persistent) || Boolean(queue));
+  if (queue) {
+    writeCard(queue);
+    return;
+  }
+  el.cardActions.replaceChildren();
+  el.queueStep.hidden = true;
+  delete el.summary.dataset.mono;
+  delete el.summary.dataset.full;
+  el.summary.removeAttribute("title");
   el.title.textContent = payload.title || "Agent update";
   el.agent.textContent = payload.agent || "Agent";
   el.project.textContent = payload.project || "project";
-  el.summary.textContent = payload.summary || "The agent has an update.";
+  setSummary(payload.summary || "The agent has an update.");
 }
 
 function restartLifetime(payload) {
-  const kind = payload.kind || "completed";
+  const kind = effectiveKind(payload);
   const lifetime = kind === "turn_finished" ? 6000 : 7000;
   el.island.style.removeProperty("--timeout-play-state");
   el.island.style.setProperty("--timeout", `${lifetime / 1000}s`);
@@ -496,7 +623,7 @@ function restartLifetime(payload) {
   el.track.replaceWith(fresh);
   el.track = fresh;
   clearDismissTimer();
-  if (!payload.persistent) {
+  if (el.island.dataset.persistent !== "true") {
     scheduleDismiss(lifetime);
     if (hovering) pauseDismiss();
   }
@@ -542,27 +669,45 @@ function swap(payload) {
       [{ opacity: 0, filter: "blur(4px)", transform: "translateY(4px)" }, { opacity: 1, filter: "blur(0px)", transform: "none" }],
       { duration: 240, easing: EASE.out },
     );
-    if (buddy) accentBuddy(payload.kind || "completed", 200);
-    else accentBloom(payload.kind || "completed", false);
+    if (buddy) accentBuddy(effectiveKind(payload), 200);
+    else accentBloom(effectiveKind(payload), false);
     restartLifetime(payload);
   }, SWAP_MS);
 }
 
+/** Which card is showing, so an identical re-send does not replay a swap. */
+let shownCard = "";
+const cardSignature = (payload) => {
+  const queue = activeQueue(payload);
+  if (!queue) return "";
+  const { card, cards, front } = queue;
+  return JSON.stringify([card.id, card.kind, card.title, card.detail, card.alwaysAllowRule, cards.length, front]);
+};
+
 function render(payload) {
+  // The queue emptied: the native side is done with the island.
+  if (payload.kind === "dismiss" && !activeQueue(payload)) {
+    if (visible) dismiss();
+    return;
+  }
   cancelAnimationFrame(settleFrame);
   setOffset(0);
   leaving = false;
 
+  const signature = cardSignature(payload);
   if (visible) {
+    if (signature && signature === shownCard) return;
+    shownCard = signature;
     swap(payload);
     return;
   }
+  shownCard = signature;
 
   stopAll();
   writeContent(payload);
   el.stage.dataset.ready = "true";
   visible = true;
-  const kind = payload.kind || "completed";
+  const kind = effectiveKind(payload);
   if (reducedMotion.matches) {
     play(el.stage, [{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: "ease-out" });
     restLean();
@@ -610,7 +755,7 @@ el.island.addEventListener("pointermove", (event) => {
   const travel = event.clientY - grabbedAt;
   // Upward tracks the pointer exactly; downward resists, since the island is
   // already as far down as it goes.
-  offset = travel < 0 ? travel : rubberband(travel, ISLAND_HEIGHT);
+  offset = travel < 0 ? travel : rubberband(travel, islandHeight());
   setOffset(offset);
   if (isBuddy()) leanTo(0, 0, travel < 0 ? -2 : 1.5);
   samples.push({ y: event.clientY, t: event.timeStamp });
@@ -626,12 +771,12 @@ async function endDrag(event) {
   const velocity = velocityFromSamples();
   const projected = offset + project(velocity);
 
-  if (projected < -ISLAND_HEIGHT * DISMISS_FRACTION) {
+  if (projected < -islandHeight() * DISMISS_FRACTION) {
     // Thrown back into the notch: carry the release velocity into the exit so
     // there is no seam between the finger and the animation.
     leaving = true;
     clearDismissTimer();
-    const target = -(ISLAND_HEIGHT + 24);
+    const target = -(islandHeight() + 24);
     await spring(offset, target, velocity, setOffset, { response: 0.28 });
     play(el.stage, [{ opacity: 1 }, { opacity: 0 }], { duration: 80, easing: "linear", fill: "forwards" });
     await wait(90);
@@ -659,6 +804,13 @@ byId("open").addEventListener("click", () => {
   leave("agent_island_open_activity");
 });
 
+byId("queue-prev").addEventListener("click", () => {
+  invoke("agent_queue_step", { delta: -1 }).catch(console.error);
+});
+byId("queue-next").addEventListener("click", () => {
+  invoke("agent_queue_step", { delta: 1 }).catch(console.error);
+});
+
 el.buddy.addEventListener("click", boop);
 
 el.island.addEventListener("mouseenter", () => {
@@ -684,10 +836,43 @@ function applyAppearance(appearance) {
   else delete document.documentElement.dataset.theme;
 }
 
+/** `island.html?demo=approval`: a static two-card queue for checking the layout
+ * without the native side. */
+const DEMO_APPROVAL = {
+  kind: "needs_input",
+  style: "bloom",
+  hasNotch: false,
+  persistent: true,
+  title: "",
+  agent: "Claude",
+  project: "samlu",
+  summary: "",
+  queue: {
+    front: 0,
+    cards: [
+      {
+        id: "demo-1", kind: "approval", agent: "claude", agentLabel: "Claude", sessionId: "s1",
+        project: "samlu", title: "Run a command", detail: "npm run build -- --mode production --sourcemap",
+        requestId: "r1", alwaysAllowRule: "Bash(npm run build:*)", createdAt: 0,
+      },
+      {
+        id: "demo-2", kind: "needs_input", agent: "codex", agentLabel: "Codex", sessionId: "s2",
+        project: "docs", title: "Waiting for you", detail: "Which branch should the release go out from?",
+        requestId: null, alwaysAllowRule: null, createdAt: 0,
+      },
+    ],
+  },
+};
+
 async function boot() {
   invoke("get_appearance").then(applyAppearance).catch(() => {});
   listen("appearance://changed", (event) => applyAppearance(event.payload)).catch(() => {});
   await listen("island://show", (event) => render(event.payload));
+  await listen("island://note", (event) => showNote(event.payload));
+  if (new URLSearchParams(location.search).get("demo") === "approval") {
+    render(DEMO_APPROVAL);
+    return;
+  }
   await invoke("agent_island_ready");
 }
 

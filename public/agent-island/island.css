@@ -769,3 +769,153 @@ button {
     background: var(--island-brand-hover);
   }
 }
+
+/* ------------------------------------------------------- approval queue */
+
+/* With a queue the island is 176 tall and the notification becomes two
+ * rows: the mark and copy above, the card's buttons below, and a "1 of N"
+ * stepper under those when more than one card is waiting. */
+.island[data-queue="true"] {
+  height: 176px;
+}
+
+.island[data-queue="true"] .notification {
+  height: 176px;
+  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  align-content: center;
+  align-items: start;
+  row-gap: 12px;
+}
+
+.island[data-queue="true"][data-style="buddy"] .notification {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.island[data-queue="true"] .notification-actions {
+  display: none;
+}
+
+.island[data-queue="true"] .notification-copy p {
+  max-width: none;
+}
+
+.island[data-queue="true"] .notification-copy p[data-mono="true"] {
+  display: block;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--samlu-mono);
+  font-size: 11px;
+}
+
+.card-actions,
+.queue-step {
+  display: none;
+}
+
+.island[data-queue="true"] .card-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.island[data-queue="true"] .card-actions[data-card="approval"] {
+  justify-content: flex-start;
+}
+
+.card-button {
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    transform 160ms var(--ease-strong-out);
+}
+
+.card-button.secondary {
+  color: var(--island-ink);
+  background: var(--island-raised);
+}
+
+.card-button.primary {
+  color: var(--island-on-brand);
+  background: var(--island-brand);
+}
+
+.card-button.text {
+  margin-left: auto;
+  padding: 0 6px;
+  color: var(--island-secondary);
+  background: transparent;
+}
+
+.card-button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.card-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.card-button:focus-visible,
+.step-button:focus-visible {
+  outline: 2px solid var(--island-brand);
+  outline-offset: 2px;
+}
+
+.island[data-queue="true"] .queue-step:not([hidden]) {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--island-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.step-button {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--island-secondary);
+  background: var(--island-raised);
+}
+
+.step-button path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-button {
+    transition-property: background, color;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .card-button.secondary:hover:not(:disabled),
+  .step-button:hover {
+    background: var(--island-raised-hover);
+  }
+
+  .card-button.primary:hover:not(:disabled) {
+    background: var(--island-brand-hover);
+  }
+
+  .card-button.text:hover:not(:disabled) {
+    color: var(--island-ink);
+  }
+}
