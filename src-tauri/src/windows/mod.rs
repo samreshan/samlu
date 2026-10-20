@@ -176,13 +176,31 @@ pub fn activate_application(pid: i32, bundle_id: Option<&str>) -> bool {
 /// Plays `path` at `volume` (0-100). Wired in Task 5.
 #[allow(dead_code)] // wired in Task 12
 pub fn play_sound(path: &std::path::Path, volume: u8) {
-    let _ = (path, volume);
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Media::Audio::{
+        waveOutSetVolume, PlaySoundW, SND_ASYNC, SND_FILENAME, SND_NODEFAULT,
+    };
+
+    // waveOut takes the left channel in the low word and the right in the high.
+    let v = u32::from(volume.min(100)) * 0xFFFF / 100;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: the default device is requested with a null handle, and `wide`
+    // is NUL-terminated and outlives the call. SND_ASYNC returns at once.
+    unsafe {
+        waveOutSetVolume(std::ptr::null_mut(), v | (v << 16));
+        PlaySoundW(
+            wide.as_ptr(),
+            std::ptr::null_mut(),
+            SND_FILENAME | SND_ASYNC | SND_NODEFAULT,
+        );
+    }
 }
 
 /// Folder holding the system alert sounds, if this platform has one.
 #[allow(dead_code)] // wired in Task 12
 pub fn system_sound_dir() -> Option<std::path::PathBuf> {
-    None
+    let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
+    Some(std::path::PathBuf::from(windir).join("Media"))
 }
 
 /// Brings the app with `bundle_id` to the front. Wired in Task 3.
@@ -195,7 +213,14 @@ pub fn activate_bundle(bundle_id: &str) -> bool {
 /// Shows how many agents wait: tray title on macOS, tooltip on Windows.
 #[allow(dead_code)] // wired in Task 12
 pub fn set_tray_count(app: &tauri::AppHandle, count: usize) {
-    let _ = (app, count);
+    let tooltip = match count {
+        0 => "Samlu".to_string(),
+        1 => "Samlu · 1 agent waiting".to_string(),
+        n => format!("Samlu · {n} agents waiting"),
+    };
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_tooltip(Some(tooltip));
+    }
 }
 
 /// Posts Ctrl+V from Samlu's own process.
