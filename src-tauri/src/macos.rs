@@ -127,8 +127,12 @@ pub fn system_sound_dir() -> Option<std::path::PathBuf> {
 /// Brings the app with `bundle_id` to the front. Wired in Task 3.
 #[allow(dead_code)] // wired in Task 12
 pub fn activate_bundle(bundle_id: &str) -> bool {
-    let _ = bundle_id;
-    false
+    // `open -b` asks LaunchServices to bring the app forward, launching it if needed.
+    std::process::Command::new("/usr/bin/open")
+        .arg("-b")
+        .arg(bundle_id)
+        .spawn()
+        .is_ok()
 }
 
 /// Shows how many agents wait: tray title on macOS, tooltip on Windows.
