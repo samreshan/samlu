@@ -95,6 +95,15 @@ pub fn preview_codex_config(app: AppHandle) -> Result<String, String> {
     Ok(merged(read(&path)?, &command(&app)?).to_string())
 }
 
+/// `text` (a config.toml body) with Samlu's notify command ensured, so a
+/// caller that edits the file first can preview both edits as one document.
+pub fn ensure_notify(app: &AppHandle, text: &str) -> Result<String, String> {
+    let document = text
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("existing Codex config.toml is invalid: {error}"))?;
+    Ok(merged(document, &command(app)?).to_string())
+}
+
 #[tauri::command]
 pub fn apply_codex_config(app: AppHandle) -> Result<(), String> {
     let path = config_path()?;

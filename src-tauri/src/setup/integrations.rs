@@ -1,6 +1,6 @@
 //! One product-facing API for the supported agent integrations.
 
-use super::{antigravity, claude_hooks, codex_notify, gemini_cli};
+use super::{antigravity, claude_hooks, codex_hooks, codex_notify, gemini_cli, InstallState};
 use crate::state::AppState;
 use serde::Serialize;
 use std::sync::Arc;
@@ -15,6 +15,8 @@ pub struct IntegrationStatus {
     pub path: String,
     pub exists: bool,
     pub installed: bool,
+    /// Samlu's hooks are present but differ from what this build writes.
+    pub needs_update: bool,
     pub error: Option<String>,
 }
 
@@ -31,7 +33,24 @@ fn unavailable(
         path: "Unavailable".to_string(),
         exists: false,
         installed: false,
+        needs_update: false,
         error: Some(error),
+    }
+}
+
+/// `(installed, needs_update)` for one install state.
+fn flags(state: InstallState) -> (bool, bool) {
+    (
+        state == InstallState::Installed,
+        state == InstallState::NeedsUpdate,
+    )
+}
+
+fn state_from_bool(installed: bool) -> InstallState {
+    if installed {
+        InstallState::Installed
+    } else {
+        InstallState::NotInstalled
     }
 }
 
@@ -49,6 +68,8 @@ pub fn get_agent_integrations(
                 path: path.to_string_lossy().to_string(),
                 exists: path.exists(),
                 installed: claude_hooks::is_installed(&value, state.port, &state.token),
+                // TODO(merge): use claude_hooks::status
+                needs_update: false,
                 error: None,
             },
             Err(error) => unavailable(
@@ -66,20 +87,26 @@ pub fn get_agent_integrations(
         ),
     };
 
-    let codex = match codex_notify::get_codex_status(app.clone()) {
-        Ok(status) => IntegrationStatus {
-            id: "codex",
-            name: "Codex",
-            description: "Completed agent turns through Codex's notify command.",
-            path: status.path,
-            exists: status.exists,
-            installed: status.installed,
-            error: None,
-        },
+    let codex = match codex_notify::get_codex_status(app.clone()).and_then(|status| {
+        codex_hooks::status(state.port, &state.token).map(|hooks| (status, hooks))
+    }) {
+        Ok((status, hooks)) => {
+            let (installed, needs_update) = flags(hooks);
+            IntegrationStatus {
+                id: "codex",
+                name: "Codex",
+                description: "Approvals, completed turns, and session activity from Codex hooks.",
+                path: status.path,
+                exists: status.exists,
+                installed,
+                needs_update,
+                error: None,
+            }
+        }
         Err(error) => unavailable(
             "codex",
             "Codex",
-            "Completed agent turns through Codex's notify command.",
+            "Approvals, completed turns, and session activity from Codex hooks.",
             error,
         ),
     };
@@ -91,7 +118,8 @@ pub fn get_agent_integrations(
             description: "Completion and permission/question requests from Antigravity hooks.",
             path: status.path,
             exists: status.exists,
-            installed: status.installed,
+            installed: flags(state_from_bool(status.installed)).0,
+            needs_update: flags(state_from_bool(status.installed)).1,
             error: None,
         },
         Err(error) => unavailable(
@@ -109,7 +137,8 @@ pub fn get_agent_integrations(
             description: "Turn completion and tool-permission requests from Gemini CLI hooks.",
             path: status.path,
             exists: status.exists,
-            installed: status.installed,
+            installed: flags(state_from_bool(status.installed)).0,
+            needs_update: flags(state_from_bool(status.installed)).1,
             error: None,
         },
         Err(error) => unavailable(
@@ -141,7 +170,9 @@ pub fn preview_agent_integration(
             )?)
             .map_err(|error| error.to_string())
         }
-        "codex" => codex_notify::preview_codex_config(app),
+        "codex" => {
+            codex_notify::ensure_notify(&app, &codex_hooks::preview(state.port, &state.token)?)
+        }
         "antigravity" => antigravity::preview(state.port, &state.token),
         "gemini-cli" => gemini_cli::preview(state.port, &state.token),
         _ => Err("unsupported agent integration".to_string()),
@@ -164,7 +195,10 @@ pub fn apply_agent_integration(
                 .ok_or_else(|| "could not determine your home directory".to_string())?;
             claude_hooks::apply(&path, &app_data_dir, state.port, &state.token)
         }
-        "codex" => codex_notify::apply_codex_config(app),
+        "codex" => {
+            codex_hooks::apply(&app_data_dir, state.port, &state.token)?;
+            codex_notify::apply_codex_config(app)
+        }
         "antigravity" => antigravity::apply(&app_data_dir, state.port, &state.token),
         "gemini-cli" => gemini_cli::apply(&app_data_dir, state.port, &state.token),
         _ => Err("unsupported agent integration".to_string()),
@@ -183,9 +217,27 @@ pub fn remove_agent_integration(id: String, app: AppHandle) -> Result<(), String
                 .ok_or_else(|| "could not determine your home directory".to_string())?;
             claude_hooks::uninstall(&path, &app_data_dir)
         }
-        "codex" => codex_notify::uninstall(app),
+        "codex" => {
+            codex_hooks::uninstall(&app_data_dir)?;
+            codex_notify::uninstall(app)
+        }
         "antigravity" => antigravity::uninstall(&app_data_dir),
         "gemini-cli" => gemini_cli::uninstall(&app_data_dir),
         _ => Err("unsupported agent integration".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{flags, state_from_bool};
+    use crate::setup::InstallState;
+
+    #[test]
+    fn flags_follow_install_state() {
+        assert_eq!(flags(InstallState::NotInstalled), (false, false));
+        assert_eq!(flags(InstallState::NeedsUpdate), (false, true));
+        assert_eq!(flags(InstallState::Installed), (true, false));
+        assert_eq!(flags(state_from_bool(true)), (true, false));
+        assert_eq!(flags(state_from_bool(false)), (false, false));
     }
 }

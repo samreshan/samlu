@@ -27,7 +27,7 @@ pub fn config_path() -> Result<PathBuf, String> {
 #[cfg(not(windows))]
 fn curl_command(port: u16, token: &str, route: &str) -> String {
     format!(
-        "/usr/bin/curl --silent --show-error --max-time 3 -X POST -H 'Content-Type: application/json' --data-binary @- 'http://127.0.0.1:{port}/hooks/antigravity/{route}/{token}' >/dev/null 2>&1 || true"
+        "/usr/bin/curl --silent --show-error --max-time 3 -X POST -H 'Content-Type: application/json' -H \"X-Samlu-Warp-Focus: $WARP_FOCUS_URL\" -H \"X-Samlu-Term: $TERM_PROGRAM\" -H \"X-Samlu-Bundle: $__CFBundleIdentifier\" -H \"X-Samlu-Originator: $CODEX_INTERNAL_ORIGINATOR_OVERRIDE\" --data-binary @- 'http://127.0.0.1:{port}/hooks/antigravity/{route}/{token}' >/dev/null 2>&1 || true"
     )
 }
 
@@ -35,7 +35,7 @@ fn curl_command(port: u16, token: &str, route: &str) -> String {
 #[cfg(windows)]
 fn curl_command(port: u16, token: &str, route: &str) -> String {
     format!(
-        "curl.exe --silent --show-error --max-time 3 -X POST -H \"Content-Type: application/json\" --data-binary @- \"http://127.0.0.1:{port}/hooks/antigravity/{route}/{token}\" >NUL 2>&1 || exit /b 0"
+        "curl.exe --silent --show-error --max-time 3 -X POST -H \"Content-Type: application/json\" -H \"X-Samlu-Warp-Focus: %WARP_FOCUS_URL%\" -H \"X-Samlu-Term: %TERM_PROGRAM%\" -H \"X-Samlu-Bundle: %__CFBundleIdentifier%\" -H \"X-Samlu-Originator: %CODEX_INTERNAL_ORIGINATOR_OVERRIDE%\" --data-binary @- \"http://127.0.0.1:{port}/hooks/antigravity/{route}/{token}\" >NUL 2>&1 || exit /b 0"
     )
 }
 
@@ -122,8 +122,21 @@ pub fn uninstall(app_data_dir: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{installed, merge, remove};
+    use super::{curl_command, installed, merge, remove};
     use serde_json::json;
+
+    #[test]
+    fn commands_carry_origin_headers() {
+        let command = curl_command(47823, "token", "needs-input");
+        for header in [
+            "X-Samlu-Warp-Focus",
+            "X-Samlu-Term",
+            "X-Samlu-Bundle",
+            "X-Samlu-Originator",
+        ] {
+            assert!(command.contains(header), "{header}");
+        }
+    }
 
     #[test]
     fn owns_only_its_named_configuration() {
