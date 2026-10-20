@@ -47,6 +47,27 @@ pub fn activate_application(_pid: i32, _bundle_id: Option<&str>) -> bool {
     false
 }
 
+/// Plays `path` at `volume` (0-100).
+pub fn play_sound(path: &std::path::Path, volume: u8) {
+    let _ = (path, volume);
+}
+
+/// Folder holding the system alert sounds, if this platform has one.
+pub fn system_sound_dir() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Brings the app with `bundle_id` to the front.
+pub fn activate_bundle(bundle_id: &str) -> bool {
+    let _ = bundle_id;
+    false
+}
+
+/// Shows how many agents wait: tray title on macOS, tooltip on Windows.
+pub fn set_tray_count(app: &tauri::AppHandle, count: usize) {
+    let _ = (app, count);
+}
+
 pub fn post_paste_shortcut() -> bool {
     false
 }
@@ -60,6 +81,13 @@ pub fn create_overlay<T>(build: impl FnOnce() -> T) -> T {
 }
 
 pub fn configure_overlay(_window: &WebviewWindow) {}
+
+pub fn raise_overlay(_window: &WebviewWindow) {}
+
+/// No key-window hand-off to wait for off macOS.
+pub fn wait_for_no_key_window(_timeout_ms: i32) -> bool {
+    true
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenFrame {

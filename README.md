@@ -201,6 +201,7 @@ Everything above works on Windows 10 and 11 (64-bit). What differs:
 | | macOS | Windows |
 | --- | --- | --- |
 | Global shortcuts | Option and Command (`Option+V`, `Option+H`) | Alt and Win (`Alt+V`, `Alt+H`) |
+| Approve and deny shortcuts | `Option+Command+Y` and `Option+Command+N` | `Ctrl+Alt+Y` and `Ctrl+Alt+N` |
 | Shortcuts in Samlu's windows | Command | Ctrl: Ctrl-Enter shows a project in File Explorer, Ctrl-K lists its actions |
 | On-device speech | Whisper on Metal, Apple speech (macOS 26+) | Whisper on the CPU |
 | API keys | Keychain | Windows Credential Manager, under the same names |
@@ -212,6 +213,9 @@ Everything above works on Windows 10 and 11 (64-bit). What differs:
 | Project terminals | Terminal, iTerm, Warp, Ghostty | Windows Terminal, PowerShell, Command Prompt, WezTerm, Alacritty |
 | Project commands run in | Your login shell, with its PATH | `cmd.exe` (as npm scripts do), with PATH as Windows has it now |
 | Samlu Island | Hangs from the notch or the menu bar | Top centre of the active display |
+| System sounds for notifications | `/System/Library/Sounds` (`.aiff`) | `C:\Windows\Media` (`.wav`) |
+| Waiting count | Number beside the menu-bar icon | Tray tooltip, "Samlu · 2 agents waiting" |
+| View | Opens the session's Warp tab, Claude or Codex conversation, or brings the agent's app forward by bundle id; otherwise says it couldn't find the session | Opens the session through its deep link (`claude://`, `codex://`, `warp://` where registered); otherwise says it couldn't find the session |
 | Updates | Replaced in place, applied on restart | Through the installer, which restarts Samlu |
 
 Gemini CLI and Antigravity hooks call `curl.exe`, which Windows 10 and 11
@@ -231,19 +235,100 @@ Install.
 
 ### Agent notifications
 
-- Claude Code HTTP hooks cover permission/input requests, stopped turns, and
-  completed tasks.
-- Codex uses its external `notify` command for completed turns.
+Samlu receives events from Claude Code, Codex, Gemini CLI and Antigravity. It
+tells you when an agent needs you, finishes a turn, or completes a task.
+
+- Claude Code HTTP hooks cover permission and input requests, stopped turns,
+  and completed tasks. Codex sends permission requests through its hooks and
+  completed turns through its external `notify` command. Gemini CLI and
+  Antigravity post through `curl`.
 - Hook authentication persists across Samlu restarts.
 - Native macOS notification triggers, summary content, and turn debounce are
   configurable.
-- Updates can also appear on the Samlu Island at the top of the screen, in one
+- Notices can also appear on the Samlu Island at the top of the screen, in one
   of two styles chosen in Settings › Agents: Bloom (grows out of the notch) or
   Buddy (the Samlu mark comes along and reacts). It follows the System, Light
   or Dark appearance.
 - Recent normalized agent events are stored locally for the status view.
-- Existing Claude and Codex configuration is preserved and backed up before
-  Samlu writes a merged configuration.
+- Existing Claude and Codex configuration is preserved. Samlu previews the
+  change, backs up the file, then writes a merged configuration.
+- A Claude Code or Codex connection set up before this version shows **Update
+  needed** in Settings › Agents. **Update** previews, backs up and merges the
+  new hooks, the same as the first setup.
+
+#### Approvals
+
+- When Claude Code or Codex asks permission to run a tool, the island shows the
+  request with **Deny**, **Approve** and **View**. Claude Code also offers
+  **Always allow** when it suggests a rule. The rule is shown in the button's
+  tooltip.
+- The agent's own prompt stays open in its terminal or app. Whichever answers
+  first wins. A request answered there leaves the island quietly.
+- Several requests queue, oldest first, with "1 of 3" and arrows to move
+  between them. A new request never replaces one you haven't answered.
+- Keyboard: `Option+Command+Y` approves and `Option+Command+N` denies the front
+  card. These shortcuts work only while an approval card is showing. Change
+  them in Settings › Agents.
+- Approval cards use the island even when notifications are set to
+  Notification Center, because banners can't carry buttons. Notification Center
+  still gets its entry.
+- Notices that need input but have no decision to make, such as an idle prompt,
+  stay on the island with **View** and **Dismiss**.
+- Gemini CLI and Antigravity get sounds and View only.
+
+#### Codex
+
+- Codex waits 30 seconds for an answer by default (10 to 120 seconds, set in
+  Settings › Agents). Then Samlu stops waiting and Codex shows its own prompt.
+  The card changes to **Answer in Codex**, with View only. It counts as waiting
+  until that session's next event or until you dismiss it.
+- View on a Codex request hands the request back to Codex first, then opens the
+  thread.
+- Codex runs Samlu's hooks only after you trust them. Samlu never trusts them
+  for you. After you connect Codex, Settings › Agents asks you to trust them
+  once, with `/hooks` in the Codex CLI or in the prompt the Codex app shows. The
+  Codex row says "Waiting for Codex to trust Samlu's hooks" until the first
+  Codex hook event arrives.
+- A Codex connection set up before hooks existed (only the `notify` command)
+  shows **Update needed**. **Update** adds the hooks and keeps `notify`.
+
+#### View
+
+- View opens the session itself: the Warp tab, the Claude desktop conversation,
+  or the Codex thread. If Samlu knows which app runs the session, it brings
+  that app forward; otherwise the island says it couldn't find the session.
+  View never opens Samlu's own pages.
+
+#### Sounds
+
+- Three kinds: **needs you** (approvals, input requests and reminders),
+  **task completed**, and **turn finished**. Each can be None, a macOS system
+  sound, or a file of your own (Custom…). The play button previews the choice.
+- Defaults: Glass for needs you, Hero for task completed, None for turn
+  finished. The master switch and the volume (70% by default) are in Settings
+  › Agents.
+- Samlu's own banners stay silent, so each event rings once.
+
+#### Reminders, waiting count and sessions
+
+- An unanswered request rings again after 1, 3, 5 or 10 minutes (3 by default),
+  once per request. Choose Off to turn reminders off.
+- The number beside the menu-bar icon is how many sessions are waiting for you.
+  It is hidden when none are.
+- The menu-bar menu has an Agents section listing each agent session Samlu
+  knows, with its state: working, waiting for you, or idle. Click one to View
+  it. The same list is in the launcher (type `#`; Return views the selection)
+  and in the Sessions group of Settings › Agents.
+- A session drops off when it ends, or after 12 hours without an event. The
+  list is kept in memory, so it starts empty after a restart and fills in as
+  each session sends its next event.
+
+#### History
+
+- Approvals are recorded in Recent Activity as needs-input events, with the
+  outcome: approved or denied in Samlu, answered in the agent, or handed back to
+  Codex. Only the action line, up to 160 characters, is stored. Clear deletes
+  it.
 
 ## Development
 
@@ -320,6 +405,8 @@ Apple notarization credentials to Tauri.
 - The agent hook server binds to `127.0.0.1`.
 - Claude hook requests use an installation-specific bearer token in the local
   callback URL.
+- Only you, acting in Samlu's island, menu, launcher or shortcuts, can approve
+  or deny an agent request. The local hook server can't.
 - Cloud provider API keys are stored in macOS Keychain, not Samlu JSON files.
 - Snippets, launcher history, event history, and optional clipboard history are
   local to the Mac.

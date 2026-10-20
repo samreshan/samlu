@@ -1,6 +1,7 @@
 //! Shared runtime state for the local hook listener and recent agent events.
 
 use crate::events::AgentEvent;
+use chrono::{DateTime, Utc};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -57,6 +58,27 @@ impl AppState {
         }
     }
 
+    /// Sets how a held approval ended on the event stored for it. Returns the
+    /// updated event, or `None` once it has left the history.
+    pub fn set_event_outcome(
+        &self,
+        agent: &str,
+        session_id: &str,
+        timestamp: DateTime<Utc>,
+        outcome: &str,
+    ) -> Option<AgentEvent> {
+        let mut history = self.event_history.lock().unwrap();
+        let event = history.iter_mut().find(|event| {
+            event.agent == agent && event.session_id == session_id && event.timestamp == timestamp
+        })?;
+        event.outcome = Some(outcome.to_string());
+        let updated = event.clone();
+        if let Ok(json) = serde_json::to_string_pretty(&*history) {
+            let _ = std::fs::write(&self.history_path, json);
+        }
+        Some(updated)
+    }
+
     /// Recent events, most-recent-first.
     pub fn event_history(&self) -> Vec<AgentEvent> {
         self.event_history.lock().unwrap().iter().cloned().collect()
@@ -81,5 +103,63 @@ impl AppState {
     pub fn session_generation(&self, session_id: &str) -> u64 {
         let sessions = self.sessions.lock().unwrap();
         *sessions.get(session_id).unwrap_or(&0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::AgentEventKind;
+
+    fn event(session: &str) -> AgentEvent {
+        AgentEvent {
+            agent: "codex".to_string(),
+            kind: AgentEventKind::NeedsInput,
+            project_path: "/p".to_string(),
+            summary: Some("ls".to_string()),
+            session_id: session.to_string(),
+            timestamp: Utc::now(),
+            origin: Default::default(),
+            outcome: None,
+        }
+    }
+
+    #[test]
+    fn outcome_lands_on_the_matching_event_and_persists() {
+        let dir = std::env::temp_dir().join(format!("samlu-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let state = AppState::new("t".to_string(), 1, &dir);
+        let first = event("s1");
+        let second = event("s2");
+        state.record_event(first.clone());
+        state.record_event(second.clone());
+
+        let updated = state
+            .set_event_outcome("codex", "s1", first.timestamp, "approved in Samlu")
+            .unwrap();
+        assert_eq!(updated.outcome.as_deref(), Some("approved in Samlu"));
+        assert!(state
+            .set_event_outcome("codex", "gone", first.timestamp, "x")
+            .is_none());
+
+        let reloaded = AppState::new("t".to_string(), 1, &dir);
+        let history = reloaded.event_history();
+        assert_eq!(history[0].outcome, None);
+        assert_eq!(history[1].outcome.as_deref(), Some("approved in Samlu"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_written_before_outcomes_still_loads() {
+        let dir = std::env::temp_dir().join(format!("samlu-state-old-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("event-history.json"),
+            r#"[{"agent":"codex","kind":"completed","project_path":"/p","summary":null,"session_id":"s","timestamp":"2026-10-20T09:00:00Z"}]"#,
+        )
+        .unwrap();
+        let state = AppState::new("t".to_string(), 1, &dir);
+        assert_eq!(state.event_history().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

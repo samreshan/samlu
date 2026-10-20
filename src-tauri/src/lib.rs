@@ -3,6 +3,7 @@
 #![cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
 
 mod adapters;
+mod agents;
 mod events;
 mod launcher;
 mod lifecycle;
@@ -47,7 +48,9 @@ static BACKGROUND_CLOSE_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// recorder that is waiting for it.
 #[tauri::command]
 fn suspend_global_shortcuts(app: tauri::AppHandle) {
+    agents::shortcuts::set_suspended(true);
     let _ = app.global_shortcut().unregister_all();
+    agents::shortcuts::disarm(&app);
     modifier_shortcuts::unbind_launcher();
     modifier_shortcuts::unbind_voice();
 }
@@ -58,7 +61,9 @@ fn suspend_global_shortcuts(app: tauri::AppHandle) {
 /// handler shadowing the new one.
 #[tauri::command]
 fn resume_global_shortcuts(app: tauri::AppHandle) {
+    agents::shortcuts::set_suspended(false);
     let _ = app.global_shortcut().unregister_all();
+    agents::shortcuts::disarm(&app);
     modifier_shortcuts::unbind_launcher();
     modifier_shortcuts::unbind_voice();
     let launcher_hotkey = app
@@ -71,6 +76,8 @@ fn resume_global_shortcuts(app: tauri::AppHandle) {
     if let Err(error) = voice::register_hotkeys(&app, &voice_hotkey) {
         log::error!("failed to restore voice hotkeys ({voice_hotkey}): {error}");
     }
+    // The approve/deny chords belong to the card in front, not to the config.
+    agents::hub::resync_shortcuts(&app);
 }
 
 #[tauri::command]
@@ -205,10 +212,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(payload) = adapters::codex::payload_from_args(&argv) {
                 match adapters::codex::parse_cli_payload(payload) {
-                    Ok(event) => {
-                        let state = app.state::<Arc<AppState>>().inner().clone();
-                        notify::handle_event(app.clone(), state, event);
-                    }
+                    Ok(event) => agents::hub::codex_notify(app, event),
                     Err(error) => log::warn!("ignored Codex notification: {error}"),
                 }
             } else {
@@ -246,6 +250,8 @@ pub fn run() {
                 &app_data_dir,
             ));
             app.manage(app_state.clone());
+            app.manage(Arc::new(agents::hub::AgentHub::new(&app_data_dir)));
+            agents::hub::start_prune_timer(app.handle().clone());
             app.manage(Arc::new(notify::IslandState::new()));
             app.manage(Arc::new(updater::UpdaterState::new()));
 
@@ -331,9 +337,7 @@ pub fn run() {
 
             if let Some(payload) = initial_codex_payload.as_deref() {
                 match adapters::codex::parse_cli_payload(payload) {
-                    Ok(event) => {
-                        notify::handle_event(app.handle().clone(), app_state.clone(), event)
-                    }
+                    Ok(event) => agents::hub::codex_notify(app.handle(), event),
                     Err(error) => log::warn!("ignored Codex notification: {error}"),
                 }
                 lifecycle::hide_to_background(app.handle());
@@ -349,6 +353,15 @@ pub fn run() {
             clear_event_history,
             settings::get_notification_preferences,
             settings::set_notification_preferences,
+            settings::get_agent_alert_settings,
+            settings::set_agent_alert_settings,
+            agents::hub::agent_card_action,
+            agents::hub::agent_queue_step,
+            agents::hub::agent_sessions,
+            agents::hub::agent_session_view,
+            agents::hub::agent_sound_catalog,
+            agents::hub::agent_sound_preview,
+            agents::hub::agent_sound_choose_custom,
             settings::get_appearance,
             settings::set_appearance,
             onboarding::onboarding_state,

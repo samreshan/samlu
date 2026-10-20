@@ -88,6 +88,18 @@
             </button>
             <button id="open" class="open-button" type="button">View</button>
           </div>
+          <!-- Approval / queue layout: its own row of buttons and a stepper,
+               shown only while the payload carries a queue. -->
+          <div class="card-actions" id="card-actions"></div>
+          <nav class="queue-step" id="queue-step" aria-label="Pending requests" hidden>
+            <button id="queue-prev" class="step-button" type="button" aria-label="Previous request">
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M6.5 2L3.5 5l3 3" /></svg>
+            </button>
+            <span id="queue-count">1 of 1</span>
+            <button id="queue-next" class="step-button" type="button" aria-label="Next request">
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2l3 3-3 3" /></svg>
+            </button>
+          </nav>
         </section>
         <div class="timeout-track" id="timeout-track" aria-hidden="true"></div>
         <div class="grabber" aria-hidden="true"></div>

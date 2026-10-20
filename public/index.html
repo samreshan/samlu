@@ -244,6 +244,119 @@
               </div>
             </section>
 
+            <section class="group" aria-labelledby="agent-sounds-title">
+              <div class="group-head">
+                <h2 id="agent-sounds-title">Sounds</h2>
+                <span class="saved" id="agent-sounds-saved" aria-live="polite"></span>
+              </div>
+              <div class="group-box">
+                <label class="row">
+                  <span class="row-text">
+                    <span class="row-label">Play sounds</span>
+                    <span class="row-detail">A short sound when an agent needs you or finishes.</span>
+                  </span>
+                  <input id="agent-sounds-enabled" class="switch" type="checkbox" role="switch" />
+                </label>
+                <div class="row">
+                  <span class="row-text">
+                    <span class="row-label">Needs you</span>
+                    <span class="row-detail">Permission requests, questions and reminders.</span>
+                  </span>
+                  <span class="row-control">
+                    <select id="agent-sound-needs-input" data-sound-select aria-label="Needs you sound"><option value="none">None</option></select>
+                    <button class="button small" data-sound-preview="needs-input" type="button" aria-label="Preview Needs you sound">&#9654;</button>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text">
+                    <span class="row-label">Task completed</span>
+                    <span class="row-detail">When an agent reports a finished task.</span>
+                  </span>
+                  <span class="row-control">
+                    <select id="agent-sound-completed" data-sound-select aria-label="Task completed sound"><option value="none">None</option></select>
+                    <button class="button small" data-sound-preview="completed" type="button" aria-label="Preview Task completed sound">&#9654;</button>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text">
+                    <span class="row-label">Every finished turn</span>
+                    <span class="row-detail">Noisier. Off unless you choose a sound.</span>
+                  </span>
+                  <span class="row-control">
+                    <select id="agent-sound-turn-finished" data-sound-select aria-label="Every finished turn sound"><option value="none">None</option></select>
+                    <button class="button small" data-sound-preview="turn-finished" type="button" aria-label="Preview Every finished turn sound">&#9654;</button>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text"><span class="row-label">Volume</span></span>
+                  <span class="row-control">
+                    <input id="agent-sound-volume" class="range" type="range" min="0" max="100" step="1" aria-label="Sound volume" />
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <section class="group" aria-labelledby="agent-approvals-title">
+              <div class="group-head">
+                <h2 id="agent-approvals-title">Approvals</h2>
+                <span class="saved" id="agent-approvals-saved" aria-live="polite"></span>
+              </div>
+              <div class="group-box">
+                <div class="row">
+                  <span class="row-text">
+                    <span class="row-label">Codex waits for you</span>
+                    <span class="row-detail">How long a Codex request stays open before it goes back to Codex.</span>
+                  </span>
+                  <span class="row-control">
+                    <span class="number-field">
+                      <input id="agent-codex-wait" type="number" min="10" max="120" step="1" inputmode="numeric" aria-label="Codex wait in seconds" />
+                      <span>sec</span>
+                    </span>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text">
+                    <span class="row-label">Approve shortcut</span>
+                    <span class="row-detail">Active only while an approval card is showing.</span>
+                  </span>
+                  <span class="row-control">
+                    <button class="shortcut" id="agent-approve-shortcut" type="button" aria-label="Approve shortcut" aria-pressed="false">Not set</button>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text"><span class="row-label">Deny shortcut</span></span>
+                  <span class="row-control">
+                    <button class="shortcut" id="agent-deny-shortcut" type="button" aria-label="Deny shortcut" aria-pressed="false">Not set</button>
+                  </span>
+                </div>
+                <div class="row">
+                  <span class="row-text">
+                    <span class="row-label">Remind me</span>
+                    <span class="row-detail">Rings once if a request is still waiting.</span>
+                  </span>
+                  <span class="row-control">
+                    <select id="agent-reminder" aria-label="Remind me">
+                      <option value="0">Off</option>
+                      <option value="1">1 min</option>
+                      <option value="3">3 min</option>
+                      <option value="5">5 min</option>
+                      <option value="10">10 min</option>
+                    </select>
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <section class="group" aria-labelledby="sessions-title">
+              <div class="group-head">
+                <h2 id="sessions-title">Sessions</h2>
+              </div>
+              <div class="group-box activity" id="agent-sessions" aria-live="polite">
+                <div class="row empty-row">No agent sessions yet.</div>
+              </div>
+              <p class="group-note">Sessions Samlu has seen in the last 12 hours. Kept in memory only.</p>
+            </section>
+
             <section class="group" aria-labelledby="activity-title">
               <div class="group-head">
                 <h2 id="activity-title">Recent Activity</h2>

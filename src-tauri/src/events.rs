@@ -3,6 +3,7 @@
 //! tool's raw hook payload. That lets another adapter be added later without
 //! touching notification delivery.
 
+use crate::agents::{origin::SessionOrigin, HookMessage};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -15,42 +16,24 @@ pub struct AgentEvent {
     pub summary: Option<String>,
     pub session_id: String,
     pub timestamp: DateTime<Utc>,
+    /// Where the session runs. Absent in history written before origins.
+    #[serde(default)]
+    pub origin: SessionOrigin,
+    /// How a held approval ended, for the history line. Absent otherwise.
+    #[serde(default)]
+    pub outcome: Option<String>,
 }
 
 impl AgentEvent {
     /// "claude-code" -> "Claude Code" — every adapter's `name()` is a
     /// kebab-case registry key, not user-facing copy.
     pub fn agent_label(&self) -> String {
-        match self.agent.as_str() {
-            "claude-code" => return "Claude Code".to_string(),
-            "codex" => return "Codex".to_string(),
-            "antigravity" => return "Antigravity".to_string(),
-            "gemini-cli" => return "Gemini CLI".to_string(),
-            _ => {}
-        }
-        self.agent
-            .split('-')
-            .map(|word| {
-                let mut chars = word.chars();
-                match chars.next() {
-                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                    None => String::new(),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
+        crate::agents::agent_label(&self.agent)
     }
 
     /// Last path segment for compact display in notifications and history.
     pub fn project_label(&self) -> String {
-        if self.project_path.is_empty() {
-            return "a project".to_string();
-        }
-        self.project_path
-            .rsplit(['/', '\\'])
-            .find(|segment| !segment.is_empty())
-            .unwrap_or(&self.project_path)
-            .to_string()
+        crate::agents::project_label(&self.project_path)
     }
 }
 
@@ -66,6 +49,8 @@ pub struct EventHistoryItem {
     pub summary: Option<String>,
     pub session_id: String,
     pub timestamp: DateTime<Utc>,
+    /// How a held approval ended, when known.
+    pub outcome: Option<String>,
 }
 
 impl From<&AgentEvent> for EventHistoryItem {
@@ -78,6 +63,7 @@ impl From<&AgentEvent> for EventHistoryItem {
             summary: event.summary.clone(),
             session_id: event.session_id.clone(),
             timestamp: event.timestamp,
+            outcome: event.outcome.clone(),
         }
     }
 }
@@ -129,5 +115,10 @@ pub trait AgentAdapter: Send + Sync {
     /// `event_route` is whatever came after the adapter name in the URL
     /// (e.g. "notification" or "stop" for Claude Code), so one adapter can
     /// handle multiple hook endpoints with different payload shapes.
-    fn parse(&self, event_route: &str, body: &[u8]) -> Result<AgentEvent, AdapterError>;
+    fn parse(
+        &self,
+        event_route: &str,
+        body: &[u8],
+        origin: &SessionOrigin,
+    ) -> Result<HookMessage, AdapterError>;
 }

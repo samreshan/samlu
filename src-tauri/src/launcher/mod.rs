@@ -143,9 +143,23 @@ pub fn launcher_toggle(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The launcher is on screen and not on its way out: the state in which text
+/// dictated to it has somewhere to land.
+pub fn is_open(app: &AppHandle) -> bool {
+    !LAUNCHER_CLOSING.load(Ordering::SeqCst)
+        && app
+            .get_webview_window(LAUNCHER_LABEL)
+            .is_some_and(|win| win.is_visible().unwrap_or(false))
+}
+
 /// Hide the launcher — called on Escape / blur / after activating a result.
+/// `blur` marks the page losing focus, which a dictation into the launcher
+/// causes by clicking the capsule and must not be taken as dismissal.
 #[tauri::command]
-pub fn launcher_hide(app: AppHandle) -> Result<(), String> {
+pub fn launcher_hide(app: AppHandle, blur: Option<bool>) -> Result<(), String> {
+    if blur.unwrap_or(false) && crate::voice::launcher_blur_shielded(&app) {
+        return Ok(());
+    }
     hide_launcher(&app);
     Ok(())
 }

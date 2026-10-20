@@ -70,6 +70,56 @@ struct TargetContext {
     /// The display you were working on when the shortcut fired. The capsule
     /// stays on it for the whole session.
     display: Option<crate::platform::ScreenFrame>,
+    /// The launcher was open when the session began. Its search box is where
+    /// the text belongs: the launcher is a nonactivating panel, so the
+    /// frontmost app is whatever was behind it and a pasted ⌘V would land
+    /// there instead.
+    launcher: bool,
+}
+
+/// Where a finished transcript goes. Pure so the choice is testable.
+#[derive(Debug, PartialEq, Eq)]
+enum Destination {
+    Launcher,
+    Configured,
+}
+
+fn destination(began_in_launcher: bool, launcher_open: bool, mode: Mode) -> Destination {
+    // The launcher closing mid-session leaves nothing to type into, so the
+    // configured delivery takes over rather than dropping the text. Only
+    // plain dictation fits a single-line search box; summaries and prompts
+    // are multi-line and keep their normal delivery.
+    if began_in_launcher && launcher_open && mode == Mode::Normal {
+        Destination::Launcher
+    } else {
+        Destination::Configured
+    }
+}
+
+/// The capsule's own buttons can take key from the launcher mid-session; that
+/// blur is not a dismissal. Clicking another app is, so the shield holds only
+/// while the capsule itself is key.
+fn shields_launcher_blur(session: bool, capsule_key: bool) -> bool {
+    session && capsule_key
+}
+
+/// The launcher gets key back only when the capsule was holding it, so a user
+/// who has moved on to another app is never pulled back.
+fn should_rekey_launcher(launcher_open: bool, capsule_key: bool) -> bool {
+    launcher_open && capsule_key
+}
+
+fn capsule_is_key(app: &AppHandle) -> bool {
+    app.get_webview_window(PREVIEW_LABEL)
+        .is_some_and(|window| window.is_focused().unwrap_or(false))
+}
+
+fn rekey_launcher_if_stranded(app: &AppHandle) {
+    if should_rekey_launcher(crate::launcher::is_open(app), capsule_is_key(app)) {
+        if let Some(window) = app.get_webview_window(crate::launcher::LAUNCHER_LABEL) {
+            crate::platform::make_overlay_key(&window);
+        }
+    }
 }
 
 enum Runtime {
@@ -118,6 +168,10 @@ struct Capture {
 
 pub struct VoiceState {
     runtime: Mutex<Runtime>,
+    /// A dictation that began in the launcher is under way. The capsule's own
+    /// buttons can take key from the launcher, and its blur must not dismiss
+    /// the panel the text is about to land in.
+    launcher_session: AtomicBool,
     shortcut_down: AtomicBool,
     next_recording_id: AtomicU64,
     presentation_generation: AtomicU64,
@@ -139,6 +193,7 @@ impl VoiceState {
     pub fn new() -> Self {
         Self {
             runtime: Mutex::new(Runtime::Idle),
+            launcher_session: AtomicBool::new(false),
             shortcut_down: AtomicBool::new(false),
             next_recording_id: AtomicU64::new(1),
             presentation_generation: AtomicU64::new(1),
@@ -207,6 +262,9 @@ pub fn voice_preview_init(app: &AppHandle) -> Result<(), String> {
     crate::platform::create_overlay(|| builder.build())
         .map(|window| {
             crate::platform::configure_overlay(&window);
+            // Above the launcher too, so dictating into it never puts the
+            // capsule behind the panel it is dictating into.
+            crate::platform::raise_overlay(&window);
         })
         .map_err(|error| error.to_string())
 }
@@ -679,6 +737,9 @@ pub fn voice_pressed_at(app: &AppHandle, mode: Mode, pressed_at: Instant) {
                 log::info!("[voice] discarding failed dictation for a new recording");
             }
             let target = capture_target(app);
+            state
+                .launcher_session
+                .store(target.launcher, Ordering::Release);
             state.toggle_recording.store(false, Ordering::Relaxed);
             *runtime = Runtime::Starting {
                 mode,
@@ -1039,6 +1100,26 @@ async fn deliver(app: AppHandle, produced: Produced, mode: Mode, target: TargetC
     let _ = app.emit_to(crate::onboarding::LABEL, "voice://result", text.clone());
     let delivery = app.state::<Arc<VoiceConfig>>().delivery(mode);
     record_history(&app, &produced, mode, &target, delivery);
+    if destination(target.launcher, crate::launcher::is_open(&app), mode) == Destination::Launcher {
+        // No review step here: the editor would take keyboard focus and the
+        // launcher dismisses itself on losing it. The text is in the search
+        // box, which is the review.
+        let _ = app.emit_to(
+            crate::launcher::LAUNCHER_LABEL,
+            "launcher://dictation",
+            &text,
+        );
+        // It may have closed between the check and the emit; the text then
+        // has nowhere to land and the configured delivery takes over.
+        if crate::launcher::is_open(&app) {
+            *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
+            show_success(&app, &target, mode, &success("Added to search"));
+            // Pressing the capsule's Stop can have moved key to it. The
+            // session flag is cleared with the capsule in hide_preview, which
+            // re-keys the launcher on the same test.
+            return;
+        }
+    }
     match delivery {
         DeliveryBehavior::EditablePreview => {
             let state = app.state::<Arc<VoiceState>>();
@@ -1108,6 +1189,13 @@ pub async fn voice_preview_accept(
     } else {
         text.trim().to_string()
     };
+    if !release_editor_focus(&app, &target.app).await {
+        let error = "the review window did not give up the keyboard".to_string();
+        log::warn!("[voice] {error}; skipping the paste shortcut");
+        let _ = paste::copy(&app, &final_text);
+        handle_delivery_error(&app, target, final_text, error.clone(), mode);
+        return Err(error);
+    }
     match inject_without_blocking(&app, &final_text, &target.app).await {
         Ok(()) => {
             *state.runtime.lock().unwrap() = Runtime::Idle;
@@ -1119,6 +1207,55 @@ pub async fn voice_preview_accept(
             handle_delivery_error(&app, target, final_text, error.clone(), mode);
             Err(error)
         }
+    }
+}
+
+/// The editor takes keyboard focus without activating Samlu, so the app
+/// dictation began in is still frontmost and never gets re-activated to take
+/// focus back. Hiding the editor is what hands the keyboard to that app
+/// before the paste shortcut is posted.
+async fn release_editor_focus(app: &AppHandle, target: &paste::TargetApp) -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    // Always hide first: with the editor still key the paste lands in the
+    // editor itself, including when dictation began in another Samlu window.
+    if let Some(window) = app.get_webview_window(PREVIEW_LABEL) {
+        if window.hide().is_err() {
+            return true;
+        }
+    }
+    match editor_release_wait(target.pid.is_some()) {
+        EditorRelease::PollKeyWindow => {
+            tauri::async_runtime::spawn_blocking(|| crate::platform::wait_for_no_key_window(300))
+                .await
+                .unwrap_or(false)
+        }
+        EditorRelease::Settle => {
+            // Samlu's own window is the target, so some Samlu window stays key
+            // and there is nothing to poll for; give the key hand-off a beat.
+            let _ = tauri::async_runtime::spawn_blocking(|| {
+                std::thread::sleep(Duration::from_millis(80));
+            })
+            .await;
+            true
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EditorRelease {
+    PollKeyWindow,
+    Settle,
+}
+
+/// With another app as the target, key is handed over once Samlu has no key
+/// window. With Samlu itself as the target (no pid) one stays key by design.
+fn editor_release_wait(target_has_pid: bool) -> EditorRelease {
+    if target_has_pid {
+        EditorRelease::PollKeyWindow
+    } else {
+        EditorRelease::Settle
     }
 }
 
@@ -1387,6 +1524,17 @@ pub fn voice_preview_ready(app: AppHandle, state: tauri::State<'_, Arc<VoiceStat
     }
 }
 
+/// Whether the launcher losing focus is the capsule taking it during a
+/// dictation that began there, rather than the user leaving.
+pub fn launcher_blur_shielded(app: &AppHandle) -> bool {
+    app.try_state::<Arc<VoiceState>>().is_some_and(|state| {
+        shields_launcher_blur(
+            state.launcher_session.load(Ordering::Acquire),
+            capsule_is_key(app),
+        )
+    })
+}
+
 fn hide_preview(app: &AppHandle) {
     let Some(state) = app.try_state::<Arc<VoiceState>>() else {
         if let Some(window) = app.get_webview_window(PREVIEW_LABEL) {
@@ -1394,6 +1542,12 @@ fn hide_preview(app: &AppHandle) {
         }
         return;
     };
+    // Every dictation ends by dismissing the capsule, so this is where a
+    // launcher session stops shielding the panel from blur. Cancel, Retry and
+    // Copy leave the capsule key, which would strand an open launcher.
+    if state.launcher_session.swap(false, Ordering::AcqRel) {
+        rekey_launcher_if_stranded(app);
+    }
     let generation = state
         .presentation_generation
         .fetch_add(1, Ordering::Relaxed)
@@ -1527,12 +1681,13 @@ fn fail(app: &AppHandle, error: &str) {
     });
 }
 
-fn capture_target(_app: &AppHandle) -> TargetContext {
+fn capture_target(app: &AppHandle) -> TargetContext {
     TargetContext {
         // NSWorkspace target capture is permission-independent and preserves
         // the original editor even when Accessibility is granted mid-session.
         app: paste::frontmost_target(),
         display: crate::platform::active_screen_frame(),
+        launcher: crate::launcher::is_open(app),
     }
 }
 
@@ -1767,6 +1922,57 @@ mod tests {
             width: 1920.0,
             height: 1080.0,
         }
+    }
+
+    #[test]
+    fn launcher_session_delivers_to_the_launcher_while_it_is_open() {
+        assert_eq!(destination(true, true, Mode::Normal), Destination::Launcher);
+        assert_eq!(
+            destination(true, false, Mode::Normal),
+            Destination::Configured
+        );
+        assert_eq!(
+            destination(false, true, Mode::Normal),
+            Destination::Configured
+        );
+        assert_eq!(
+            destination(false, false, Mode::Normal),
+            Destination::Configured
+        );
+    }
+
+    #[test]
+    fn editor_release_polls_only_when_another_app_is_the_target() {
+        assert_eq!(editor_release_wait(true), EditorRelease::PollKeyWindow);
+        assert_eq!(editor_release_wait(false), EditorRelease::Settle);
+    }
+
+    #[test]
+    fn only_plain_dictation_goes_to_the_launcher() {
+        assert_eq!(
+            destination(true, true, Mode::Summarize),
+            Destination::Configured
+        );
+        assert_eq!(
+            destination(true, true, Mode::Prompt),
+            Destination::Configured
+        );
+    }
+
+    #[test]
+    fn blur_is_shielded_only_while_the_capsule_holds_key() {
+        assert!(shields_launcher_blur(true, true));
+        // Clicking another app or Command-Tab: the capsule is not key.
+        assert!(!shields_launcher_blur(true, false));
+        assert!(!shields_launcher_blur(false, true));
+        assert!(!shields_launcher_blur(false, false));
+    }
+
+    #[test]
+    fn launcher_is_rekeyed_only_when_stranded_by_the_capsule() {
+        assert!(should_rekey_launcher(true, true));
+        assert!(!should_rekey_launcher(true, false));
+        assert!(!should_rekey_launcher(false, true));
     }
 
     #[test]

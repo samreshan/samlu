@@ -7,6 +7,8 @@ extern "C" {
     fn samlu_begin_overlay_window();
     fn samlu_end_overlay_window();
     fn samlu_configure_overlay_window(window: *mut std::ffi::c_void);
+    fn samlu_wait_no_key_window(timeout_ms: i32) -> bool;
+    fn samlu_raise_overlay_window(window: *mut std::ffi::c_void);
     fn samlu_present_focusable_overlay_at_cursor(
         window: *mut std::ffi::c_void,
         width: f64,
@@ -112,6 +114,57 @@ pub fn activate_application(pid: i32, bundle_id: Option<&str>) -> bool {
     }
 }
 
+/// Plays `path` at `volume` (0-100).
+/// Blocks until the sound ends, so call it from a worker thread.
+pub fn play_sound(path: &std::path::Path, volume: u8) {
+    let volume = f32::from(volume.min(100)) / 100.0;
+    let _ = std::process::Command::new("/usr/bin/afplay")
+        .arg("-v")
+        .arg(format!("{volume:.2}"))
+        .arg(path)
+        .status();
+}
+
+/// Folder holding the system alert sounds, if this platform has one.
+pub fn system_sound_dir() -> Option<std::path::PathBuf> {
+    Some(std::path::PathBuf::from("/System/Library/Sounds"))
+}
+
+/// Brings the app with `bundle_id` to the front. `false` when `open -b`
+/// fails (no such app), so View can say it couldn't find the session.
+pub fn activate_bundle(bundle_id: &str) -> bool {
+    // `open -b` asks LaunchServices to bring the app forward, launching it if
+    // needed. It runs on its own thread so a stuck LaunchServices cannot hold
+    // the caller (which may be the main thread) for more than a moment; an
+    // answer that has not come in 3 s is taken as success, the app is on its way.
+    let bundle_id = bundle_id.to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ok = std::process::Command::new("/usr/bin/open")
+            .arg("-b")
+            .arg(&bundle_id)
+            .status()
+            .is_ok_and(|status| status.success());
+        let _ = sender.send(ok);
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap_or(true)
+}
+
+/// Shows how many agents wait: tray title on macOS, tooltip on Windows.
+pub fn set_tray_count(app: &tauri::AppHandle, count: usize) {
+    // `None` leaves the old title on the status item, so clear with "".
+    let title = if count > 0 {
+        count.to_string()
+    } else {
+        String::new()
+    };
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_title(Some(title));
+    }
+}
+
 pub fn post_paste_shortcut() -> bool {
     unsafe { samlu_post_paste_shortcut() }
 }
@@ -134,6 +187,19 @@ pub fn create_overlay<T>(build: impl FnOnce() -> T) -> T {
 pub fn configure_overlay(window: &WebviewWindow) {
     if let Ok(pointer) = window.ns_window() {
         unsafe { samlu_configure_overlay_window(pointer) };
+    }
+}
+
+/// Blocks until no Samlu window is key, or `timeout_ms` passes. `true` means
+/// the keyboard is back with the frontmost app.
+pub fn wait_for_no_key_window(timeout_ms: i32) -> bool {
+    unsafe { samlu_wait_no_key_window(timeout_ms) }
+}
+
+/// Keeps an overlay above the others, the launcher included.
+pub fn raise_overlay(window: &WebviewWindow) {
+    if let Ok(pointer) = window.ns_window() {
+        unsafe { samlu_raise_overlay_window(pointer) };
     }
 }
 
@@ -203,6 +269,7 @@ pub fn present_focusable_overlay_at_cursor(
     true
 }
 
+/// Gives an overlay keyboard focus without activating Samlu.
 pub fn focus_overlay(window: &WebviewWindow) {
     if let Ok(pointer) = window.ns_window() {
         unsafe { samlu_focus_overlay(pointer) };
