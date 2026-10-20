@@ -93,20 +93,62 @@ fn standalone_apps() -> Vec<PathBuf> {
     vec![PathBuf::from("/System/Library/CoreServices/Finder.app")]
 }
 
-/// One level deep only — deliberately does not recurse into a found .app's
-/// own Contents/ (that's where helper/background apps like
-/// Xcode.app/Contents/Applications/Simulator.app live, which aren't meant to
-/// be launched directly from a top-level search).
+/// Top level plus one plain vendor folder deep (Adobe-style, e.g.
+/// Adobe Photoshop 2023/Adobe Photoshop 2023.app), never inside a bundle:
+/// does not recurse into a found .app's own Contents/ (that's where
+/// helper/background apps like Xcode.app/Contents/Applications/Simulator.app
+/// live, which aren't meant to be launched directly from a top-level search).
+/// Uninstallers ("Uninstall ...") inside vendor folders are skipped.
 #[cfg(not(windows))]
 fn scan_directory(dir: &Path, out: &mut Vec<AppEntry>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        if let Some(app) = entry_for(&entry.path()) {
+        let path = entry.path();
+        if let Some(app) = entry_for(&path) {
             out.push(app);
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() || is_hidden(&entry.file_name()) || is_bundle(&path) {
+            continue;
+        }
+        let Ok(children) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for child in children.flatten() {
+            let child_path = child.path();
+            if is_hidden(&child.file_name())
+                || is_uninstaller(&child.file_name())
+                || !child.file_type().is_ok_and(|kind| kind.is_dir())
+            {
+                continue;
+            }
+            if let Some(app) = entry_for(&child_path) {
+                out.push(app);
+            }
         }
     }
+}
+
+#[cfg(not(windows))]
+fn is_hidden(name: &std::ffi::OsStr) -> bool {
+    name.to_string_lossy().starts_with('.')
+}
+
+#[cfg(not(windows))]
+fn is_bundle(path: &Path) -> bool {
+    path.extension().and_then(|ext| ext.to_str()) == Some("app")
+}
+
+#[cfg(not(windows))]
+fn is_uninstaller(name: &std::ffi::OsStr) -> bool {
+    name.to_string_lossy()
+        .to_lowercase()
+        .starts_with("uninstall")
 }
 
 #[cfg(not(windows))]
@@ -308,6 +350,60 @@ mod store_apps {
                 aliases: Vec::new(),
             })
             .collect()
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod macos_tests {
+    use super::*;
+
+    /// Removes the scratch tree when the test ends, even if an assertion fails.
+    struct ScratchDir(PathBuf);
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_app(root: &Path, relative: &str) {
+        let info = root.join(relative).join("Contents/Info.plist");
+        std::fs::create_dir_all(info.parent().unwrap()).unwrap();
+        let name = Path::new(relative).file_stem().unwrap().to_string_lossy();
+        std::fs::write(
+            &info,
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleName</key><string>{name}</string></dict></plist>"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn scan_finds_apps_one_vendor_folder_deep_and_nowhere_else() {
+        let root = std::env::temp_dir().join(format!(
+            "samlu-app-index-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _cleanup = ScratchDir(root.clone());
+        write_app(&root, "Top.app");
+        write_app(&root, "Vendor Suite/Vendor Tool.app");
+        write_app(&root, "Vendor Suite/Uninstall Vendor Tool.app");
+        write_app(&root, "Top.app/Contents/Applications/Helper.app");
+        write_app(&root, "Deep/Deeper/Too Deep.app");
+
+        let mut found = Vec::new();
+        scan_directory(&root, &mut found);
+        let mut names: Vec<String> = found.into_iter().map(|app| app.name).collect();
+        names.sort();
+
+        assert_eq!(names, vec!["Top".to_string(), "Vendor Tool".to_string()]);
     }
 }
 
