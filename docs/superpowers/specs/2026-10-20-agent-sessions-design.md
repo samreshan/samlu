@@ -1,7 +1,7 @@
 # Agent Sessions, Approvals and Sounds — design
 
 Date: 2026-10-20
-Status: Draft, awaiting approval
+Status: Approved 2026-10-20
 
 ## Context
 
