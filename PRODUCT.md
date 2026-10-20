@@ -16,9 +16,13 @@ The current release has three surfaces:
    have configurable actions on every Return key — open in an editor or agent
    app, start an agent CLI, run the project's scripts — and background tasks
    Samlu tracks to completion.
-3. Configurable native macOS notifications for agent input and completion,
-   with a playful Samlu Island in two styles (Bloom and Buddy) that follows
-   the System, Light or Dark appearance.
+3. Agent notifications for Claude Code, Codex, Gemini CLI and Antigravity:
+   native macOS notifications and configurable sounds for agent input and
+   completion. Claude Code and Codex permission requests can be approved or
+   denied from the Samlu Island, with keyboard shortcuts, and View opens the
+   agent's own session. A sessions list and a waiting count show what is
+   running. The Island has two styles (Bloom and Buddy) and follows the System,
+   Light or Dark appearance.
 
 ## Deferred work
 
@@ -28,6 +32,8 @@ The current release has three surfaces:
 - iPhone companion app
 - Hosted APNs relay
 - Contextual character feedback beyond the island (voice, launcher search)
+- Reply to an agent from the island
+- Answering agent questions (multiple-choice prompts and elicitations) from Samlu
 
 The old mascot is removed from the app runtime. On the island, the Buddy style
 now uses the Samlu mark itself as the character. Character feedback anywhere
