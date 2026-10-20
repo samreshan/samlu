@@ -25,6 +25,11 @@ const chosenApps = new Map();
 let deepFind = null;
 let deepFindDownload = null;
 let agentIntegrations = [];
+let agentAlerts = null;
+let agentSoundNames = [];
+let agentAlertsTimer = null;
+let approveShortcutRecorder = null;
+let denyShortcutRecorder = null;
 let voiceHotkeyRecorder = null;
 let launcherHotkeyRecorder = null;
 let toastTimer = null;
@@ -201,7 +206,7 @@ function selectPane(name) {
 
 function loadPane(name) {
   if (name === "general") return Promise.all([loadAppearance(), loadPrefs(), loadUpdateState()]);
-  if (name === "agents") return Promise.all([loadPrefs(), loadAgents(), loadActivity()]);
+  if (name === "agents") return Promise.all([loadPrefs(), loadAgents(), loadAgentAlerts(), loadSessions(), loadActivity()]);
   if (name === "voice") return loadVoiceSettings();
   if (name === "launcher") return loadLauncherSettings();
   if (name === "projects") return Promise.all([loadProjectActions(), loadProjectFolders()]);
@@ -492,6 +497,12 @@ function renderIntegrations() {
     detail.textContent = integration.error || tildePath(integration.path);
     detail.title = integration.error || integration.path;
     text.append(label, detail);
+    if (integration.id === "codex" && integration.installed && !integration.error) {
+      const note = document.createElement("span");
+      note.className = "row-detail";
+      note.textContent = "Codex asks once to trust Samlu’s hooks.";
+      text.append(note);
+    }
 
     const control = document.createElement("span");
     control.className = "row-control";
@@ -499,6 +510,9 @@ function renderIntegrations() {
     if (integration.error) {
       pill.className = "pill warn";
       pill.textContent = "Unavailable";
+    } else if (integration.installed && integration.needsUpdate) {
+      pill.className = "pill warn";
+      pill.textContent = "Update needed";
     } else if (integration.installed) {
       pill.className = "pill good";
       pill.textContent = "Connected";
@@ -515,15 +529,172 @@ function renderIntegrations() {
     const primary = document.createElement("button");
     primary.type = "button";
     primary.className = "button";
-    primary.dataset.integrationAction = integration.installed ? "remove" : "apply";
+    const updating = integration.installed && integration.needsUpdate;
+    primary.className = updating ? "button primary" : "button";
+    primary.dataset.integrationAction = integration.installed && !updating ? "remove" : "apply";
     primary.dataset.integrationId = integration.id;
-    primary.textContent = integration.installed ? "Disconnect" : "Connect";
+    primary.textContent = updating ? "Update" : integration.installed ? "Disconnect" : "Connect";
     primary.disabled = Boolean(integration.error);
     preview.disabled = Boolean(integration.error);
     control.append(pill, preview, primary);
 
     row.append(logo, text, control);
     container.append(row);
+  });
+}
+
+/* -------------------------------------------------- agent sounds & approvals */
+
+const SOUND_KEYS = {
+  "needs-input": "soundNeedsInput",
+  completed: "soundCompleted",
+  "turn-finished": "soundTurnFinished",
+};
+const CHOOSE_FILE = "__choose__";
+
+async function loadAgentAlerts() {
+  try {
+    const [settings, catalog] = await Promise.all([
+      invoke("get_agent_alert_settings"),
+      invoke("agent_sound_catalog"),
+    ]);
+    agentAlerts = settings;
+    agentSoundNames = catalog?.system || [];
+    renderAgentAlerts();
+  } catch (error) {
+    toast(errorMessage(error), true);
+  }
+}
+
+function soundSelectOptions(select, current) {
+  const options = [["none", "None"], ...agentSoundNames.map((name) => [`system:${name}`, name])];
+  if (current && current.startsWith("custom:")) options.push([current, current.slice(7)]);
+  options.push([CHOOSE_FILE, "Choose File…"]);
+  select.replaceChildren(
+    ...options.map(([value, text]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      return option;
+    }),
+  );
+  select.value = options.some(([value]) => value === current) ? current : "none";
+}
+
+function renderAgentAlerts() {
+  if (!agentAlerts) return;
+  byId("agent-sounds-enabled").checked = Boolean(agentAlerts.soundsEnabled);
+  byId("agent-sound-volume").value = agentAlerts.volume;
+  Object.entries(SOUND_KEYS).forEach(([key, field]) => soundSelectOptions(byId(`agent-sound-${key}`), agentAlerts[field]));
+  byId("agent-codex-wait").value = agentAlerts.codexWaitSecs;
+  byId("agent-reminder").value = String(agentAlerts.reminderMins);
+  approveShortcutRecorder?.set(agentAlerts.approveShortcut);
+  denyShortcutRecorder?.set(agentAlerts.denyShortcut);
+}
+
+function readAgentAlerts() {
+  return {
+    ...agentAlerts,
+    soundsEnabled: byId("agent-sounds-enabled").checked,
+    volume: Number(byId("agent-sound-volume").value),
+    soundNeedsInput: byId("agent-sound-needs-input").value,
+    soundCompleted: byId("agent-sound-completed").value,
+    soundTurnFinished: byId("agent-sound-turn-finished").value,
+    codexWaitSecs: Number(byId("agent-codex-wait").value),
+    reminderMins: Number(byId("agent-reminder").value),
+  };
+}
+
+/** Writes the whole settings object shortly after the last change and shows
+ * the normalised result the backend kept. */
+function queueAgentAlertsSave(savedId) {
+  if (!agentAlerts) return;
+  clearTimeout(agentAlertsTimer);
+  agentAlertsTimer = setTimeout(async () => {
+    try {
+      agentAlerts = await invoke("set_agent_alert_settings", { settings: readAgentAlerts() });
+      renderAgentAlerts();
+      if (savedId) showSaved(savedId);
+    } catch (error) {
+      toast(errorMessage(error), true);
+      renderAgentAlerts();
+    }
+  }, 200);
+}
+
+async function saveAgentShortcut(field, shortcut) {
+  agentAlerts = await invoke("set_agent_alert_settings", { settings: { ...readAgentAlerts(), [field]: shortcut } });
+  showSaved("agent-approvals-saved");
+}
+
+async function restoreAgentAlerts() {
+  agentAlerts = await invoke("get_agent_alert_settings");
+  renderAgentAlerts();
+}
+
+async function onSoundChange(event) {
+  const select = event.currentTarget;
+  if (select.value !== CHOOSE_FILE) {
+    queueAgentAlertsSave("agent-sounds-saved");
+    return;
+  }
+  const key = select.id.replace("agent-sound-", "");
+  try {
+    const choice = await invoke("agent_sound_choose_custom");
+    if (!choice) {
+      soundSelectOptions(select, agentAlerts?.[SOUND_KEYS[key]]);
+      return;
+    }
+    soundSelectOptions(select, choice);
+    queueAgentAlertsSave("agent-sounds-saved");
+  } catch (error) {
+    toast(errorMessage(error), true);
+    soundSelectOptions(select, agentAlerts?.[SOUND_KEYS[key]]);
+  }
+}
+
+/* ---------------------------------------------------------------- sessions */
+
+async function loadSessions() {
+  try {
+    renderSessions(await invoke("agent_sessions"));
+  } catch (error) {
+    byId("agent-sessions").replaceChildren(emptyRow(`Sessions unavailable: ${errorMessage(error)}`));
+  }
+}
+
+const SESSION_STATE_LABEL = { working: "Working", waiting: "Waiting for you", idle: "Idle" };
+
+function renderSessions(items) {
+  const list = byId("agent-sessions");
+  list.replaceChildren();
+  if (!items?.length) {
+    list.append(emptyRow("No agent sessions yet."));
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "row session-item";
+    row.dataset.agent = item.agent;
+    row.dataset.sessionId = item.sessionId;
+    const dot = document.createElement("span");
+    dot.className = `status-dot ${item.state}`;
+    dot.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    text.className = "row-text";
+    const title = document.createElement("span");
+    title.className = "row-label";
+    title.textContent = [item.agentLabel, item.projectLabel].filter(Boolean).join(" — ");
+    const detail = document.createElement("span");
+    detail.className = "row-detail";
+    detail.textContent = `${SESSION_STATE_LABEL[item.state] || item.state} · ${timeAgo(item.lastEventAt)}`;
+    text.append(title, detail);
+    const view = document.createElement("span");
+    view.className = "activity-time";
+    view.textContent = "View";
+    row.append(dot, text, view);
+    list.append(row);
   });
 }
 
@@ -2259,6 +2430,44 @@ function bindEvents() {
       toast(errorMessage(error), true);
     }
   });
+  // Agent sounds and approvals
+  byId("agent-sounds-enabled").addEventListener("change", () => queueAgentAlertsSave("agent-sounds-saved"));
+  byId("agent-sound-volume").addEventListener("change", () => queueAgentAlertsSave("agent-sounds-saved"));
+  Object.keys(SOUND_KEYS).forEach((key) => byId(`agent-sound-${key}`).addEventListener("change", onSoundChange));
+  document.querySelectorAll("[data-sound-preview]").forEach((button) =>
+    button.addEventListener("click", async () => {
+      const choice = byId(`agent-sound-${button.dataset.soundPreview}`).value;
+      if (choice === CHOOSE_FILE) return;
+      try {
+        await invoke("agent_sound_preview", { choice });
+      } catch (error) {
+        toast(errorMessage(error), true);
+      }
+    }),
+  );
+  byId("agent-codex-wait").addEventListener("change", (event) => {
+    const input = event.currentTarget;
+    input.value = Math.min(120, Math.max(10, Math.round(Number(input.value) || 30)));
+    queueAgentAlertsSave("agent-approvals-saved");
+  });
+  byId("agent-reminder").addEventListener("change", () => queueAgentAlertsSave("agent-approvals-saved"));
+  approveShortcutRecorder = createShortcutRecorder(
+    "agent-approve-shortcut",
+    (shortcut) => saveAgentShortcut("approveShortcut", shortcut),
+    restoreAgentAlerts,
+  );
+  denyShortcutRecorder = createShortcutRecorder(
+    "agent-deny-shortcut",
+    (shortcut) => saveAgentShortcut("denyShortcut", shortcut),
+    restoreAgentAlerts,
+  );
+  byId("agent-sessions").addEventListener("click", (event) => {
+    const row = event.target.closest("button[data-session-id]");
+    if (!row) return;
+    invoke("agent_session_view", { agent: row.dataset.agent, sessionId: row.dataset.sessionId }).catch((error) =>
+      toast(errorMessage(error), true),
+    );
+  });
   byId("close-agent-preview").addEventListener("click", () => {
     byId("agent-preview").hidden = true;
   });
@@ -2283,8 +2492,9 @@ function bindEvents() {
         await runButton(button, "Disconnecting…", () => invoke("remove_agent_integration", { id }));
         toast(`${name} disconnected.`);
       } else {
-        await runButton(button, "Connecting…", () => invoke("apply_agent_integration", { id }));
-        toast(`${name} connected.`);
+        const updating = button.textContent === "Update";
+        await runButton(button, updating ? "Updating…" : "Connecting…", () => invoke("apply_agent_integration", { id }));
+        toast(updating ? `${name} updated.` : `${name} connected.`);
       }
       await loadAgents();
     } catch (error) {
@@ -2701,6 +2911,9 @@ async function boot() {
     if (currentPane === "general" && updateState?.status !== "checking") loadUpdateState();
   });
   await listen("updater://state", (event) => renderUpdate(event.payload));
+  await listen("agents://sessions", () => {
+    if (currentPane === "agents") loadSessions();
+  });
   await listen("agent://event", () => {
     if (currentPane === "agents") loadActivity();
   });
