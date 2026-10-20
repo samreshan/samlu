@@ -128,21 +128,38 @@ pub fn system_sound_dir() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from("/System/Library/Sounds"))
 }
 
-/// Brings the app with `bundle_id` to the front.
+/// Brings the app with `bundle_id` to the front. `false` when `open -b`
+/// fails (no such app), so View can say it couldn't find the session.
 pub fn activate_bundle(bundle_id: &str) -> bool {
-    // `open -b` asks LaunchServices to bring the app forward, launching it if needed.
-    std::process::Command::new("/usr/bin/open")
-        .arg("-b")
-        .arg(bundle_id)
-        .spawn()
-        .is_ok()
+    // `open -b` asks LaunchServices to bring the app forward, launching it if
+    // needed. It runs on its own thread so a stuck LaunchServices cannot hold
+    // the caller (which may be the main thread) for more than a moment; an
+    // answer that has not come in 3 s is taken as success, the app is on its way.
+    let bundle_id = bundle_id.to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ok = std::process::Command::new("/usr/bin/open")
+            .arg("-b")
+            .arg(&bundle_id)
+            .status()
+            .is_ok_and(|status| status.success());
+        let _ = sender.send(ok);
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap_or(true)
 }
 
 /// Shows how many agents wait: tray title on macOS, tooltip on Windows.
 pub fn set_tray_count(app: &tauri::AppHandle, count: usize) {
-    let title = (count > 0).then(|| count.to_string());
+    // `None` leaves the old title on the status item, so clear with "".
+    let title = if count > 0 {
+        count.to_string()
+    } else {
+        String::new()
+    };
     if let Some(tray) = app.tray_by_id("main-tray") {
-        let _ = tray.set_title(title.as_deref());
+        let _ = tray.set_title(Some(title));
     }
 }
 

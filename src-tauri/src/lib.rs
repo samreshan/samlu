@@ -48,6 +48,7 @@ static BACKGROUND_CLOSE_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// recorder that is waiting for it.
 #[tauri::command]
 fn suspend_global_shortcuts(app: tauri::AppHandle) {
+    agents::shortcuts::set_suspended(true);
     let _ = app.global_shortcut().unregister_all();
     agents::shortcuts::disarm(&app);
     modifier_shortcuts::unbind_launcher();
@@ -60,6 +61,7 @@ fn suspend_global_shortcuts(app: tauri::AppHandle) {
 /// handler shadowing the new one.
 #[tauri::command]
 fn resume_global_shortcuts(app: tauri::AppHandle) {
+    agents::shortcuts::set_suspended(false);
     let _ = app.global_shortcut().unregister_all();
     agents::shortcuts::disarm(&app);
     modifier_shortcuts::unbind_launcher();

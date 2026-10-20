@@ -11,8 +11,10 @@ const DETAIL_FIELDS: [&str; 7] = [
     "description",
 ];
 
-/// Longest line an approval card or history row will carry.
-const MAX_CHARS: usize = 300;
+/// Longest text a card, its tooltip or a banner will carry. The line itself
+/// is kept whole so the user can read what they approve; this only stops a
+/// huge command from flooding the screen. History cuts shorter (160).
+const MAX_CARD_CHARS: usize = 4000;
 
 pub fn action_line(tool_name: &str, tool_input: &serde_json::Value) -> String {
     let detail = DETAIL_FIELDS.iter().find_map(|key| {
@@ -22,7 +24,12 @@ pub fn action_line(tool_name: &str, tool_input: &serde_json::Value) -> String {
             .map(collapse)
             .filter(|text| !text.is_empty())
     });
-    truncate(detail.unwrap_or_else(|| collapse(tool_name)))
+    detail.unwrap_or_else(|| collapse(tool_name))
+}
+
+/// `action` cut for display on a card, tooltip or banner.
+pub fn card_text(action: &str) -> String {
+    truncate(action.to_string())
 }
 
 /// "Wants to run" | "Wants to edit" | "Needs approval"
@@ -40,10 +47,10 @@ fn collapse(text: &str) -> String {
 }
 
 fn truncate(text: String) -> String {
-    if text.chars().count() <= MAX_CHARS {
+    if text.chars().count() <= MAX_CARD_CHARS {
         return text;
     }
-    let mut short: String = text.chars().take(MAX_CHARS - 1).collect();
+    let mut short: String = text.chars().take(MAX_CARD_CHARS - 1).collect();
     short.push('…');
     short
 }
@@ -91,11 +98,18 @@ mod tests {
     }
 
     #[test]
-    fn long_lines_are_truncated_with_ellipsis() {
+    fn long_lines_are_kept_whole_and_cut_only_for_display() {
         let long = "x".repeat(400);
         let line = action_line("Bash", &json!({ "command": long }));
-        assert_eq!(line.chars().count(), MAX_CHARS);
-        assert!(line.ends_with('…'));
+        assert_eq!(line.chars().count(), 400, "the action line is not cut");
+        assert_eq!(card_text(&line), line);
+
+        let huge = "y".repeat(5000);
+        let line = action_line("Bash", &json!({ "command": huge }));
+        assert_eq!(line.chars().count(), 5000);
+        let shown = card_text(&line);
+        assert_eq!(shown.chars().count(), MAX_CARD_CHARS);
+        assert!(shown.ends_with('…'));
     }
 
     #[test]

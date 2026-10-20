@@ -1,12 +1,25 @@
 //! Approve/deny global shortcuts, registered only while an approvable card
 //! is in front.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// The chords currently registered by `arm`, as (approve, deny).
 static ARMED: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+/// Settings is recording a replacement chord: nothing may be registered
+/// until it is done, or the chord being pressed would fire instead.
+static SUSPENDED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_suspended(suspended: bool) {
+    SUSPENDED.store(suspended, Ordering::Release);
+}
+
+pub fn is_suspended() -> bool {
+    SUSPENDED.load(Ordering::Acquire)
+}
 
 fn armed_slot() -> std::sync::MutexGuard<'static, Option<(String, String)>> {
     ARMED.lock().unwrap_or_else(|e| e.into_inner())

@@ -16,8 +16,8 @@ const NOT_FOUND: &str = "Couldn't find this session";
 /// is the most precise, then the Claude or Codex desktop apps, then the
 /// terminal app named by `TERM_PROGRAM`, then the bundle that hosted it.
 pub fn resolve(agent: &str, session_id: &str, origin: &SessionOrigin) -> ViewTarget {
-    if let Some(url) = &origin.warp_focus_url {
-        return ViewTarget::Url(url.clone());
+    if let Some(url) = origin.warp_focus_url.as_deref().filter(|u| is_warp_url(u)) {
+        return ViewTarget::Url(url.to_string());
     }
     if origin.entrypoint.as_deref() == Some("claude-desktop") {
         if let Some(host) = origin
@@ -37,8 +37,8 @@ pub fn resolve(agent: &str, session_id: &str, origin: &SessionOrigin) -> ViewTar
     if let Some(bundle) = origin.term_program.as_deref().and_then(term_bundle) {
         return ViewTarget::App(bundle.to_string());
     }
-    if let Some(bundle) = &origin.bundle_id {
-        return ViewTarget::App(bundle.clone());
+    if let Some(bundle) = origin.bundle_id.as_deref().filter(|b| is_bundle_id(b)) {
+        return ViewTarget::App(bundle.to_string());
     }
     ViewTarget::NotFound
 }
@@ -77,6 +77,29 @@ fn is_host_session(id: &str) -> bool {
     }
 }
 
+/// `warp://session/<id>` (or Warp Preview / Dev's schemes). The URL comes
+/// from a request header and is handed to `open`, so only this shape passes.
+fn is_warp_url(url: &str) -> bool {
+    ["warp://", "warppreview://", "warp-dev://"]
+        .iter()
+        .find_map(|scheme| url.strip_prefix(scheme))
+        .and_then(|rest| rest.strip_prefix("session/"))
+        .is_some_and(|id| {
+            (1..=64).contains(&id.len())
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+/// A reverse-DNS bundle id (`com.apple.Terminal`). Anything else, a leading
+/// dash above all, could be read by `open` as an option.
+fn is_bundle_id(id: &str) -> bool {
+    !id.starts_with('-')
+        && id.split('.').count() >= 2
+        && id.split('.').all(|part| {
+            !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
 fn term_bundle(term: &str) -> Option<&'static str> {
     Some(match term {
         "Apple_Terminal" => "com.apple.Terminal",
@@ -110,6 +133,71 @@ mod tests {
         let mut origin = SessionOrigin::default();
         f(&mut origin);
         origin
+    }
+
+    #[test]
+    fn warp_urls_must_have_the_session_shape() {
+        for good in [
+            "warp://session/abc-123",
+            "warppreview://session/A1",
+            "warp-dev://session/x",
+        ] {
+            assert!(is_warp_url(good), "{good}");
+        }
+        let too_long = format!("warp://session/{}", "a".repeat(65));
+        for bad in [
+            "",
+            "warp://session/",
+            "warp://action/new_tab",
+            "warp://session/a/b",
+            "warp://session/a b",
+            "file:///etc/passwd",
+            "https://example.com",
+            "warp://session/a?x=1",
+            too_long.as_str(),
+        ] {
+            assert!(!is_warp_url(bad), "{bad}");
+        }
+        let origin = origin_with(|o| o.warp_focus_url = Some("file:///Applications/x".into()));
+        assert_eq!(resolve("claude-code", "s", &origin), ViewTarget::NotFound);
+    }
+
+    #[test]
+    fn bundle_ids_must_be_reverse_dns() {
+        for good in [
+            "com.apple.Terminal",
+            "dev.warp.Warp-Stable",
+            "com.openai.codex",
+        ] {
+            assert!(is_bundle_id(good), "{good}");
+        }
+        for bad in [
+            "",
+            "-a",
+            "--help.x",
+            "nodots",
+            "a..b",
+            "a.b c",
+            "/Applications/X.app",
+            "a.b/c",
+        ] {
+            assert!(!is_bundle_id(bad), "{bad}");
+        }
+        for term in [
+            "Apple_Terminal",
+            "iTerm.app",
+            "vscode",
+            "ghostty",
+            "WarpTerminal",
+            "WezTerm",
+        ] {
+            assert!(is_bundle_id(term_bundle(term).unwrap()), "{term}");
+        }
+        let origin = origin_with(|o| {
+            o.term_program = Some("unknown".into());
+            o.bundle_id = Some("-W".into());
+        });
+        assert_eq!(resolve("claude-code", "s", &origin), ViewTarget::NotFound);
     }
 
     #[test]

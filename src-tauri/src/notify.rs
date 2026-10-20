@@ -7,7 +7,7 @@ use crate::events::{AgentEvent, AgentEventKind};
 use crate::settings::AppConfig;
 use crate::state::AppState;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -36,6 +36,10 @@ struct IslandPayload {
     /// The cards waiting for the user. Absent for a plain timed notice; an
     /// empty queue with kind `dismiss` tells the island to leave.
     queue: Option<QueueSnapshot>,
+    /// Which presentation this is, counting up. The island hands back the
+    /// last one it rendered when it asks to be hidden, so a hide that was
+    /// decided before a newer payload arrived can be told apart and ignored.
+    seq: u64,
 }
 
 pub struct IslandState {
@@ -43,6 +47,8 @@ pub struct IslandState {
     pending: Mutex<Option<IslandPayload>>,
     /// The window is at the queue height rather than the plain one.
     tall: AtomicBool,
+    /// Sequence number of the latest payload sent to the island.
+    seq: AtomicU64,
     /// Agent and session of the last plain notice, for the island's open button.
     last_notice: Mutex<Option<(String, String)>>,
 }
@@ -53,11 +59,13 @@ impl IslandState {
             ready: AtomicBool::new(false),
             pending: Mutex::new(None),
             tall: AtomicBool::new(false),
+            seq: AtomicU64::new(0),
             last_notice: Mutex::new(None),
         }
     }
 
-    fn present_or_queue(&self, app: &AppHandle, payload: IslandPayload) {
+    fn present_or_queue(&self, app: &AppHandle, mut payload: IslandPayload) {
+        payload.seq = self.seq.fetch_add(1, Ordering::AcqRel) + 1;
         if self.ready.load(Ordering::Acquire) {
             emit_island(app, payload);
         } else {
@@ -232,6 +240,7 @@ pub fn present_queue(app: &AppHandle, queue: QueueSnapshot) -> Result<(), String
                     has_notch: false,
                     style,
                     queue: Some(queue),
+                    seq: 0,
                 },
             );
         }
@@ -250,6 +259,7 @@ pub fn present_queue(app: &AppHandle, queue: QueueSnapshot) -> Result<(), String
         has_notch: crate::platform::active_display_has_notch(),
         style,
         queue: Some(queue),
+        seq: 0,
     };
     crate::platform::order_front_without_activating(&window);
     emit_payload(app, payload);
@@ -295,6 +305,7 @@ fn show_island_update(app: &AppHandle, event: &AgentEvent, summary: String) {
         has_notch: crate::platform::active_display_has_notch(),
         style: app.state::<Arc<AppConfig>>().island_style(),
         queue: None,
+        seq: 0,
     };
     if let Some(state) = app.try_state::<Arc<IslandState>>() {
         *crate::agents::hub::lock(&state.last_notice) =
@@ -313,8 +324,16 @@ fn emit_island(app: &AppHandle, payload: IslandPayload) {
 /// Hides the window and nothing else: the island's own exit already ran, and
 /// re-emitting here would bring it straight back. Cards still queued stay
 /// queued; the hub only stops the chords answering them unseen.
+///
+/// `seq` is the last payload the island rendered. A newer one has been sent
+/// since when it is behind, so this hide is stale and the island stays.
 #[tauri::command(async)]
-pub fn agent_island_dismiss(app: AppHandle) {
+pub fn agent_island_dismiss(app: AppHandle, seq: Option<u64>) {
+    if let (Some(seq), Some(state)) = (seq, app.try_state::<Arc<IslandState>>()) {
+        if seq < state.seq.load(Ordering::Acquire) {
+            return;
+        }
+    }
     if let Some(window) = app.get_webview_window(ISLAND_LABEL) {
         let _ = window.hide();
     }
@@ -334,7 +353,7 @@ pub fn agent_island_ready(app: AppHandle, state: tauri::State<'_, Arc<IslandStat
 /// the notice on screen, never to a Samlu page.
 #[tauri::command(async)]
 pub fn agent_island_open_activity(app: AppHandle) {
-    agent_island_dismiss(app.clone());
+    agent_island_dismiss(app.clone(), None);
     let target = app.state::<Arc<AgentHub>>().front_session().or_else(|| {
         app.try_state::<Arc<IslandState>>()
             .and_then(|state| crate::agents::hub::lock(&state.last_notice).clone())
@@ -344,9 +363,15 @@ pub fn agent_island_open_activity(app: AppHandle) {
     }
 }
 
-#[tauri::command]
+/// The session id of the preview notification. It is not a real Codex
+/// session: it never counts as a Codex hook arriving, and it leaves no
+/// session behind.
+pub const PREVIEW_SESSION: &str = "samlu-notification-preview";
+
+#[tauri::command(async)]
 pub fn test_agent_notification(app: AppHandle) {
-    app.state::<Arc<AgentHub>>().handle(
+    let hub = app.state::<Arc<AgentHub>>();
+    hub.handle(
         &app,
         crate::agents::HookMessage::Event(AgentEvent {
             agent: "codex".to_string(),
@@ -356,10 +381,21 @@ pub fn test_agent_notification(app: AppHandle) {
                 "Finished the background interaction pass and verified the macOS build."
                     .to_string(),
             ),
-            session_id: "samlu-notification-preview".to_string(),
+            session_id: PREVIEW_SESSION.to_string(),
             timestamp: chrono::Utc::now(),
             origin: Default::default(),
             outcome: None,
+        }),
+    );
+    hub.handle(
+        &app,
+        crate::agents::HookMessage::Signal(crate::agents::SessionSignal {
+            agent: "codex".to_string(),
+            session_id: PREVIEW_SESSION.to_string(),
+            agent_id: None,
+            project_path: String::new(),
+            kind: crate::agents::SignalKind::Ended,
+            origin: Default::default(),
         }),
     );
 }

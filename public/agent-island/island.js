@@ -85,6 +85,12 @@ let remaining = 0;
 let startedAt = 0;
 let visible = false;
 let leaving = false;
+/** Counts renders. An exit or a flick that finds it changed while it awaited
+ * knows a newer payload took the island back, and stops. */
+let generation = 0;
+/** The sequence number of the last payload rendered, handed back to the
+ * native side so it can tell a stale hide from a current one. */
+let lastSeq = 0;
 let hovering = false;
 
 /* ------------------------------------------------------------------ motion */
@@ -469,11 +475,13 @@ function playExit() {
 async function leave(command) {
   if (leaving) return;
   leaving = true;
+  const turn = generation;
   clearDismissTimer();
   cancelAnimationFrame(settleFrame);
   await playExit();
+  if (turn !== generation) return;
   visible = false;
-  await invoke(command).catch(console.error);
+  await invoke(command, { seq: lastSeq }).catch(console.error);
 }
 
 function dismiss() {
@@ -546,11 +554,20 @@ function cardAction(cardId, action) {
   if (el.cardActions.dataset.busy === "true") return;
   el.cardActions.dataset.busy = "true";
   setCardButtons(true);
-  invoke("agent_card_action", { cardId, action }).catch((error) => {
-    console.error(error);
+  const revive = () => {
     delete el.cardActions.dataset.busy;
     setCardButtons(false);
-  });
+  };
+  invoke("agent_card_action", { cardId, action })
+    .then(() => {
+      // View sends no new payload for a Claude card, which stays pending:
+      // its buttons must not stay dead.
+      if (action === "view") revive();
+    })
+    .catch((error) => {
+      console.error(error);
+      revive();
+    });
 }
 
 function writeCard(queue) {
@@ -685,13 +702,22 @@ const cardSignature = (payload) => {
 };
 
 function render(payload) {
+  if (payload.seq > lastSeq) lastSeq = payload.seq;
   // The queue emptied: the native side is done with the island.
   if (payload.kind === "dismiss" && !activeQueue(payload)) {
     if (visible) dismiss();
     return;
   }
+  generation += 1;
   cancelAnimationFrame(settleFrame);
   setOffset(0);
+  if (leaving) {
+    // The island was on its way out when this arrived. Whatever the exit
+    // had done is stale: start over with a fresh arrival, not a swap.
+    stopAll();
+    visible = false;
+    shownCard = "";
+  }
   leaving = false;
 
   const signature = cardSignature(payload);
@@ -781,13 +807,16 @@ async function endDrag(event) {
     // Thrown back into the notch: carry the release velocity into the exit so
     // there is no seam between the finger and the animation.
     leaving = true;
+    const turn = generation;
     clearDismissTimer();
     const target = -(islandHeight() + 24);
     await spring(offset, target, velocity, setOffset, { response: 0.28 });
+    if (turn !== generation) return;
     play(el.stage, [{ opacity: 1 }, { opacity: 0 }], { duration: 80, easing: "linear", fill: "forwards" });
     await wait(90);
+    if (turn !== generation) return;
     visible = false;
-    await invoke("agent_island_dismiss").catch(() => {});
+    await invoke("agent_island_dismiss", { seq: lastSeq }).catch(() => {});
     return;
   }
 

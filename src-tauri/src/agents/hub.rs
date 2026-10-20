@@ -13,8 +13,8 @@ use super::shortcuts;
 use super::sounds::{self, SoundKind};
 use super::view::{self, ViewTarget};
 use super::{
-    action::approval_title, agent_label, project_label, ApprovalRequest, HookMessage,
-    SessionSignal, SignalKind,
+    action::{approval_title, card_text},
+    agent_label, project_label, ApprovalRequest, HookMessage, SessionSignal, SignalKind,
 };
 use crate::events::{AgentEvent, AgentEventKind};
 use crate::settings::{AgentAlertSettings, AppConfig};
@@ -238,9 +238,10 @@ impl RecentApprovals {
 }
 
 /// The approve/deny chords are live only while an approval is in front and
-/// the island is on screen: a hidden island cannot be read.
-pub fn shortcuts_wanted(front_is_approval: bool, island_hidden: bool) -> bool {
-    front_is_approval && !island_hidden
+/// the island is on screen (a hidden island cannot be read), and never while
+/// Settings is recording a chord.
+pub fn shortcuts_wanted(front_is_approval: bool, island_hidden: bool, suspended: bool) -> bool {
+    front_is_approval && !island_hidden && !suspended
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -285,7 +286,7 @@ fn approval_card(request_id: &str, request: &ApprovalRequest, now: DateTime<Utc>
         agent_id: request.agent_id.clone(),
         project: project_label(&request.project_path),
         title: approval_title(&request.tool_name).to_string(),
-        detail: request.action.clone(),
+        detail: card_text(&request.action),
         request_id: Some(request_id.to_string()),
         always_allow_rule: request.always_allow.as_ref().and_then(always_allow_rule),
         created_at: now,
@@ -735,6 +736,7 @@ impl AgentHub {
         let wanted = shortcuts_wanted(
             self.front_approval_id().is_some(),
             self.island_hidden.load(Ordering::Acquire),
+            shortcuts::is_suspended(),
         );
         if wanted {
             let alerts = Self::alerts(app);
@@ -795,7 +797,12 @@ impl AgentHub {
             HookMessage::Signal(signal) => &signal.agent,
             HookMessage::Approval(request) => &request.agent,
         };
-        if agent == "codex" {
+        let session = match message {
+            HookMessage::Event(event) => &event.session_id,
+            HookMessage::Signal(signal) => &signal.session_id,
+            HookMessage::Approval(request) => &request.session_id,
+        };
+        if agent == "codex" && session != crate::notify::PREVIEW_SESSION {
             let config = app.state::<Arc<AppConfig>>();
             if !config.codex_hooks_seen() {
                 config.mark_codex_hooks_seen();
@@ -935,7 +942,7 @@ impl AgentHub {
                 .notification()
                 .builder()
                 .title(format!("{} needs approval", agent_label(&agent)))
-                .body(&action)
+                .body(card_text(&action))
                 .show()
             {
                 log::error!("failed to show approval notification: {error}");
@@ -1812,9 +1819,13 @@ mod tests {
 
     #[test]
     fn a_hidden_island_disarms_the_chords_and_the_reminder_brings_it_back() {
-        assert!(shortcuts_wanted(true, false));
-        assert!(!shortcuts_wanted(true, true));
-        assert!(!shortcuts_wanted(false, false));
+        assert!(shortcuts_wanted(true, false, false));
+        assert!(!shortcuts_wanted(true, true, false));
+        assert!(!shortcuts_wanted(false, false, false));
+        assert!(
+            !shortcuts_wanted(true, false, true),
+            "suspended for recording"
+        );
         assert_eq!(reminder_action(false, true), ReminderAction::Skip);
         assert_eq!(reminder_action(true, false), ReminderAction::Ring);
         assert_eq!(reminder_action(true, true), ReminderAction::PresentAndRing);
