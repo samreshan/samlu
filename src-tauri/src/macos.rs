@@ -114,14 +114,20 @@ pub fn activate_application(pid: i32, bundle_id: Option<&str>) -> bool {
 
 /// Plays `path` at `volume` (0-100). Wired in Task 5.
 #[allow(dead_code)] // wired in Task 12
+/// Blocks until the sound ends, so call it from a worker thread.
 pub fn play_sound(path: &std::path::Path, volume: u8) {
-    let _ = (path, volume);
+    let volume = f32::from(volume.min(100)) / 100.0;
+    let _ = std::process::Command::new("/usr/bin/afplay")
+        .arg("-v")
+        .arg(format!("{volume:.2}"))
+        .arg(path)
+        .status();
 }
 
 /// Folder holding the system alert sounds, if this platform has one.
 #[allow(dead_code)] // wired in Task 12
 pub fn system_sound_dir() -> Option<std::path::PathBuf> {
-    None
+    Some(std::path::PathBuf::from("/System/Library/Sounds"))
 }
 
 /// Brings the app with `bundle_id` to the front. Wired in Task 3.
@@ -134,7 +140,10 @@ pub fn activate_bundle(bundle_id: &str) -> bool {
 /// Shows how many agents wait: tray title on macOS, tooltip on Windows.
 #[allow(dead_code)] // wired in Task 12
 pub fn set_tray_count(app: &tauri::AppHandle, count: usize) {
-    let _ = (app, count);
+    let title = (count > 0).then(|| count.to_string());
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_title(title.as_deref());
+    }
 }
 
 pub fn post_paste_shortcut() -> bool {
