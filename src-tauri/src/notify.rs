@@ -49,6 +49,8 @@ pub struct IslandState {
     tall: AtomicBool,
     /// Sequence number of the latest payload sent to the island.
     seq: AtomicU64,
+    /// Sequence number of the latest payload that is not a dismiss.
+    content_seq: AtomicU64,
     /// Agent and session of the last plain notice, for the island's open button.
     last_notice: Mutex<Option<(String, String)>>,
 }
@@ -60,12 +62,16 @@ impl IslandState {
             pending: Mutex::new(None),
             tall: AtomicBool::new(false),
             seq: AtomicU64::new(0),
+            content_seq: AtomicU64::new(0),
             last_notice: Mutex::new(None),
         }
     }
 
     fn present_or_queue(&self, app: &AppHandle, mut payload: IslandPayload) {
         payload.seq = self.seq.fetch_add(1, Ordering::AcqRel) + 1;
+        if payload.kind != "dismiss" {
+            self.content_seq.store(payload.seq, Ordering::Release);
+        }
         if self.ready.load(Ordering::Acquire) {
             emit_island(app, payload);
         } else {
@@ -261,8 +267,10 @@ pub fn present_queue(app: &AppHandle, queue: QueueSnapshot) -> Result<(), String
         queue: Some(queue),
         seq: 0,
     };
-    crate::platform::order_front_without_activating(&window);
+    // Stamp and send first: a hide that raced this payload is judged against
+    // its sequence number before the window comes forward.
     emit_payload(app, payload);
+    crate::platform::order_front_without_activating(&window);
     Ok(())
 }
 
@@ -311,8 +319,8 @@ fn show_island_update(app: &AppHandle, event: &AgentEvent, summary: String) {
         *crate::agents::hub::lock(&state.last_notice) =
             Some((event.agent.clone(), event.session_id.clone()));
     }
-    crate::platform::order_front_without_activating(&window);
     emit_payload(app, payload);
+    crate::platform::order_front_without_activating(&window);
 }
 
 fn emit_island(app: &AppHandle, payload: IslandPayload) {
@@ -325,20 +333,31 @@ fn emit_island(app: &AppHandle, payload: IslandPayload) {
 /// re-emitting here would bring it straight back. Cards still queued stay
 /// queued; the hub only stops the chords answering them unseen.
 ///
-/// `seq` is the last payload the island rendered. A newer one has been sent
-/// since when it is behind, so this hide is stale and the island stays.
+/// `seq` is the last payload the island rendered. A newer content payload
+/// has been sent since when it is behind, so this hide is stale and the
+/// island stays. A newer dismiss payload does not make it stale.
 #[tauri::command(async)]
 pub fn agent_island_dismiss(app: AppHandle, seq: Option<u64>) {
-    if let (Some(seq), Some(state)) = (seq, app.try_state::<Arc<IslandState>>()) {
-        if seq < state.seq.load(Ordering::Acquire) {
-            return;
-        }
+    let hub = app.state::<Arc<AgentHub>>().inner().clone();
+    // Under the hub's present lock, so no queue snapshot is being shown
+    // between the check and the hide.
+    let _guard = hub.present_guard();
+    let latest = app
+        .try_state::<Arc<IslandState>>()
+        .map_or(0, |state| state.content_seq.load(Ordering::Acquire));
+    if !dismiss_accepted(seq, latest) {
+        return;
     }
     if let Some(window) = app.get_webview_window(ISLAND_LABEL) {
         let _ = window.hide();
     }
-    let hub = app.state::<Arc<AgentHub>>().inner().clone();
     hub.island_hidden(&app);
+}
+
+/// A hide is stale only when content newer than what the island rendered
+/// has been sent. No sequence number (native callers) always hides.
+fn dismiss_accepted(seq: Option<u64>, latest_content_seq: u64) -> bool {
+    seq.is_none_or(|seq| seq >= latest_content_seq)
 }
 
 #[tauri::command]
@@ -352,8 +371,8 @@ pub fn agent_island_ready(app: AppHandle, state: tauri::State<'_, Arc<IslandStat
 /// The island's open button: goes to the session of the card in front, or of
 /// the notice on screen, never to a Samlu page.
 #[tauri::command(async)]
-pub fn agent_island_open_activity(app: AppHandle) {
-    agent_island_dismiss(app.clone(), None);
+pub fn agent_island_open_activity(app: AppHandle, seq: Option<u64>) {
+    agent_island_dismiss(app.clone(), seq);
     let target = app.state::<Arc<AgentHub>>().front_session().or_else(|| {
         app.try_state::<Arc<IslandState>>()
             .and_then(|state| crate::agents::hub::lock(&state.last_notice).clone())
@@ -412,7 +431,18 @@ fn truncate(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate;
+    use super::{dismiss_accepted, truncate};
+
+    #[test]
+    fn a_hide_is_stale_only_behind_newer_content() {
+        assert!(dismiss_accepted(Some(5), 5));
+        assert!(
+            dismiss_accepted(Some(6), 5),
+            "a later dismiss payload is fine"
+        );
+        assert!(!dismiss_accepted(Some(4), 5));
+        assert!(dismiss_accepted(None, 99));
+    }
 
     #[test]
     fn truncates_on_character_boundaries() {

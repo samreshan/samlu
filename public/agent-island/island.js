@@ -706,6 +706,9 @@ function render(payload) {
   // The queue emptied: the native side is done with the island.
   if (payload.kind === "dismiss" && !activeQueue(payload)) {
     if (visible) dismiss();
+    // Nothing to animate (already gone, or already leaving): still make
+    // sure the window is hidden. Hiding twice is harmless.
+    else invoke("agent_island_dismiss", { seq: lastSeq }).catch(() => {});
     return;
   }
   generation += 1;

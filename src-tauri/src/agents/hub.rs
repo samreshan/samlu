@@ -698,6 +698,12 @@ impl AgentHub {
         }
     }
 
+    /// Held while the island is shown or hidden, so a hide never lands in
+    /// the middle of a presentation.
+    pub fn present_guard(&self) -> MutexGuard<'_, ()> {
+        lock(&self.present_lock)
+    }
+
     /// Shows the queue as it is now. `Err` means the island can't be shown.
     fn present(&self, app: &AppHandle) -> Result<(), String> {
         let _guard = lock(&self.present_lock);
@@ -1120,7 +1126,7 @@ pub fn agent_sessions(app: AppHandle) -> Vec<SessionInfo> {
     app.state::<Arc<AgentHub>>().sessions_list()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn agent_session_view(app: AppHandle, agent: String, session_id: String) -> Result<(), String> {
     let hub = app.state::<Arc<AgentHub>>();
     try_view(&hub, &agent, &session_id)

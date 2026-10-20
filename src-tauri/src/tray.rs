@@ -33,7 +33,11 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
             // by their id prefix rather than by a per-rebuild closure.
             let id: &str = event.id().as_ref();
             if let Some((agent, session_id)) = parse_menu_id(id) {
-                crate::agents::hub::view_session(app, &agent, &session_id);
+                // View may wait on `open`: keep it off the main thread.
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    crate::agents::hub::view_session(&app, &agent, &session_id);
+                });
                 return;
             }
             match id {
