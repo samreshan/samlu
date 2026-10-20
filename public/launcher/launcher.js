@@ -61,6 +61,8 @@ const MAX_BLENDED_CONTENT = 4;
 const DESCRIBE_PREFIX = "?";
 // `!` lists tasks instead of searching.
 const TASKS_PREFIX = "!";
+// `#` lists agent sessions the same way; it never reaches launcher_search.
+const SESSIONS_PREFIX = "#";
 // The task view keeps this much output on screen; ⌘O opens the whole log.
 const MAX_LOG_LINES = 1000;
 // An arrow key scrolls the task view's log by about two lines.
@@ -81,6 +83,7 @@ const KINDS = {
   calculation: { label: "Calculator", verb: "Copy Result" },
   content: { label: "In File", verb: "Open" },
   task: { label: "Task", verb: "Show Task" },
+  agent_session: { label: "Session", verb: "View" },
 };
 const REVEALABLE = new Set(["app", "file", "project", "content"]);
 
@@ -96,7 +99,17 @@ const ACTION_KINDS = {
   script: { label: "Script", verb: "Run", busy: "Starting…" },
 };
 // A task's status is always a word; the dot beside it is never the only sign.
-const STATUS = { running: "Running", succeeded: "Succeeded", failed: "Failed", stopped: "Stopped" };
+// An agent session's state uses the same marks: working is running, waiting
+// is the one that needs you, idle is done.
+const STATUS = {
+  running: "Running",
+  succeeded: "Succeeded",
+  failed: "Failed",
+  stopped: "Stopped",
+  working: "Working",
+  waiting: "Waiting",
+  idle: "Idle",
+};
 
 const SVG = (body) => `<svg viewBox="0 0 16 16" aria-hidden="true">${body}</svg>`;
 const ICONS = {
@@ -264,6 +277,10 @@ function scheduleSearch(query) {
   describePending = false;
   if (trimmed.startsWith(TASKS_PREFIX)) {
     showTaskList(trimmed.slice(TASKS_PREFIX.length).trim(), current);
+    return;
+  }
+  if (trimmed.startsWith(SESSIONS_PREFIX)) {
+    showAgentSessionList(trimmed.slice(SESSIONS_PREFIX.length).trim(), current);
     return;
   }
   runFastSearch(query, current);
@@ -507,6 +524,8 @@ function renderAccessory(result) {
     });
   } else if (result.kind === "task") {
     side.append(statusMark(result.status));
+  } else if (result.kind === "agent_session") {
+    side.append(statusMark(result.state));
   } else {
     side.textContent = result.label ?? (KINDS[result.kind]?.label || "");
   }
@@ -592,6 +611,15 @@ function renderEmpty() {
       headline.textContent = "No tasks yet";
       hint.textContent = "Run an action that starts a task, or a script in the background.";
     }
+  } else if (query.startsWith(SESSIONS_PREFIX)) {
+    const filter = query.slice(SESSIONS_PREFIX.length).trim();
+    if (filter) {
+      headline.textContent = `No agent sessions match “${filter}”`;
+      hint.textContent = "Sessions are found by their agent or project name.";
+    } else {
+      headline.textContent = "No agent sessions yet";
+      hint.textContent = "Claude Code and Codex sessions appear here while they run.";
+    }
   } else if (query.startsWith("@")) {
     headline.textContent = "Nothing in clipboard history";
     hint.textContent = "Text you copy appears here while clipboard history is on.";
@@ -602,7 +630,7 @@ function renderEmpty() {
       : "Search apps, projects, and files by name, or start with = ; @ or > for tools.";
   } else {
     headline.textContent = "Start typing to search";
-    hint.textContent = "Apps, projects, and files, plus = ; @ and > for tools.";
+    hint.textContent = "Apps, projects, and files, plus # for agent sessions and = ; @ and > for tools.";
   }
   empty.append(headline, hint);
   return empty;
@@ -844,6 +872,7 @@ function back() {
   render();
   el.body.scrollTop = saved.scrollTop;
   refreshTaskRows();
+  refreshAgentSessionRows();
 }
 
 /** Swaps in fresh rows without disturbing you: the selection stays on the
@@ -866,6 +895,7 @@ function activate(index, event) {
   if (!result || pending) return;
   if (result.kind === "project") runProject(result, chordFrom(event));
   else if (result.kind === "task") showTask(result.target);
+  else if (result.kind === "agent_session") viewAgentSession(result);
   else if (result.kind === "project_action" || result.kind === "script") runPanelRow(result, event);
   else activateResult(result, PLATFORM.primary(event));
 }
@@ -1180,6 +1210,80 @@ function refreshTaskRows() {
       replaceRows(taskRows(tasks, 0).concat(others).slice(0, MAX_RESULTS));
     }
   });
+}
+
+/* ---------------------------------------------------------- agent sessions */
+
+async function listAgentSessions() {
+  try {
+    return (await invoke("agent_sessions")) || [];
+  } catch (error) {
+    console.error("[launcher] agent_sessions failed", error);
+    return [];
+  }
+}
+
+function filterAgentSessions(sessions, filter) {
+  const needle = filter.toLowerCase();
+  if (!needle) return sessions;
+  return sessions.filter((session) => `${session.agentLabel}\n${session.projectLabel}`.toLowerCase().includes(needle));
+}
+
+/** "2 min ago" from an RFC 3339 timestamp, as the backend serialises it. */
+function agoText(stamp) {
+  const millis = new Date(stamp).getTime();
+  if (Number.isNaN(millis)) return "";
+  const minutes = Math.floor(Math.max(0, Date.now() - millis) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.floor(hours / 24)} d ago`;
+}
+
+function agentSessionRow(session) {
+  return {
+    id: `session:${session.agent}:${session.sessionId}`,
+    kind: "agent_session",
+    section: "Sessions",
+    title: `${session.agentLabel} — ${session.projectLabel}`,
+    subtitle: `${STATUS[session.state] || session.state} · ${agoText(session.lastEventAt)}`,
+    target: session.sessionId,
+    agent: session.agent,
+    state: session.state,
+  };
+}
+
+/** `#` lists agent sessions, found by agent or project name. It never
+ * reaches launcher_search. */
+async function showAgentSessionList(filter, current) {
+  const sessions = await listAgentSessions();
+  if (current !== generation) return;
+  results = filterAgentSessions(sessions, filter).map(agentSessionRow);
+  selectedIndex = 0;
+  landed = current;
+  render();
+}
+
+/** Keeps the `#` list current while sessions change underneath it. */
+function refreshAgentSessionRows() {
+  const query = el.query.value.trim();
+  if (view !== "results" || landed !== generation || !query.startsWith(SESSIONS_PREFIX)) return;
+  const current = generation;
+  listAgentSessions().then((sessions) => {
+    if (current !== generation) return;
+    const filter = el.query.value.trim().slice(SESSIONS_PREFIX.length).trim();
+    replaceRows(filterAgentSessions(sessions, filter).map(agentSessionRow));
+  });
+}
+
+/** Return on a session: the launcher hides, then the session's window or
+ * terminal is brought forward. */
+function viewAgentSession(result) {
+  hide();
+  invoke("agent_session_view", { agent: result.agent, sessionId: result.target }).catch((error) =>
+    console.error("[launcher] agent_session_view failed", error),
+  );
 }
 
 /** Updates a running task's row in place as its output arrives, without
@@ -1545,6 +1649,7 @@ listen("launcher://dismiss", () => {
 }).catch(() => {});
 listen("tasks://changed", (event) => taskChanged(event.payload)).catch(() => {});
 listen("tasks://log", (event) => taskLogged(event.payload)).catch(() => {});
+listen("agents://sessions", () => refreshAgentSessionRows()).catch(() => {});
 
 window.addEventListener("focus", () => {
   if (el.panel.dataset.state !== "leaving") open();

@@ -412,13 +412,20 @@ body {
   background: var(--ink-muted);
 }
 
-.status[data-status="running"] .status-dot {
+.status[data-status="running"] .status-dot,
+.status[data-status="working"] .status-dot {
   background: var(--brand);
   box-shadow: 0 0 0 1px var(--brand-pressed) inset;
 }
 
-.status[data-status="succeeded"] .status-dot {
+.status[data-status="succeeded"] .status-dot,
+.status[data-status="idle"] .status-dot {
   background: var(--success);
+}
+
+/* A session waiting on you is the one that asks for attention. */
+.status[data-status="waiting"] .status-dot {
+  background: var(--warning);
 }
 
 .status[data-status="failed"] .status-dot {
