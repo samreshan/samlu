@@ -920,8 +920,8 @@ async function activateResult(result, reveal) {
   }
 }
 
-function hide() {
-  invoke("launcher_hide").catch(() => {});
+function hide(blur = false) {
+  invoke("launcher_hide", { blur }).catch(() => {});
 }
 
 /* ------------------------------------------------------------ project keys */
@@ -1643,6 +1643,22 @@ listen("launcher://reopen", () => {
   setState("open");
   el.query.focus();
 }).catch(() => {});
+// Voice dictation started while the launcher was open: the transcript goes in
+// at the caret, replacing any selection, and the search runs as if typed.
+listen("launcher://dictation", (event) => {
+  const text = String(event.payload || "").trim();
+  if (!text) return;
+  const field = el.query;
+  const start = field.selectionStart ?? field.value.length;
+  const end = field.selectionEnd ?? start;
+  const before = field.value.slice(0, start);
+  const gap = before && !/\s$/.test(before) ? " " : "";
+  field.value = before + gap + text + field.value.slice(end);
+  const caret = before.length + gap.length + text.length;
+  field.focus({ preventScroll: true });
+  field.setSelectionRange(caret, caret);
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+}).catch(() => {});
 listen("launcher://dismiss", () => {
   clearTimeout(openTimer);
   setState("leaving");
@@ -1657,7 +1673,7 @@ window.addEventListener("focus", () => {
 window.addEventListener("blur", () => {
   // Modifiers released in another app never reach this window.
   held = { ctrl: false, alt: false, shift: false, cmd: false };
-  if (el.panel.dataset.state === "open") hide();
+  if (el.panel.dataset.state === "open") hide(true);
 });
 
 // The margin around the panel is part of the window but not of the launcher:

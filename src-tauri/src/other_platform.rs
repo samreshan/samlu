@@ -82,6 +82,8 @@ pub fn create_overlay<T>(build: impl FnOnce() -> T) -> T {
 
 pub fn configure_overlay(_window: &WebviewWindow) {}
 
+pub fn raise_overlay(_window: &WebviewWindow) {}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenFrame {
     pub x: f64,

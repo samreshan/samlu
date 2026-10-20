@@ -7,6 +7,7 @@ extern "C" {
     fn samlu_begin_overlay_window();
     fn samlu_end_overlay_window();
     fn samlu_configure_overlay_window(window: *mut std::ffi::c_void);
+    fn samlu_raise_overlay_window(window: *mut std::ffi::c_void);
     fn samlu_present_focusable_overlay_at_cursor(
         window: *mut std::ffi::c_void,
         width: f64,
@@ -188,6 +189,13 @@ pub fn configure_overlay(window: &WebviewWindow) {
     }
 }
 
+/// Keeps an overlay above the others, the launcher included.
+pub fn raise_overlay(window: &WebviewWindow) {
+    if let Ok(pointer) = window.ns_window() {
+        unsafe { samlu_raise_overlay_window(pointer) };
+    }
+}
+
 /// A display frame in AppKit points: bottom-left origin on the primary
 /// display, y growing upward.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -254,6 +262,7 @@ pub fn present_focusable_overlay_at_cursor(
     true
 }
 
+/// Gives an overlay keyboard focus without activating Samlu.
 pub fn focus_overlay(window: &WebviewWindow) {
     if let Ok(pointer) = window.ns_window() {
         unsafe { samlu_focus_overlay(pointer) };

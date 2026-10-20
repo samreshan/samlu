@@ -70,6 +70,28 @@ struct TargetContext {
     /// The display you were working on when the shortcut fired. The capsule
     /// stays on it for the whole session.
     display: Option<crate::platform::ScreenFrame>,
+    /// The launcher was open when the session began. Its search box is where
+    /// the text belongs: the launcher is a nonactivating panel, so the
+    /// frontmost app is whatever was behind it and a pasted ⌘V would land
+    /// there instead.
+    launcher: bool,
+}
+
+/// Where a finished transcript goes. Pure so the choice is testable.
+#[derive(Debug, PartialEq, Eq)]
+enum Destination {
+    Launcher,
+    Configured,
+}
+
+fn destination(began_in_launcher: bool, launcher_open: bool) -> Destination {
+    // The launcher closing mid-session leaves nothing to type into, so the
+    // configured delivery takes over rather than dropping the text.
+    if began_in_launcher && launcher_open {
+        Destination::Launcher
+    } else {
+        Destination::Configured
+    }
 }
 
 enum Runtime {
@@ -118,6 +140,10 @@ struct Capture {
 
 pub struct VoiceState {
     runtime: Mutex<Runtime>,
+    /// A dictation that began in the launcher is under way. The capsule's own
+    /// buttons can take key from the launcher, and its blur must not dismiss
+    /// the panel the text is about to land in.
+    launcher_session: AtomicBool,
     shortcut_down: AtomicBool,
     next_recording_id: AtomicU64,
     presentation_generation: AtomicU64,
@@ -139,6 +165,7 @@ impl VoiceState {
     pub fn new() -> Self {
         Self {
             runtime: Mutex::new(Runtime::Idle),
+            launcher_session: AtomicBool::new(false),
             shortcut_down: AtomicBool::new(false),
             next_recording_id: AtomicU64::new(1),
             presentation_generation: AtomicU64::new(1),
@@ -207,6 +234,9 @@ pub fn voice_preview_init(app: &AppHandle) -> Result<(), String> {
     crate::platform::create_overlay(|| builder.build())
         .map(|window| {
             crate::platform::configure_overlay(&window);
+            // Above the launcher too, so dictating into it never puts the
+            // capsule behind the panel it is dictating into.
+            crate::platform::raise_overlay(&window);
         })
         .map_err(|error| error.to_string())
 }
@@ -679,6 +709,9 @@ pub fn voice_pressed_at(app: &AppHandle, mode: Mode, pressed_at: Instant) {
                 log::info!("[voice] discarding failed dictation for a new recording");
             }
             let target = capture_target(app);
+            state
+                .launcher_session
+                .store(target.launcher, Ordering::Release);
             state.toggle_recording.store(false, Ordering::Relaxed);
             *runtime = Runtime::Starting {
                 mode,
@@ -1039,6 +1072,26 @@ async fn deliver(app: AppHandle, produced: Produced, mode: Mode, target: TargetC
     let _ = app.emit_to(crate::onboarding::LABEL, "voice://result", text.clone());
     let delivery = app.state::<Arc<VoiceConfig>>().delivery(mode);
     record_history(&app, &produced, mode, &target, delivery);
+    if destination(target.launcher, crate::launcher::is_open(&app)) == Destination::Launcher {
+        // No review step here: the editor would take keyboard focus and the
+        // launcher dismisses itself on losing it. The text is in the search
+        // box, which is the review.
+        let _ = app.emit_to(
+            crate::launcher::LAUNCHER_LABEL,
+            "launcher://dictation",
+            &text,
+        );
+        *app.state::<Arc<VoiceState>>().runtime.lock().unwrap() = Runtime::Idle;
+        show_success(&app, &target, mode, &success("Added to search"));
+        // Pressing the capsule's Stop can have moved key to it.
+        if let Some(window) = app.get_webview_window(crate::launcher::LAUNCHER_LABEL) {
+            crate::platform::make_overlay_key(&window);
+        }
+        app.state::<Arc<VoiceState>>()
+            .launcher_session
+            .store(false, Ordering::Release);
+        return;
+    }
     match delivery {
         DeliveryBehavior::EditablePreview => {
             let state = app.state::<Arc<VoiceState>>();
@@ -1108,6 +1161,7 @@ pub async fn voice_preview_accept(
     } else {
         text.trim().to_string()
     };
+    release_editor_focus(&app).await;
     match inject_without_blocking(&app, &final_text, &target.app).await {
         Ok(()) => {
             *state.runtime.lock().unwrap() = Runtime::Idle;
@@ -1118,6 +1172,24 @@ pub async fn voice_preview_accept(
         Err(error) => {
             handle_delivery_error(&app, target, final_text, error.clone(), mode);
             Err(error)
+        }
+    }
+}
+
+/// The editor takes keyboard focus without activating Samlu, so the app
+/// dictation began in is still frontmost and never gets re-activated to take
+/// focus back. Hiding the editor is what hands the keyboard to that app
+/// before the paste shortcut is posted.
+async fn release_editor_focus(app: &AppHandle) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    if let Some(window) = app.get_webview_window(PREVIEW_LABEL) {
+        if window.hide().is_ok() {
+            let _ = tauri::async_runtime::spawn_blocking(|| {
+                std::thread::sleep(Duration::from_millis(80));
+            })
+            .await;
         }
     }
 }
@@ -1387,6 +1459,12 @@ pub fn voice_preview_ready(app: AppHandle, state: tauri::State<'_, Arc<VoiceStat
     }
 }
 
+/// Whether a dictation that began in the launcher is still under way.
+pub fn launcher_session_active(app: &AppHandle) -> bool {
+    app.try_state::<Arc<VoiceState>>()
+        .is_some_and(|state| state.launcher_session.load(Ordering::Acquire))
+}
+
 fn hide_preview(app: &AppHandle) {
     let Some(state) = app.try_state::<Arc<VoiceState>>() else {
         if let Some(window) = app.get_webview_window(PREVIEW_LABEL) {
@@ -1394,6 +1472,9 @@ fn hide_preview(app: &AppHandle) {
         }
         return;
     };
+    // Every dictation ends by dismissing the capsule, so this is where a
+    // launcher session stops shielding the panel from blur.
+    state.launcher_session.store(false, Ordering::Release);
     let generation = state
         .presentation_generation
         .fetch_add(1, Ordering::Relaxed)
@@ -1527,12 +1608,13 @@ fn fail(app: &AppHandle, error: &str) {
     });
 }
 
-fn capture_target(_app: &AppHandle) -> TargetContext {
+fn capture_target(app: &AppHandle) -> TargetContext {
     TargetContext {
         // NSWorkspace target capture is permission-independent and preserves
         // the original editor even when Accessibility is granted mid-session.
         app: paste::frontmost_target(),
         display: crate::platform::active_screen_frame(),
+        launcher: crate::launcher::is_open(app),
     }
 }
 
@@ -1767,6 +1849,14 @@ mod tests {
             width: 1920.0,
             height: 1080.0,
         }
+    }
+
+    #[test]
+    fn launcher_session_delivers_to_the_launcher_while_it_is_open() {
+        assert_eq!(destination(true, true), Destination::Launcher);
+        assert_eq!(destination(true, false), Destination::Configured);
+        assert_eq!(destination(false, true), Destination::Configured);
+        assert_eq!(destination(false, false), Destination::Configured);
     }
 
     #[test]

@@ -148,11 +148,20 @@ static void samlu_make_overlay_panel(NSWindow *window) {
   window.styleMask |= NSWindowStyleMaskNonactivatingPanel;
 }
 
+static const void *samluRaisedKey = &samluRaisedKey;
+
+static BOOL samlu_overlay_is_raised(NSWindow *window) {
+  return objc_getAssociatedObject(window, samluRaisedKey) != nil;
+}
+
 static void samlu_apply_overlay_behavior(NSWindow *window) {
   // Status-level windows remain visible above normal and fullscreen app
-  // content without activating Samlu or pulling focus from the editor.
+  // content without activating Samlu or pulling focus from the editor. The
+  // voice popup sits one tier higher: the launcher is key and re-ordered
+  // front at the same level whenever it is clicked, which would otherwise
+  // bury a capsule that appeared earlier.
   samlu_make_overlay_panel(window);
-  window.level = NSStatusWindowLevel;
+  window.level = samlu_overlay_is_raised(window) ? NSPopUpMenuWindowLevel : NSStatusWindowLevel;
   window.collectionBehavior = samlu_overlay_behavior();
   window.hidesOnDeactivate = NO;
   window.animationBehavior = NSWindowAnimationBehaviorNone;
@@ -361,6 +370,20 @@ void samlu_configure_overlay_window(void *windowPointer) {
   });
 }
 
+/// Marks an overlay to stay above the other overlays, launcher included. The
+/// mark is remembered because every presentation re-applies the overlay
+/// behavior, which would otherwise drop the window back to the shared level.
+void samlu_raise_overlay_window(void *windowPointer) {
+  if (windowPointer == NULL) {
+    return;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow *window = (__bridge NSWindow *)windowPointer;
+    objc_setAssociatedObject(window, samluRaisedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    samlu_apply_overlay_behavior(window);
+  });
+}
+
 /// Shows a keyboard-driven overlay on the active display and makes it key
 /// without activating Samlu, as Spotlight does. The app you were in stays
 /// frontmost, and activating Samlu would switch to the Space where Settings
@@ -433,9 +456,10 @@ void samlu_resize_overlay_keeping_top(void *windowPointer, double height) {
   }
 }
 
-/// Makes an overlay key and activates Samlu. The voice editor needs the
-/// activation: inserting its text re-activates the app dictation began in,
-/// which is what takes keyboard focus back from the overlay before ⌘V.
+/// Makes an overlay key without activating Samlu, as the launcher does.
+/// Activating switched to the Space where Settings was last open, which
+/// pulled the voice editor off a full screen app. Inserting hides the editor
+/// first, which is what hands keyboard focus back before ⌘V.
 void samlu_focus_overlay(void *windowPointer) {
   if (windowPointer == NULL) {
     return;
@@ -445,7 +469,6 @@ void samlu_focus_overlay(void *windowPointer) {
     [window orderOut:nil];
     samlu_apply_overlay_behavior(window);
     [window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
   });
 }
 

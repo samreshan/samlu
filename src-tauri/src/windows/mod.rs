@@ -266,6 +266,9 @@ pub fn create_overlay<T>(build: impl FnOnce() -> T) -> T {
     build()
 }
 
+/// Windows overlays already share the topmost band; nothing to raise.
+pub fn raise_overlay(_window: &WebviewWindow) {}
+
 /// Keeps an overlay above other windows and out of the taskbar and Alt+Tab.
 pub fn configure_overlay(window: &WebviewWindow) {
     let _ = window.set_always_on_top(true);
