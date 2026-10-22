@@ -30,6 +30,13 @@ const RETRY_INTERVAL: chrono::Duration = chrono::Duration::minutes(30);
 /// on a short tick rather than sleeping six hours keeps checks on schedule
 /// across sleep and wake.
 const TICK: Duration = Duration::from_secs(10 * 60);
+/// GitHub serves release files from several addresses, and some networks
+/// silently drop one of them. Bounding the connect, which reqwest shares
+/// across a host's addresses, moves on to the next instead of hanging.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// A stalled transfer fails after this long without data. Not a total
+/// deadline, which would also cap how long the download may take.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Download progress is reported to Settings at most this often.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(80);
 
@@ -432,7 +439,11 @@ pub async fn run_install(app: &AppHandle) {
 
 fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
     #[allow(unused_mut)]
-    let mut builder = app.updater_builder().timeout(Duration::from_secs(30));
+    let mut builder = app.updater_builder().configure_client(|client| {
+        client
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+    });
     // Debug builds can point at a local feed to test the whole flow; release
     // builds only ever read the feed compiled into tauri.conf.json.
     #[cfg(debug_assertions)]
@@ -447,6 +458,9 @@ fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, Strin
 
 fn describe_error(error: tauri_plugin_updater::Error) -> String {
     use tauri_plugin_updater::Error;
+    // The friendly text below hides the cause, and reqwest's own message is
+    // the same for DNS, connect and TLS failures; log the whole chain.
+    log::warn!("updater error: {}", error_chain(&error));
     match error {
         Error::Reqwest(_) | Error::Network(_) => {
             "Samlu couldn't reach the update server. Check your connection and try again."
@@ -461,6 +475,17 @@ fn describe_error(error: tauri_plugin_updater::Error) -> String {
         }
         other => other.to_string(),
     }
+}
+
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
 }
 
 fn notify_once(app: &AppHandle, key: String, title: &str, body: &str) {
