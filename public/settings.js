@@ -10,7 +10,8 @@ let currentPane = "general";
 let prefs = null;
 let updateState = null;
 let voiceSettings = null;
-let voiceModels = { models: [], catalog: [], recommended: "", selected: "" };
+let voiceModels = { models: [], catalog: [], recommended: "", selected: "", preparing: null };
+let preparingTimer = null;
 let voiceHistory = [];
 let snippets = [];
 let projectSettings = { roots: [], excludedPaths: [], projectCount: 0 };
@@ -850,7 +851,7 @@ function setKeyStatus(id, hasKey) {
 }
 
 const ENGINE_DETAILS = {
-  whisper_cpp: T("Whisper runs on this Mac. No account, and audio never leaves it."),
+  whisper_cpp: T("An open model runs on this Mac. No account, and audio never leaves it."),
   apple: "Apple’s on-device speech. Audio never leaves this Mac.",
   groq: "Audio is sent to Groq for transcription.",
   openai: "Audio is sent to OpenAI for transcription.",
@@ -881,7 +882,7 @@ function renderSpeechEngine(settings) {
     setKeyStatus("voice-stt-key-status", stt.hasApiKey);
   }
 
-  const englishOnly = choice === "whisper_cpp" && /\.en[.-]/i.test(stt.model || "");
+  const englishOnly = choice === "whisper_cpp" && stt.englishOnly;
   const note = byId("voice-language-note");
   note.hidden = !englishOnly && choice !== "apple";
   note.textContent = englishOnly
@@ -948,13 +949,15 @@ function renderVoiceModels() {
   const list = byId("voice-model-list");
   list.replaceChildren();
   if (!voiceModels.models.length) {
-    list.append(emptyRow("No Whisper models yet. Download one below, or add a file you already have."));
+    list.append(emptyRow("No local models yet. Download one below, or add a Whisper file you already have."));
   }
   const sourceLabel = { downloaded: "Downloaded", discovered: T("Found on this Mac"), added: "Added" };
   voiceModels.models.forEach((model) => {
     const selected = model.path === voiceModels.selected;
+    const preparing = model.path === voiceModels.preparing;
     const detail = [
       model.missing ? "Missing" : formatBytes(model.bytes),
+      preparing ? "Preparing for first use, a few minutes" : "",
       sourceLabel[model.source],
       model.englishOnly ? "English only" : "",
       selected ? "In use" : "",
@@ -1003,11 +1006,12 @@ function renderVoiceModels() {
   voiceModels.catalog.forEach((entry) => {
     const progress = downloadProgress[entry.id];
     const recommended = entry.id === voiceModels.recommended ? T(" · Recommended for this Mac") : "";
-    let detail = `${formatBytes(entry.bytes)}${recommended}`;
+    const english = entry.englishOnly ? " · English only" : "";
+    let detail = `${formatBytes(entry.bytes)}${english}${recommended}`;
     let actions = [];
     let fraction = null;
     if (entry.downloaded) {
-      detail = `Downloaded${recommended}`;
+      detail = `Downloaded${english}${recommended}`;
     } else if (entry.downloading) {
       fraction = progress?.total ? progress.received / progress.total : 0;
       detail = `Downloading ${Math.floor(fraction * 100)}% of ${formatBytes(entry.bytes)}`;
@@ -1048,6 +1052,11 @@ async function loadVoiceModels() {
   } catch (error) {
     toast(errorMessage(error), true);
   }
+  // A Bark model's first load takes minutes; refresh until it is ready.
+  clearTimeout(preparingTimer);
+  if (voiceModels.preparing && !byId("voice-whisper-fields").hidden) {
+    preparingTimer = setTimeout(loadVoiceModels, 3000);
+  }
 }
 
 async function saveSpeechChoice() {
@@ -1065,7 +1074,7 @@ async function saveSpeechChoice() {
   }
   let model = choice === voiceSettings?.stt.choice ? byId("voice-stt-model").value : "";
   if (choice === "whisper_cpp") {
-    // Keep the current Whisper model, or fall back to the first usable one.
+    // Keep the current local model, or fall back to the first usable one.
     await loadVoiceModels();
     model = voiceModels.selected || voiceModels.models.find((item) => !item.missing)?.path || "";
   }

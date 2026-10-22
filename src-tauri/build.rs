@@ -1,13 +1,16 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Compiles the SpeechAnalyzer bridge with `swiftc` for the target slice.
-/// Speech and Swift concurrency end up weakly linked (the deployment target
-/// is macOS 11), and `/usr/lib/swift` is added as an rpath so macOS 26 finds
-/// `libswift_Concurrency.dylib` at runtime.
+/// Compiles the SpeechAnalyzer and Core ML bridges with `swiftc` for the
+/// target slice. Speech, Core ML's newer API and Swift concurrency end up
+/// weakly linked (the deployment target is macOS 11), and `/usr/lib/swift` is
+/// added as an rpath so macOS 26 finds `libswift_Concurrency.dylib` at
+/// runtime.
 fn build_swift_bridge() {
-    let source = "native/SamluSpeech.swift";
-    println!("cargo:rerun-if-changed={source}");
+    let sources = ["native/SamluSpeech.swift", "native/SamluBark.swift"];
+    for source in sources {
+        println!("cargo:rerun-if-changed={source}");
+    }
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
         "aarch64" => "arm64",
@@ -24,12 +27,15 @@ fn build_swift_bridge() {
         ])
         .args(["-module-name", "SamluSpeech"])
         .args(["-target", &format!("{arch}-apple-macos11.0")])
-        .arg(source)
+        .args(sources)
         .arg("-o")
         .arg(out_dir.join("libsamlu_speech.a"))
         .status()
         .expect("failed to run swiftc (install Xcode 26 or its command line tools)");
-    assert!(status.success(), "swiftc failed to compile {source}");
+    assert!(
+        status.success(),
+        "swiftc failed to compile the Swift bridges"
+    );
 
     let swiftc = Command::new("xcrun")
         .args(["--find", "swiftc"])
@@ -47,6 +53,8 @@ fn build_swift_bridge() {
     println!("cargo:rustc-link-search=native={}", toolchain_lib.display());
     println!("cargo:rustc-link-search=native=/usr/lib/swift");
     println!("cargo:rustc-link-lib=framework=Speech");
+    println!("cargo:rustc-link-lib=framework=CoreML");
+    println!("cargo:rustc-link-lib=framework=Accelerate");
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
 }
 

@@ -1,4 +1,4 @@
-//! Tauri commands for the whisper model library in Voice settings.
+//! Tauri commands for the local model library in Voice settings.
 
 use super::config::{SttEngine, VoiceConfig};
 use super::download::{self, Downloads};
@@ -13,11 +13,11 @@ fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|error| error.to_string())
 }
 
-/// Releases the resident whisper model if it is the one being removed.
+/// Releases the resident local model if it is the one being removed.
 fn unload_if_selected(config: &VoiceConfig, path: &str) {
     let stt = config.stt();
     if stt.engine == SttEngine::WhisperCpp && stt.model == path {
-        super::engines::whisper::unload();
+        super::engines::unload_local();
     }
 }
 
@@ -34,29 +34,33 @@ pub async fn get_voice_models(app: AppHandle) -> Result<serde_json::Value, Strin
             .filter(|model| model.source == ModelSource::Downloaded)
             .map(|model| model.name.as_str())
             .collect();
-        let catalog: Vec<_> = models::CATALOG
-            .iter()
+        let catalog: Vec<_> = models::catalog()
             .map(|entry| {
                 serde_json::json!({
                     "id": entry.id,
                     "label": entry.label,
                     "file": entry.file,
-                    "bytes": entry.bytes,
+                    "kind": entry.kind,
+                    "englishOnly": entry.english_only(),
+                    "bytes": entry.bytes(),
                     "downloaded": downloaded.contains(entry.file),
                     "downloading": downloads.is_active(entry.id),
                 })
             })
             .collect();
-        // A cloud engine's model name is not a whisper file; report no selection.
+        // A cloud engine's model name is not a local model; report no selection.
         let stt = config.stt();
         let selected = if stt.engine == SttEngine::WhisperCpp {
             stt.model
         } else {
             String::new()
         };
+        let preparing =
+            super::engines::bark::loading().map(|path| path.to_string_lossy().into_owned());
         serde_json::json!({
             "models": models,
             "catalog": catalog,
+            "preparing": preparing,
             "recommended": models::recommended_id(),
             "selected": selected,
         })
@@ -71,6 +75,24 @@ pub async fn voice_download_model(app: AppHandle, id: String) -> Result<String, 
     let dir = models::models_dir(&app_data_dir(&app)?);
     let downloads = app.state::<Arc<Downloads>>().inner().clone();
     let path = download::download(&app, entry, &dir, &downloads).await?;
+    if entry.kind == models::ModelKind::Bark {
+        // Core ML's first load takes minutes; do it now rather than at the
+        // first dictation, then keep the model only if it is the one in use.
+        let config = app.state::<Arc<VoiceConfig>>().inner().clone();
+        let prepared = path.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = super::engines::bark::prepare(&prepared) {
+                log::warn!("[voice] Underdog Bark could not be prepared: {error}");
+            }
+            let stt = config.stt();
+            let in_use = if stt.engine == SttEngine::WhisperCpp {
+                stt.model
+            } else {
+                String::new()
+            };
+            super::engines::bark::keep_only(Path::new(&in_use));
+        });
+    }
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -100,6 +122,7 @@ pub async fn voice_add_model(app: AppHandle) -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn voice_remove_model(path: String, config: tauri::State<'_, Arc<VoiceConfig>>) {
     unload_if_selected(&config, &path);
+    super::engines::bark::release(Path::new(&path));
     config.remove_model(&path);
 }
 
@@ -110,5 +133,6 @@ pub fn voice_delete_model(
     config: tauri::State<'_, Arc<VoiceConfig>>,
 ) -> Result<(), String> {
     unload_if_selected(&config, &path);
+    super::engines::bark::release(Path::new(&path));
     download::delete_downloaded(&models::models_dir(&app_data_dir(&app)?), Path::new(&path))
 }

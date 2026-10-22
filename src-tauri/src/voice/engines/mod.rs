@@ -3,6 +3,7 @@
 //! them identically. Local engines only produce permanent errors.
 
 pub mod apple;
+pub mod bark;
 mod deepgram;
 mod elevenlabs;
 mod openai_compat;
@@ -54,8 +55,12 @@ impl SttOptions {
     }
 }
 
-/// whisper.cpp English-only models are named `*.en.bin` or `*.en-<quant>.bin`.
+/// Underdog Bark understands only English. whisper.cpp English-only models
+/// are named `*.en.bin` or `*.en-<quant>.bin`.
 pub fn is_english_only(model: &str) -> bool {
+    if super::models::is_bark_dir(Path::new(model)) {
+        return true;
+    }
     let name = Path::new(model)
         .file_name()
         .and_then(|name| name.to_str())
@@ -73,11 +78,42 @@ pub fn effective_language(language: &str, model: &str) -> Option<String> {
     (!language.is_empty() && language != "auto").then(|| language.to_string())
 }
 
+/// The local engine runs whisper.cpp files and Underdog Bark folders.
+fn is_bark(model: &str) -> bool {
+    super::models::is_bark_dir(Path::new(model.trim()))
+}
+
+/// Loads the selected local model in the background.
+pub fn preload_local(model: &str) {
+    let path = std::path::PathBuf::from(model.trim());
+    if is_bark(model) {
+        bark::preload(path);
+    } else {
+        whisper::preload(path);
+    }
+}
+
+/// Releases whichever local model is resident.
+pub fn unload_local() {
+    whisper::unload();
+    bark::unload();
+}
+
+/// Releases local models other than `model`, the one now in use. A Bark
+/// load already under way for `model` carries on.
+pub fn unload_local_except(model: &str) {
+    whisper::unload();
+    bark::keep_only(Path::new(model.trim()));
+}
+
 pub async fn transcribe(audio: &PreparedAudio, opts: &SttOptions) -> Result<String, ProviderError> {
     match opts.settings.engine {
         SttEngine::OpenaiCompat => openai_compat::transcribe(audio, opts).await,
         SttEngine::Deepgram => deepgram::transcribe(audio, opts).await,
         SttEngine::Elevenlabs => elevenlabs::transcribe(audio, opts).await,
+        SttEngine::WhisperCpp if is_bark(&opts.settings.model) => {
+            bark::transcribe(audio, opts).await
+        }
         SttEngine::WhisperCpp => whisper::transcribe(audio, opts).await,
         SttEngine::Apple => apple::transcribe(audio, opts).await,
     }
@@ -94,6 +130,25 @@ mod tests {
         assert!(!is_english_only("/models/ggml-large-v3-turbo.bin"));
         assert!(!is_english_only("whisper-large-v3-turbo"));
         assert!(!is_english_only("/Users/en.person/ggml-base.bin"));
+    }
+
+    #[test]
+    fn bark_folders_are_english_only() {
+        let dir = std::env::temp_dir().join(format!("samlu-bark-en-{}", std::process::id()));
+        for file in [
+            "BarkEncoder.mlpackage/Manifest.json",
+            "decoder.npz",
+            "vocab.json",
+        ] {
+            let path = dir.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"{}").unwrap();
+        }
+        let model = dir.to_string_lossy().into_owned();
+        assert!(is_english_only(&model));
+        assert!(is_bark(&model));
+        assert_eq!(effective_language("de", &model).as_deref(), Some("en"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

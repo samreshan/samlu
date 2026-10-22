@@ -293,11 +293,11 @@ pub fn run() {
 
             let voice_config = Arc::new(voice::config::VoiceConfig::load(&app_data_dir));
             let voice_hotkey = voice_config.hotkey();
+            voice::engines_init(&voice_config);
             app.manage(voice_config);
             app.manage(Arc::new(voice::history::VoiceHistory::load(&app_data_dir)));
             app.manage(Arc::new(voice::VoiceState::new()));
             app.manage(Arc::new(voice::Downloads::new()));
-            voice::engines_init();
             if let Err(error) = voice::voice_preview_init(app.handle()) {
                 log::error!("failed to create voice preview window: {error}");
             }
