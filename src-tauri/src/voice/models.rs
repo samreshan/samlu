@@ -1,5 +1,7 @@
-//! whisper.cpp models: the download catalog, file validation, and the merged
-//! list of downloaded, discovered, and hand-added models.
+//! Local speech models: the download catalog, file validation, and the
+//! merged list of downloaded, discovered, and hand-added models. A whisper.cpp
+//! model is one GGML file; an Underdog Bark model is a folder holding a Core
+//! ML encoder, its decoder weights and its vocabulary.
 
 use serde::Serialize;
 use std::collections::HashSet;
@@ -16,64 +18,191 @@ const SCAN_DEPTH: usize = 6;
 /// `ggml` stored little-endian, as whisper.cpp reads it.
 const GGML_MAGIC: u32 = 0x6767_6d6c;
 const HEADER_BYTES: usize = 44;
+/// The files that make a folder an Underdog Bark model.
+const BARK_FILES: [&str; 3] = [
+    "BarkEncoder.mlpackage/Manifest.json",
+    "decoder.npz",
+    "vocab.json",
+];
 
-pub struct CatalogEntry {
-    pub id: &'static str,
-    pub file: &'static str,
-    pub label: &'static str,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKind {
+    Whisper,
+    Bark,
+}
+
+/// One file of a catalog model: where it lives in the Hugging Face repo and
+/// where it goes inside Samlu's models folder.
+pub struct CatalogFile {
+    pub remote: &'static str,
+    pub local: &'static str,
     pub bytes: u64,
     pub sha256: &'static str,
 }
 
-/// Official `ggerganov/whisper.cpp` GGML files. Sizes and SHA-256 values are
-/// the Hugging Face LFS metadata for each file.
-pub const CATALOG: [CatalogEntry; 5] = [
+pub struct CatalogEntry {
+    pub id: &'static str,
+    /// The model's name in the models folder: a file for whisper, a folder
+    /// for Bark.
+    pub file: &'static str,
+    pub label: &'static str,
+    pub kind: ModelKind,
+    /// The Hugging Face repo and revision the files come from.
+    repo: &'static str,
+    pub files: &'static [CatalogFile],
+}
+
+impl CatalogEntry {
+    pub fn bytes(&self) -> u64 {
+        self.files.iter().map(|file| file.bytes).sum()
+    }
+
+    pub fn english_only(&self) -> bool {
+        self.kind == ModelKind::Bark || super::engines::is_english_only(self.file)
+    }
+}
+
+const WHISPER_REPO: &str = "ggerganov/whisper.cpp/resolve/main";
+
+const fn whisper(
+    id: &'static str,
+    label: &'static str,
+    files: &'static [CatalogFile],
+) -> CatalogEntry {
     CatalogEntry {
-        id: "base",
-        file: "ggml-base.bin",
-        label: "Base · fastest",
-        bytes: 147_951_465,
-        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
-    },
+        id,
+        file: files[0].local,
+        label,
+        kind: ModelKind::Whisper,
+        repo: WHISPER_REPO,
+        files,
+    }
+}
+
+/// Official `ggerganov/whisper.cpp` GGML files, and Underdog Bark 3.0's Core
+/// ML (Neural Engine) package pinned to one revision. Sizes and SHA-256
+/// values are the Hugging Face LFS metadata for each file, or the hash of the
+/// file at that revision for small non-LFS files.
+pub const CATALOG: [CatalogEntry; 6] = [
+    whisper(
+        "base",
+        "Whisper Base · fastest",
+        &[CatalogFile {
+            remote: "ggml-base.bin",
+            local: "ggml-base.bin",
+            bytes: 147_951_465,
+            sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+        }],
+    ),
+    whisper(
+        "small",
+        "Whisper Small · balanced",
+        &[CatalogFile {
+            remote: "ggml-small.bin",
+            local: "ggml-small.bin",
+            bytes: 487_601_967,
+            sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        }],
+    ),
+    whisper(
+        "medium",
+        "Whisper Medium · accurate, slower",
+        &[CatalogFile {
+            remote: "ggml-medium.bin",
+            local: "ggml-medium.bin",
+            bytes: 1_533_763_059,
+            sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+        }],
+    ),
+    whisper(
+        "large-v3-turbo",
+        "Whisper Large v3 Turbo · best",
+        &[CatalogFile {
+            remote: "ggml-large-v3-turbo.bin",
+            local: "ggml-large-v3-turbo.bin",
+            bytes: 1_624_555_275,
+            sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+        }],
+    ),
+    whisper(
+        "large-v3-turbo-q5_0",
+        "Whisper Large v3 Turbo (compact) · best for size",
+        &[CatalogFile {
+            remote: "ggml-large-v3-turbo-q5_0.bin",
+            local: "ggml-large-v3-turbo-q5_0.bin",
+            bytes: 574_041_195,
+            sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        }],
+    ),
     CatalogEntry {
-        id: "small",
-        file: "ggml-small.bin",
-        label: "Small · balanced",
-        bytes: 487_601_967,
-        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
-    },
-    CatalogEntry {
-        id: "medium",
-        file: "ggml-medium.bin",
-        label: "Medium · accurate, slower",
-        bytes: 1_533_763_059,
-        sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
-    },
-    CatalogEntry {
-        id: "large-v3-turbo",
-        file: "ggml-large-v3-turbo.bin",
-        label: "Large v3 Turbo · best",
-        bytes: 1_624_555_275,
-        sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
-    },
-    CatalogEntry {
-        id: "large-v3-turbo-q5_0",
-        file: "ggml-large-v3-turbo-q5_0.bin",
-        label: "Large v3 Turbo (compact) · best for size",
-        bytes: 574_041_195,
-        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        id: "underdog-bark-3.0",
+        file: "Underdog-Bark-3.0",
+        label: "Underdog Bark 3.0 · English, most accurate for size",
+        kind: ModelKind::Bark,
+        repo: "ConwayResearch/Underdog-Bark-3.0/resolve/85db2ad18ab41e534a222ee253c29191d77ed919",
+        files: &[
+            CatalogFile {
+                remote: "coreml/ane/BarkEncoder.mlpackage/Manifest.json",
+                local: "BarkEncoder.mlpackage/Manifest.json",
+                bytes: 617,
+                sha256: "d37c121561b99da49b9bf1e28c00152c14c56a943815fa83008ee0691b8f1149",
+            },
+            CatalogFile {
+                remote: "coreml/ane/BarkEncoder.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+                local: "BarkEncoder.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+                bytes: 1_784_701,
+                sha256: "7c3f1c1612ba21bcc4d8efff1b32154b39cb3e1e2f10020117793acc5c96fcdf",
+            },
+            CatalogFile {
+                remote: "coreml/ane/BarkEncoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+                local: "BarkEncoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+                bytes: 189_133_632,
+                sha256: "98979e5dd731486ddfb2c312f80a3038205c058aac9fe0f403ba26e1a158d385",
+            },
+            CatalogFile {
+                remote: "coreml/ane/decoder.npz",
+                local: "decoder.npz",
+                bytes: 11_168_286,
+                sha256: "1ce79071f54c3dcec9aa9bb1d488486766f1fdbb3fd988b776da3f4da8024665",
+            },
+            CatalogFile {
+                remote: "coreml/ane/vocab.json",
+                local: "vocab.json",
+                bytes: 115_878,
+                sha256: "eee86951e9f74921342fdc60ba26711eb70f7188e8784d98d2aecfc525b72270",
+            },
+            // CC-BY-4.0 attribution travels with the model.
+            CatalogFile {
+                remote: "coreml/NOTICE",
+                local: "NOTICE",
+                bytes: 603,
+                sha256: "7760825e72004ccf97f7a8b63a75e2890105a7cae8ca875b70d4df78cff9abcd",
+            },
+        ],
     },
 ];
 
-pub fn catalog_entry(id: &str) -> Option<&'static CatalogEntry> {
-    CATALOG.iter().find(|entry| entry.id == id)
+/// Whether this machine can run a kind of model. Bark's Core ML package is
+/// built for Apple silicon and needs macOS 15.
+pub fn kind_supported(kind: ModelKind) -> bool {
+    match kind {
+        ModelKind::Whisper => true,
+        ModelKind::Bark => cfg!(target_arch = "aarch64") && super::engines::bark::available(),
+    }
 }
 
-pub fn download_url(entry: &CatalogEntry) -> String {
-    format!(
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}",
-        entry.file
-    )
+/// The catalog this machine can run.
+pub fn catalog() -> impl Iterator<Item = &'static CatalogEntry> {
+    CATALOG.iter().filter(|entry| kind_supported(entry.kind))
+}
+
+pub fn catalog_entry(id: &str) -> Option<&'static CatalogEntry> {
+    catalog().find(|entry| entry.id == id)
+}
+
+pub fn download_url(entry: &CatalogEntry, file: &CatalogFile) -> String {
+    format!("https://huggingface.co/{}/{}", entry.repo, file.remote)
 }
 
 /// Each slice of the universal binary answers for its own architecture.
@@ -120,6 +249,49 @@ pub fn inspect(path: &Path) -> Result<ModelHeader, String> {
     parse_header(&header)
 }
 
+/// A folder holding everything Bark loads. A download still in progress
+/// (`*.part`) is not one yet.
+pub fn is_bark_dir(path: &Path) -> bool {
+    path.is_dir()
+        && !path
+            .extension()
+            .is_some_and(|extension| extension == "part")
+        && BARK_FILES.iter().all(|file| path.join(file).is_file())
+}
+
+/// What kind of local model `path` is, or why it is not one.
+pub fn kind(path: &Path) -> Result<ModelKind, String> {
+    if path.is_dir() {
+        return if is_bark_dir(path) {
+            Ok(ModelKind::Bark)
+        } else {
+            Err(MODEL_NOT_FOUND.to_string())
+        };
+    }
+    inspect(path).map(|_| ModelKind::Whisper)
+}
+
+/// Whether `path` is a model this machine can run now.
+pub fn usable(path: &Path) -> bool {
+    kind(path).is_ok_and(kind_supported)
+}
+
+fn size_on_disk(path: &Path) -> u64 {
+    if path.is_dir() {
+        walkdir::WalkDir::new(path)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.metadata().ok())
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.len())
+            .sum()
+    } else {
+        std::fs::metadata(path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelSource {
@@ -134,6 +306,7 @@ pub struct ModelInfo {
     pub path: String,
     pub name: String,
     pub source: ModelSource,
+    pub kind: ModelKind,
     pub bytes: u64,
     pub missing: bool,
     pub english_only: bool,
@@ -171,7 +344,9 @@ fn scan_with_min(root: &Path, min_bytes: u64) -> Vec<PathBuf> {
                 continue;
             };
             if metadata.is_dir() {
-                if depth < SCAN_DEPTH {
+                if is_bark_dir(&path) {
+                    found.push(path);
+                } else if depth < SCAN_DEPTH {
                     pending.push((path, depth + 1));
                 }
                 continue;
@@ -191,15 +366,20 @@ fn info(path: &Path, source: ModelSource, missing: bool) -> ModelInfo {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let kind = if is_bark_dir(path) {
+        ModelKind::Bark
+    } else {
+        ModelKind::Whisper
+    };
     ModelInfo {
+        english_only: kind == ModelKind::Bark || super::engines::is_english_only(&name),
         path: path.to_string_lossy().into_owned(),
-        english_only: super::engines::is_english_only(&name),
         name,
         source,
-        bytes: std::fs::metadata(path)
-            .map(|metadata| metadata.len())
-            .unwrap_or(0),
-        missing,
+        kind,
+        bytes: size_on_disk(path),
+        // A Bark model on a Mac that cannot run it is listed but not usable.
+        missing: missing || !kind_supported(kind),
     }
 }
 
@@ -221,7 +401,7 @@ fn list_with_min(
         push(&path, ModelSource::Downloaded, false);
     }
     for path in added.iter().map(PathBuf::from) {
-        let missing = inspect(&path).is_err();
+        let missing = kind(&path).is_err();
         push(&path, ModelSource::Added, missing);
     }
     for root in discovery_roots(home) {
@@ -317,14 +497,87 @@ mod tests {
         assert!(models[1].missing);
     }
 
+    fn write_bark(dir: &Path) {
+        for file in BARK_FILES {
+            let path = dir.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"{}").unwrap();
+        }
+    }
+
     #[test]
     fn catalog_ids_resolve_and_recommendation_exists() {
         assert!(catalog_entry(recommended_id()).is_some());
         let entry = catalog_entry("large-v3-turbo-q5_0").unwrap();
         assert_eq!(
-            download_url(entry),
+            download_url(entry, &entry.files[0]),
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
         );
+        assert_eq!(entry.file, "ggml-large-v3-turbo-q5_0.bin");
+        assert!(!entry.english_only());
+    }
+
+    #[test]
+    fn bark_is_one_pinned_english_only_folder() {
+        let bark = CATALOG
+            .iter()
+            .find(|entry| entry.kind == ModelKind::Bark)
+            .unwrap();
+        assert!(bark.english_only());
+        assert_eq!(bark.bytes(), 202_203_717);
+        assert!(
+            bark.repo.contains("/resolve/85db2ad"),
+            "downloads are pinned"
+        );
+        assert_eq!(
+            download_url(bark, &bark.files[3]),
+            "https://huggingface.co/ConwayResearch/Underdog-Bark-3.0/resolve/85db2ad18ab41e534a222ee253c29191d77ed919/coreml/ane/decoder.npz"
+        );
+        for required in BARK_FILES {
+            assert!(
+                bark.files.iter().any(|file| file.local == required),
+                "{required}"
+            );
+        }
+        assert!(bark.files.iter().all(|file| file.sha256.len() == 64));
+        // The catalog only offers Bark where Core ML can run it.
+        assert_eq!(
+            catalog_entry(bark.id).is_some(),
+            kind_supported(ModelKind::Bark)
+        );
+        if cfg!(not(target_os = "macos")) {
+            assert!(!kind_supported(ModelKind::Bark));
+        }
+    }
+
+    #[test]
+    fn bark_folders_are_found_whole_and_partial_downloads_skipped() {
+        let root = temp_dir("bark-scan");
+        let bark = root.join("Underdog-Bark-3.0");
+        write_bark(&bark);
+        write_bark(&root.join("Underdog-Bark-3.0.part"));
+        // Missing its vocabulary: not a model.
+        write_bark(&root.join("broken"));
+        std::fs::remove_file(root.join("broken/vocab.json")).unwrap();
+        assert!(is_bark_dir(&bark));
+        assert_eq!(kind(&bark).unwrap(), ModelKind::Bark);
+        assert_eq!(kind(&root.join("broken")).unwrap_err(), MODEL_NOT_FOUND);
+        assert_eq!(scan_with_min(&root, 0), vec![bark.clone()]);
+    }
+
+    #[test]
+    fn listed_bark_models_are_english_only_and_sized_as_a_folder() {
+        let data = temp_dir("bark-list-data");
+        let home = temp_dir("bark-list-home");
+        let bark = models_dir(&data).join("Underdog-Bark-3.0");
+        write_bark(&bark);
+        let models = list_with_min(&data, &home, &[], 0);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].kind, ModelKind::Bark);
+        assert!(models[0].english_only);
+        assert_eq!(models[0].bytes, 6);
+        assert_eq!(models[0].name, "Underdog-Bark-3.0");
+        assert_eq!(models[0].missing, !kind_supported(ModelKind::Bark));
     }
 
     #[test]

@@ -269,14 +269,21 @@ pub fn voice_preview_init(app: &AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-pub fn engines_init() {
+pub fn engines_init(config: &VoiceConfig) {
     engines::whisper::init();
+    // Bark stays resident; load it now so dictation never waits on Core ML.
+    let stt = config.stt();
+    if stt.engine == config::SttEngine::WhisperCpp
+        && models::is_bark_dir(std::path::Path::new(&stt.model))
+    {
+        engines::preload_local(&stt.model);
+    }
 }
 
-/// Releases the resident whisper model before process exit; ggml-metal
+/// Releases the resident local model before process exit; ggml-metal
 /// asserts if a context is still alive during its static teardown.
 pub fn engines_shutdown() {
-    engines::whisper::unload();
+    engines::unload_local();
 }
 
 pub fn apple_available() -> bool {
@@ -460,6 +467,8 @@ pub fn get_voice_settings(config: tauri::State<'_, Arc<VoiceConfig>>) -> serde_j
             "language": stt.language,
             "needsApiKey": stt.engine.needs_api_key(),
             "hasApiKey": stt.engine.needs_api_key() && config.has_api_key("transcription"),
+            "englishOnly": stt.engine == config::SttEngine::WhisperCpp
+                && engines::is_english_only(&stt.model),
         },
         "appleAvailable": engines::apple::available(),
         "transformation": {
@@ -502,7 +511,14 @@ pub fn set_voice_stt(
     let current = config.stt();
     let next = stt_from_choice(&choice, &base_url, &model, &current)?;
     if current.engine == config::SttEngine::WhisperCpp && current.model != next.model {
-        engines::whisper::unload();
+        engines::unload_local_except(&next.model);
+    }
+    let prepare = next.engine == config::SttEngine::WhisperCpp
+        && models::is_bark_dir(std::path::Path::new(&next.model));
+    if prepare {
+        // Core ML's first load takes minutes; start it before the first
+        // dictation needs it.
+        engines::preload_local(&next.model);
     }
     config.set_stt(next);
     Ok(())
@@ -750,7 +766,7 @@ pub fn voice_pressed_at(app: &AppHandle, mode: Mode, pressed_at: Instant) {
             drop(runtime);
             let stt = app.state::<Arc<VoiceConfig>>().stt();
             if stt.engine == config::SttEngine::WhisperCpp {
-                engines::whisper::preload(std::path::PathBuf::from(stt.model));
+                engines::preload_local(&stt.model);
             }
             show_status(
                 app,

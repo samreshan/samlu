@@ -88,8 +88,9 @@ permission at all.
 - Hold `Option+V`, speak, and release to process.
 - Add `Shift` for a concise summary.
 - Add `Command` for a detailed coding-agent prompt.
-- Transcribe on this Mac with Whisper (whisper.cpp, Metal) or Apple's
-  on-device speech (macOS 26+), with no account and no network.
+- Transcribe on this Mac with Whisper (whisper.cpp, Metal), Underdog Bark 3.0
+  for English (Core ML on the Neural Engine, Apple silicon with macOS 15+), or
+  Apple's on-device speech (macOS 26+), with no account and no network.
 - Use Whisper models you already have (MacWhisper, Superwhisper, Hugging Face
   cache, or any `.bin` file), or download one from Settings.
 - Or use a cloud provider: Groq, OpenAI, Deepgram, ElevenLabs, or any
@@ -203,7 +204,7 @@ Everything above works on Windows 10 and 11 (64-bit). What differs:
 | Global shortcuts | Option and Command (`Option+V`, `Option+H`) | Alt and Win (`Alt+V`, `Alt+H`) |
 | Approve and deny shortcuts | `Option+Command+Y` and `Option+Command+N` | `Ctrl+Alt+Y` and `Ctrl+Alt+N` |
 | Shortcuts in Samlu's windows | Command | Ctrl: Ctrl-Enter shows a project in File Explorer, Ctrl-K lists its actions |
-| On-device speech | Whisper on Metal, Apple speech (macOS 26+) | Whisper on the CPU |
+| On-device speech | Whisper on Metal, Underdog Bark (Apple silicon, macOS 15+), Apple speech (macOS 26+) | Whisper on the CPU |
 | API keys | Keychain | Windows Credential Manager, under the same names |
 | Putting the result back | Accessibility permission | Ctrl+V into the window you started in; no permission |
 | Modifier-only shortcuts | Accessibility permission | No permission needed |

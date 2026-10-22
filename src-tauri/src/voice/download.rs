@@ -1,7 +1,9 @@
 //! Streams catalog models to `<name>.part`, verifies SHA-256, then renames.
-//! Only a verified file ever appears under its final name.
+//! Only a verified file ever appears under its final name. A model made of
+//! several files (Bark) downloads into a `<name>.part` folder, every file is
+//! verified, and the folder is renamed once all of them are.
 
-use super::models::{self, CatalogEntry};
+use super::models::{self, CatalogEntry, CatalogFile, ModelKind};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -86,7 +88,25 @@ pub fn delete_downloaded(models_dir: &Path, path: &Path) -> Result<(), String> {
     if file.parent() != Some(dir.as_path()) {
         return Err("Only models Samlu downloaded can be deleted.".to_string());
     }
-    std::fs::remove_file(&file).map_err(|error| format!("Could not delete the model: {error}"))
+    let removed = if file.is_dir() {
+        std::fs::remove_dir_all(&file)
+    } else {
+        std::fs::remove_file(&file)
+    };
+    removed.map_err(|error| format!("Could not delete the model: {error}"))
+}
+
+/// Moves a fully verified staging folder into place, replacing any older
+/// copy.
+pub fn finish_folder(staging: &Path, dest: &Path) -> Result<(), String> {
+    if dest.exists() {
+        std::fs::remove_dir_all(dest)
+            .map_err(|error| format!("Could not replace the model: {error}"))?;
+    }
+    std::fs::rename(staging, dest).map_err(|error| {
+        let _ = std::fs::remove_dir_all(staging);
+        format!("Could not save the model: {error}")
+    })
 }
 
 /// No overall timeout: large models take minutes. A stalled connection still
@@ -112,12 +132,27 @@ pub async fn download(
     downloads: &Downloads,
 ) -> Result<PathBuf, String> {
     let cancel = downloads.begin(entry.id)?;
-    let part = dir.join(format!("{}.part", entry.file));
     let dest = dir.join(entry.file);
-    let result = stream_to(app, entry, &part, &cancel).await;
+    let result = match entry.kind {
+        ModelKind::Whisper => download_file(app, entry, dir, &dest, &cancel).await,
+        ModelKind::Bark => download_folder(app, entry, dir, &dest, &cancel).await,
+    };
     downloads.end(entry.id);
-    match result {
-        Ok(actual) => finish(&part, &dest, entry.sha256, &actual).map(|()| dest),
+    result.map(|()| dest)
+}
+
+async fn download_file(
+    app: &AppHandle,
+    entry: &CatalogEntry,
+    dir: &Path,
+    dest: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let file = &entry.files[0];
+    let part = dir.join(format!("{}.part", entry.file));
+    let mut progress = Tracker::new(app, entry.id, entry.bytes());
+    match stream_to(entry, file, &part, &mut progress, cancel).await {
+        Ok(actual) => finish(&part, dest, file.sha256, &actual),
         Err(error) => {
             let _ = std::fs::remove_file(&part);
             Err(error)
@@ -125,29 +160,92 @@ pub async fn download(
     }
 }
 
-/// Writes the response to `part` and returns its SHA-256.
-async fn stream_to(
+async fn download_folder(
     app: &AppHandle,
     entry: &CatalogEntry,
+    dir: &Path,
+    dest: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let staging = dir.join(format!("{}.part", entry.file));
+    let _ = std::fs::remove_dir_all(&staging);
+    let mut progress = Tracker::new(app, entry.id, entry.bytes());
+    for file in entry.files {
+        let path = staging.join(file.local);
+        let verified = match stream_to(entry, file, &path, &mut progress, cancel).await {
+            Ok(actual) if file.sha256.eq_ignore_ascii_case(&actual) => Ok(()),
+            Ok(_) => Err("The download was corrupted (checksum mismatch). Try again.".to_string()),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = verified {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    }
+    finish_folder(&staging, dest)
+}
+
+/// Progress across every file of one model, emitted at most every
+/// `PROGRESS_INTERVAL`.
+struct Tracker<'a> {
+    app: &'a AppHandle,
+    id: &'static str,
+    received: u64,
+    total: u64,
+    last_emit: Option<Instant>,
+}
+
+impl<'a> Tracker<'a> {
+    fn new(app: &'a AppHandle, id: &'static str, total: u64) -> Self {
+        Self {
+            app,
+            id,
+            received: 0,
+            total,
+            last_emit: None,
+        }
+    }
+
+    fn advance(&mut self, bytes: u64) {
+        self.received += bytes;
+        if self
+            .last_emit
+            .is_none_or(|at| at.elapsed() >= PROGRESS_INTERVAL)
+        {
+            self.last_emit = Some(Instant::now());
+            let _ = self.app.emit(
+                PROGRESS_EVENT,
+                Progress {
+                    id: self.id.to_string(),
+                    received: self.received,
+                    total: self.total.max(self.received),
+                },
+            );
+        }
+    }
+}
+
+/// Writes one file's response to `part` and returns its SHA-256.
+async fn stream_to(
+    entry: &CatalogEntry,
+    source: &CatalogFile,
     part: &Path,
+    progress: &mut Tracker<'_>,
     cancel: &AtomicBool,
 ) -> Result<String, String> {
     if let Some(parent) = part.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let mut response = client()?
-        .get(models::download_url(entry))
+        .get(models::download_url(entry, source))
         .send()
         .await
         .map_err(|error| format!("Download failed: {error}"))?;
     if !response.status().is_success() {
         return Err(format!("Download failed ({}).", response.status()));
     }
-    let total = response.content_length().unwrap_or(entry.bytes);
     let mut file = std::fs::File::create(part).map_err(|error| error.to_string())?;
     let mut hasher = Sha256::new();
-    let mut received = 0_u64;
-    let mut last_emit: Option<Instant> = None;
     loop {
         if cancel.load(Ordering::Acquire) {
             return Err(CANCELLED.to_string());
@@ -162,18 +260,7 @@ async fn stream_to(
         hasher.update(&chunk);
         file.write_all(&chunk)
             .map_err(|error| format!("Could not write the model: {error}"))?;
-        received += chunk.len() as u64;
-        if last_emit.is_none_or(|at| at.elapsed() >= PROGRESS_INTERVAL) {
-            last_emit = Some(Instant::now());
-            let _ = app.emit(
-                PROGRESS_EVENT,
-                Progress {
-                    id: entry.id.to_string(),
-                    received,
-                    total,
-                },
-            );
-        }
+        progress.advance(chunk.len() as u64);
     }
     file.sync_all().map_err(|error| error.to_string())?;
     Ok(hex(&hasher.finalize()))
@@ -219,6 +306,21 @@ mod tests {
     }
 
     #[test]
+    fn a_verified_folder_replaces_the_old_copy() {
+        let dir = temp_dir("folder");
+        let staging = dir.join("Bark.part");
+        let dest = dir.join("Bark");
+        std::fs::create_dir_all(staging.join("sub")).unwrap();
+        std::fs::write(staging.join("sub/new"), b"new").unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("old"), b"old").unwrap();
+        finish_folder(&staging, &dest).unwrap();
+        assert!(!staging.exists());
+        assert!(!dest.join("old").exists());
+        assert_eq!(std::fs::read(dest.join("sub/new")).unwrap(), b"new");
+    }
+
+    #[test]
     fn one_download_per_model_and_cancel_flags_it() {
         let downloads = Downloads::new();
         let flag = downloads.begin("base").unwrap();
@@ -244,5 +346,15 @@ mod tests {
         assert!(outside.exists());
         delete_downloaded(&dir, &inside).unwrap();
         assert!(!inside.exists());
+        let folder = dir.join("Underdog-Bark-3.0");
+        std::fs::create_dir_all(folder.join("BarkEncoder.mlpackage")).unwrap();
+        std::fs::write(folder.join("vocab.json"), b"{}").unwrap();
+        delete_downloaded(&dir, &folder).unwrap();
+        assert!(!folder.exists());
+        // A folder's contents are not models of their own.
+        let nested = dir.join("Other/vocab.json");
+        std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        std::fs::write(&nested, b"{}").unwrap();
+        assert!(delete_downloaded(&dir, &nested).is_err());
     }
 }

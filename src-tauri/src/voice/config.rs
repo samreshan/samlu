@@ -58,7 +58,8 @@ impl SttEngine {
 }
 
 /// The selected speech engine. `model` is a provider model name for cloud
-/// engines and an absolute file path for whisper.cpp; Apple ignores it.
+/// engines and an absolute path for the local engine (a whisper.cpp file or
+/// an Underdog Bark folder); Apple ignores it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SttSettings {
@@ -262,9 +263,7 @@ impl VoiceConfig {
     pub fn stt_ready(&self) -> bool {
         let stt = self.stt();
         match stt.engine {
-            SttEngine::WhisperCpp => {
-                super::models::inspect(std::path::Path::new(&stt.model)).is_ok()
-            }
+            SttEngine::WhisperCpp => super::models::usable(std::path::Path::new(&stt.model)),
             SttEngine::Apple => super::engines::apple::available(),
             _ => self.has_api_key("transcription"),
         }
@@ -337,6 +336,13 @@ impl VoiceConfig {
             }
             SttEngine::Deepgram => format!("Deepgram · {}", stt.model),
             SttEngine::Elevenlabs => format!("ElevenLabs · {}", stt.model),
+            SttEngine::WhisperCpp if super::models::is_bark_dir(Path::new(&stt.model)) => {
+                let folder = Path::new(&stt.model)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                format!("bark · {folder}")
+            }
             SttEngine::WhisperCpp => format!("whisper · {model_name}"),
             SttEngine::Apple => "Apple · on-device".to_string(),
         }
@@ -696,6 +702,27 @@ mod tests {
             ..SttSettings::default()
         });
         assert_eq!(config.engine_label(), "whisper · large-v3-turbo-q5_0");
+        let bark = dir.join("Underdog-Bark-3.0");
+        for file in [
+            "BarkEncoder.mlpackage/Manifest.json",
+            "decoder.npz",
+            "vocab.json",
+        ] {
+            let path = bark.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"{}").unwrap();
+        }
+        config.set_stt(SttSettings {
+            engine: SttEngine::WhisperCpp,
+            model: bark.to_string_lossy().into_owned(),
+            ..SttSettings::default()
+        });
+        assert_eq!(config.engine_label(), "bark · Underdog-Bark-3.0");
+        // Ready only where Core ML can run it.
+        assert_eq!(
+            config.stt_ready(),
+            crate::voice::models::kind_supported(crate::voice::models::ModelKind::Bark)
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

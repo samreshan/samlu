@@ -476,7 +476,7 @@
                   <span class="row-control">
                     <select id="voice-stt-choice" aria-label="Speech engine">
                       <optgroup label="On this Mac">
-                        <option value="whisper_cpp">Whisper</option>
+                        <option value="whisper_cpp">Local model</option>
                         <option value="apple" id="voice-apple-option" class="mac-only">Apple</option>
                       </optgroup>
                       <optgroup label="Cloud">
@@ -548,9 +548,9 @@
 
               <div class="subgroup" id="voice-whisper-fields" hidden>
                 <div class="subgroup-head">
-                  <h3>Whisper models</h3>
+                  <h3>Local models</h3>
                   <span class="subgroup-actions">
-                    <button class="text-button" id="voice-add-model" type="button">Add Model File…</button>
+                    <button class="text-button" id="voice-add-model" type="button">Add Whisper File…</button>
                     <button class="text-button" id="voice-rescan-models" type="button">Rescan</button>
                   </span>
                 </div>
@@ -1003,7 +1003,7 @@
               <div class="group-head"><h2 id="privacy-title">Privacy</h2></div>
               <div class="group-box prose">
                 <p>Agent activity, snippets, launcher history and optional clipboard history stay on this Mac. API keys are kept in your macOS Keychain.</p>
-                <p>With Whisper or Apple speech, audio never leaves this Mac. With a cloud engine, audio goes only to the provider you chose. Transcripts are kept as text, and audio is never stored.</p>
+                <p>With a local model or Apple speech, audio never leaves this Mac. With a cloud engine, audio goes only to the provider you chose. Transcripts are kept as text, and audio is never stored.</p>
                 <p>Update checks read a release file from GitHub. Updates are verified against Samlu’s signing key before they are installed.</p>
               </div>
             </section>

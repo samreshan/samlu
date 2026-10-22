@@ -8,7 +8,7 @@ or leave an agent running without monitoring a terminal.
 
 The current release has three surfaces:
 
-1. Speech to text on this Mac (Whisper, Apple) or through a chosen cloud provider, with normal dictation, optional cleanup, summary, and detailed prompt modes.
+1. Speech to text on this Mac (Whisper, Underdog Bark for English, Apple) or through a chosen cloud provider, with normal dictation, optional cleanup, summary, and detailed prompt modes.
 2. A developer-focused launcher for apps, projects, source files, calculator
    expressions, snippets, clipboard history, commands, and screen colors,
    with Descriptive Find as an optional add-on that searches inside files by
