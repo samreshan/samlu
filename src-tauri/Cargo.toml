@@ -1,6 +1,6 @@
 [package]
 name = "samlu"
-version = "0.6.2"
+version = "0.6.3"
 description = "Samlu - an AI development kit for macOS and Windows: voice, agent notifications, and developer commands"
 authors = ["Samlu contributors"]
 license = "Apache-2.0"
@@ -30,6 +30,7 @@ chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 dirs = "5"
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 plist = "1"
 cpal = "0.15"
 hound = "3.5"

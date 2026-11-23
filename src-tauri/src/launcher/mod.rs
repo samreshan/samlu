@@ -236,11 +236,17 @@ pub fn launcher_search(
 /// Slow path (files, via `mdfind`) — called separately and less often so its
 /// per-invocation subprocess cost never blocks the fast path above.
 #[tauri::command]
-pub async fn launcher_search_files(app: AppHandle, query: String) -> Vec<search::LauncherResult> {
+pub async fn launcher_search_files(
+    app: AppHandle,
+    query: String,
+    extension: Option<String>,
+) -> Vec<search::LauncherResult> {
     let history = app.state::<Arc<LauncherHistory>>().inner().clone();
-    tauri::async_runtime::spawn_blocking(move || search::search_slow(&query, &history))
-        .await
-        .unwrap_or_default()
+    tauri::async_runtime::spawn_blocking(move || {
+        search::search_slow(&query, extension.as_deref(), &history)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Icon for an "app"-kind result, as a `data:image/png;base64,...` URL —

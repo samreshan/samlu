@@ -138,7 +138,7 @@ fn run(service: Arc<DeepFind>, rx: Receiver<Job>) {
                 service.set_error(error);
             }
         }
-        let result = if sync {
+        let result = if sync || backfill {
             indexer.sync(&mut conn, &config)
         } else if !paths.is_empty() {
             indexer.changed(&mut conn, &config, paths)
@@ -167,10 +167,13 @@ impl Indexer {
         for root in &config.roots {
             collect(Path::new(root), true, config, &mut found);
         }
-        let known: HashMap<String, (f64, u64)> = store::known_files(conn)?
-            .into_iter()
-            .map(|(path, mtime, size)| (path, (mtime, size)))
-            .collect();
+        let known: HashMap<String, (f64, u64)> = store::known_files(
+            conn,
+            config.model == embed::Choice::Large && self.service.is_downloaded(config.model),
+        )?
+        .into_iter()
+        .map(|(path, mtime, size)| (path, (mtime, size)))
+        .collect();
         let gone: Vec<&String> = known
             .keys()
             .filter(|path| !found.contains_key(*path))
@@ -200,10 +203,13 @@ impl Indexer {
         config: &Config,
         paths: Vec<PathBuf>,
     ) -> Result<(), String> {
-        let known: HashMap<String, (f64, u64)> = store::known_files(conn)?
-            .into_iter()
-            .map(|(path, mtime, size)| (path, (mtime, size)))
-            .collect();
+        let known: HashMap<String, (f64, u64)> = store::known_files(
+            conn,
+            config.model == embed::Choice::Large && self.service.is_downloaded(config.model),
+        )?
+        .into_iter()
+        .map(|(path, mtime, size)| (path, (mtime, size)))
+        .collect();
         let mut found: HashMap<String, (rules::Kind, f64, u64)> = HashMap::new();
         let mut gone: Vec<String> = Vec::new();
         for path in paths {
@@ -275,8 +281,9 @@ impl Indexer {
                 .iter()
                 .map(|(path, kind, mtime, size)| {
                     let file = Path::new(path);
-                    let (segments, error) = match extract::extract(file, *kind, *size) {
-                        Ok(passages) => (embed_passages(model.as_ref(), file, passages), None),
+                    let (segments, error) = match file_segments(model.as_ref(), file, *kind, *size)
+                    {
+                        Ok(segments) => (segments, None),
                         Err(error) => (Vec::new(), Some(error)),
                     };
                     (path, kind, *mtime, *size, name_text(file), segments, error)
@@ -399,6 +406,30 @@ impl Indexer {
         }
         Ok(())
     }
+}
+
+fn file_segments(
+    model: Option<&Engine>,
+    path: &Path,
+    kind: rules::Kind,
+    size: u64,
+) -> Result<Vec<NewSegment>, String> {
+    if kind == rules::Kind::Image {
+        let Some(Engine::Large(server)) = model else {
+            return Ok(Vec::new());
+        };
+        let vector = server.embed_image(path, size)?;
+        return Ok(vec![NewSegment {
+            text: String::new(),
+            loc: None,
+            vec: Some(embed::quantize(&vector)),
+        }]);
+    }
+    Ok(embed_passages(
+        model,
+        path,
+        extract::extract(path, kind, size)?,
+    ))
 }
 
 /// Every indexable file under `folder`, walking only where the rules allow.
@@ -524,6 +555,53 @@ fn embed_passages(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Set SAMLU_GEMMA_ROOT to an isolated model/runtime directory.
+    #[test]
+    #[ignore]
+    fn real_model_finds_images_by_color() {
+        use super::super::{gemma, searcher};
+        let root = PathBuf::from(std::env::var_os("SAMLU_GEMMA_ROOT").unwrap());
+        let model = Engine::Large(Arc::new(gemma::Server::start(&root).unwrap()));
+        let dir = std::env::temp_dir().join(format!("samlu-image-test-{}", std::process::id()));
+        let conn = store::open(&dir).unwrap();
+        for (name, color) in [("001.png", [255, 0, 0]), ("002.png", [0, 0, 255])] {
+            let path = dir.join(name);
+            image::RgbImage::from_pixel(128, 128, image::Rgb(color))
+                .save(&path)
+                .unwrap();
+            let size = path.metadata().unwrap().len();
+            let kind = rules::classify(&path, false).unwrap();
+            let segments = file_segments(Some(&model), &path, kind, size).unwrap();
+            store::put_file(
+                &conn,
+                path.to_str().unwrap(),
+                kind.as_str(),
+                1.0,
+                size,
+                name,
+                &segments,
+                None,
+            )
+            .unwrap();
+        }
+        let vectors = searcher::Vectors::load(&conn).unwrap();
+        for (query, name) in [
+            ("a solid red square", "001.png"),
+            ("a solid blue square", "002.png"),
+        ] {
+            let vector = model.embed_query(query).unwrap();
+            let found =
+                searcher::search(&conn, &vectors, query, Some(&vector), false, Some("png"), 2)
+                    .unwrap();
+            assert_eq!(
+                found.hits.first().map(|hit| Path::new(&hit.path)),
+                Some(dir.join(name).as_path())
+            );
+        }
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn names_are_split_into_words() {

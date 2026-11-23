@@ -24,7 +24,7 @@ const REVISION: &str = "bfcd298762cc34d0357ece5ebdd31791a3a374d8";
 pub const VECTOR_SOURCE: &str = "embeddinggemma-2-Q8_0@bfcd298";
 const TEXT_MODEL: &str = "embeddinggemma-2-Q8_0.gguf";
 /// The model's image and audio encoders. Downloaded with the model so it is
-/// complete; document search uses the text part.
+/// complete. The projector maps images into the same space as text queries.
 const MEDIA_MODEL: &str = "mmproj-embeddinggemma-2-Q8_0.gguf";
 /// The first llama.cpp releases with EmbeddingGemma 2 are b11452+; this is
 /// the one DigUp builds from.
@@ -273,6 +273,8 @@ impl Server {
             .current_dir(binary.parent().unwrap_or(root))
             .arg("--model")
             .arg(&model)
+            .arg("--mmproj")
+            .arg(model_dir(root).join(MEDIA_MODEL))
             .args(["--embedding", "--host", "127.0.0.1", "--port"])
             .arg(port.to_string())
             // A passage is ~450 tokens; non-causal embedding needs a whole
@@ -339,16 +341,52 @@ impl Server {
 
     /// Unit vectors for `inputs` (already prompted), in order.
     pub fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        self.request_embeddings(serde_json::json!(inputs), inputs.len())
+    }
+
+    pub fn embed_image(&self, path: &Path, size: u64) -> Result<Vec<f32>, String> {
+        use base64::Engine as _;
+        if size > super::rules::MAX_DOCUMENT_BYTES {
+            return Err("Image exceeds 64 MiB".into());
+        }
+        let mut reader = image::ImageReader::open(path).map_err(|e| e.to_string())?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(16384);
+        limits.max_image_height = Some(16384);
+        limits.max_alloc = Some(256 * 1024 * 1024);
+        reader.limits(limits);
+        let image = reader
+            .decode()
+            .map_err(|e| e.to_string())?
+            .thumbnail(1024, 1024);
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .map_err(|e| e.to_string())?;
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes.into_inner());
+        let input = serde_json::json!([{"content": [{
+            "type": "image_url", "image_url": {"url": format!("data:image/png;base64,{data}")}
+        }]}]);
+        self.request_embeddings(input, 1)?
+            .pop()
+            .ok_or_else(|| "Missing image vector".into())
+    }
+
+    fn request_embeddings(
+        &self,
+        input: serde_json::Value,
+        count: usize,
+    ) -> Result<Vec<Vec<f32>>, String> {
         let reply: EmbeddingReply = self
             .agent
             .post(&format!("{}/v1/embeddings", self.base))
-            .send_json(serde_json::json!({ "input": inputs, "encoding_format": "float" }))
+            .send_json(serde_json::json!({ "input": input, "encoding_format": "float" }))
             .map_err(|error| format!("llama.cpp: {error}"))?
             .into_json()
             .map_err(|error| format!("llama.cpp: {error}"))?;
         let mut items = reply.data;
         items.sort_by_key(|item| item.index);
-        if items.len() != inputs.len() {
+        if items.len() != count {
             return Err("llama.cpp returned the wrong number of vectors".into());
         }
         Ok(items

@@ -10,6 +10,7 @@ use std::path::Path;
 pub enum Kind {
     Doc,
     Pdf,
+    Image,
     Code,
 }
 
@@ -17,6 +18,7 @@ impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Doc => "doc",
+            Kind::Image => "image",
             Kind::Pdf => "pdf",
             Kind::Code => "code",
         }
@@ -178,6 +180,9 @@ pub fn classify(path: &Path, include_code: bool) -> Option<Kind> {
         .and_then(|ext| ext.to_str())
         .map(str::to_lowercase)
         .unwrap_or_default();
+    if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+        return Some(Kind::Image);
+    }
     if ext == "pdf" {
         return Some(Kind::Pdf);
     }

@@ -80,6 +80,7 @@ const KINDS = {
   action: { label: "Command", verb: "Run" },
   snippet: { label: "Snippet", verb: "Copy" },
   clipboard: { label: "Clipboard", verb: "Copy" },
+  filter: { label: "File extension", verb: "Apply Filter" },
   calculation: { label: "Calculator", verb: "Copy Result" },
   content: { label: "In File", verb: "Open" },
   task: { label: "Task", verb: "Show Task" },
@@ -265,11 +266,54 @@ function refreshHotkey() {
 
 /* ------------------------------------------------------------------ search */
 
+const extensionChip = document.getElementById("extension-chip");
+const commonExtensions = new Set("pdf doc docx odt txt md rtf csv tsv xls xlsx ppt pptx jpg jpeg png webp gif heic svg mov mp4 mp3 wav zip tar gz 7z json html css js jsx ts tsx py rs swift go toml yaml yml fig psd ai".split(" "));
+let extension = null;
+
+function extensionSuggestion(query) {
+  if (extension || /^[;@>!#=]/.test(query.trim())) return null;
+  const match = /(?:^|\s)(\.?)([a-z0-9]{1,16})$/i.exec(query.trimEnd());
+  if (!match || !/[a-z]/i.test(match[2])) return null;
+  const suffix = match[2].toLowerCase();
+  if (!match[1] && !commonExtensions.has(suffix)) return null;
+  return { id: "filter:" + suffix, kind: "filter", target: suffix, title: "Filter by ." + suffix,
+    subtitle: "Search files with this extension", remainder: query.slice(0, match.index).trim() };
+}
+
+function setExtension(value) {
+  extension = value;
+  extensionChip.hidden = !value;
+  extensionChip.textContent = value ? "." + value + " ×" : "";
+  extensionChip.setAttribute("aria-label", "Remove ." + value + " filter");
+}
+
+extensionChip.addEventListener("click", () => {
+  setExtension(null);
+  el.query.focus();
+  scheduleSearch(el.query.value);
+});
+
 function scheduleSearch(query) {
   const current = ++generation;
   clearTimeout(slowTimer);
   clearTimeout(findTimer);
   const trimmed = query.trim();
+  const suggestion = extensionSuggestion(query);
+  if (suggestion) {
+    results = [suggestion];
+    selectedIndex = 0;
+    render();
+  }
+  if (extension) {
+    const description = trimmed.startsWith("?") ? trimmed.slice(1).trim() : trimmed;
+    describePending = false;
+    results = [];
+    selectedIndex = 0;
+    render();
+    if (!trimmed.startsWith("?")) slowTimer = setTimeout(() => runSlowSearch(trimmed, current), 120);
+    findTimer = setTimeout(() => runBlendedFind(description, current), description ? TYPING_PAUSE_MS : 120);
+    return;
+  }
   if (trimmed.startsWith(DESCRIBE_PREFIX)) {
     scheduleDescribe(trimmed.slice(DESCRIBE_PREFIX.length).trim(), current);
     return;
@@ -296,7 +340,7 @@ function scheduleSearch(query) {
 
 async function findInFiles(query, meaning, limit) {
   try {
-    const reply = await invoke("launcher_find_in_files", { query, meaning, limit });
+    const reply = await invoke("launcher_find_in_files", { query, meaning, limit, extension });
     if (reply) {
       describeEnabled = reply.enabled;
       el.legendDescribe.hidden = !describeEnabled;
@@ -306,6 +350,18 @@ async function findInFiles(query, meaning, limit) {
     console.error("[launcher] launcher_find_in_files failed", error);
     return null;
   }
+}
+
+// The visual encoder can still be loading when the user finishes typing.
+async function findWithMeaning(query, current, limit) {
+  let reply = await findInFiles(query, true, limit);
+  for (const delay of [400, 800, 1600, 3200]) {
+    if (!query || !reply?.warming || current !== generation) break;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (current !== generation) return null;
+    reply = await findInFiles(query, true, limit);
+  }
+  return reply;
 }
 
 /** `?` mode: every keystroke gets the word matches at once (the last word as
@@ -324,7 +380,7 @@ function scheduleDescribe(query, current) {
     showDescribe(reply, current, false);
   });
   findTimer = setTimeout(async () => {
-    const reply = await findInFiles(query, true, 24);
+    const reply = await findWithMeaning(query, current, 24);
     if (current !== generation || !reply) return;
     describePending = false;
     showDescribe(reply, current, true);
@@ -347,7 +403,8 @@ function showDescribe(reply, current, final) {
     // Keyword results never replace meaning results that already arrived.
     if (!final && !describePending) return;
     describeWarming = final && reply.warming;
-    results = reply.results.slice(0, MAX_RESULTS);
+    const suggestion = extensionSuggestion(el.query.value);
+    results = (suggestion ? [suggestion] : []).concat(reply.results).slice(0, MAX_RESULTS);
   }
   selectedIndex = 0;
   render();
@@ -355,9 +412,9 @@ function showDescribe(reply, current, final) {
 
 /** An ordinary search: a few strong in-file matches join the end. */
 async function runBlendedFind(query, current) {
-  const reply = await findInFiles(query, true, 12);
-  if (current !== generation || !reply?.results?.length) return;
-  const strong = reply.results.slice(0, Math.min(reply.strong, MAX_BLENDED_CONTENT));
+  const reply = await findWithMeaning(query, current, extension ? MAX_RESULTS : 12);
+  if (current !== generation || results[0]?.kind === "calculation" || !reply?.results?.length) return;
+  const strong = extension ? reply.results : reply.results.slice(0, Math.min(reply.strong, MAX_BLENDED_CONTENT));
   if (!strong.length) return;
   const selectedId = results[selectedIndex]?.id;
   // A file already listed by name stays where it is.
@@ -379,7 +436,12 @@ async function runFastSearch(query, current) {
   }
   const tasks = running ? await running : [];
   if (current !== generation) return; // a newer keystroke has taken over
-  results = tasks.concat(fast).slice(0, MAX_RESULTS);
+  const suggestion = extensionSuggestion(query);
+  if (fast[0]?.kind === "calculation") {
+    clearTimeout(slowTimer);
+    clearTimeout(findTimer);
+  }
+  results = (suggestion ? [suggestion] : []).concat(tasks, fast).slice(0, MAX_RESULTS);
   // Return still opens what you used last; the running tasks are a step up.
   selectedIndex = Math.max(0, results.findIndex((result) => result.kind !== "task"));
   landed = current;
@@ -389,16 +451,16 @@ async function runFastSearch(query, current) {
 async function runSlowSearch(query, current) {
   let slow = [];
   try {
-    slow = (await invoke("launcher_search_files", { query })) || [];
+    slow = (await invoke("launcher_search_files", { query, extension })) || [];
   } catch (error) {
     console.error("[launcher] launcher_search_files failed", error);
   }
-  if (current !== generation || !slow.length) return;
+  if (current !== generation || results[0]?.kind === "calculation" || !slow.length) return;
   // Files arrive a moment after everything else. They join the end of the
   // list, and whatever is selected stays selected.
   const selectedId = results[selectedIndex]?.id;
-  const seen = new Set(results.map((result) => result.id));
-  results = results.concat(slow.filter((result) => !seen.has(result.id))).slice(0, MAX_RESULTS);
+  const seen = new Set(results.map((result) => result.target));
+  results = results.concat(slow.filter((result) => !seen.has(result.target))).slice(0, MAX_RESULTS);
   const kept = results.findIndex((result) => result.id === selectedId);
   selectedIndex = kept >= 0 ? kept : 0;
   render({ keepScroll: true });
@@ -515,7 +577,9 @@ function statusMark(status) {
 function renderAccessory(result) {
   const side = document.createElement("span");
   side.className = "result-kind";
-  if (result.chords?.length) {
+  if (result.kind === "content" && /\.(?:jpe?g|png|webp)$/i.test(result.target)) {
+    side.textContent = "Image";
+  } else if (result.chords?.length) {
     side.classList.add("result-keys");
     result.chords.forEach((chord) => {
       const group = document.createElement("span");
@@ -588,11 +652,14 @@ function renderEmpty() {
   } else if (query.startsWith(";")) {
     headline.textContent = "No snippets yet";
     hint.textContent = "Create one with the Manage Snippets command.";
+  } else if (extension) {
+    headline.textContent = "No matching ." + extension + " files";
+    hint.textContent = "Try another description or remove the extension filter.";
   } else if (query.startsWith(DESCRIBE_PREFIX)) {
     const description = query.slice(DESCRIBE_PREFIX.length).trim();
     if (!description) {
       headline.textContent = "Describe what you’re looking for";
-      hint.textContent = "For example ? the clause about pets in the lease. Searches inside your files.";
+      hint.textContent = "Try “the pet clause in my lease” or, with EmbeddingGemma, “a mountain reflected in a lake”.";
     } else if (describePending) {
       headline.textContent = "Searching inside your files…";
       hint.textContent = "Matching words now; meaning follows when you pause.";
@@ -630,7 +697,7 @@ function renderEmpty() {
       : "Search apps, projects, and files by name, or start with = ; @ or > for tools.";
   } else {
     headline.textContent = "Start typing to search";
-    hint.textContent = "Apps, projects, and files, plus # for agent sessions and = ; @ and > for tools.";
+    hint.textContent = "Try .pdf to filter files, 24 × 7 to calculate, or # for agent sessions.";
   }
   empty.append(headline, hint);
   return empty;
@@ -675,7 +742,7 @@ async function fitPanel() {
   const height = SEARCH_H + notice + body + FOOTER_H;
   const sequence = ++fitSequence;
   const needed = STAGE_TOP + height + STAGE_BOTTOM;
-  const resting = view === "results" && !el.query.value;
+  const resting = view === "results" && !extension && !el.query.value;
   clearTimeout(shrinkTimer);
   if (needed > windowHeight) {
     windowHeight = needed;
@@ -893,6 +960,14 @@ function replaceRows(next) {
 function activate(index, event) {
   const result = results[index];
   if (!result || pending) return;
+  if (result.kind === "filter") {
+    if (result.target !== extensionSuggestion(el.query.value)?.target) return;
+    setExtension(result.target);
+    el.query.value = result.remainder;
+    el.query.focus();
+    scheduleSearch(el.query.value);
+    return;
+  }
   if (result.kind === "project") runProject(result, chordFrom(event));
   else if (result.kind === "task") showTask(result.target);
   else if (result.kind === "agent_session") viewAgentSession(result);
@@ -1198,7 +1273,7 @@ async function showTaskList(filter, current) {
  * running tasks an empty search leads with. */
 function refreshTaskRows() {
   const query = el.query.value.trim();
-  if (view !== "results" || landed !== generation) return;
+  if (extension || view !== "results" || landed !== generation) return;
   if (query && !query.startsWith(TASKS_PREFIX)) return;
   const current = generation;
   listTasks().then((tasks) => {
@@ -1494,6 +1569,11 @@ el.query.addEventListener("keydown", (event) => {
     taskKeydown(event);
     return;
   }
+  if (view === "results" && extension && !el.query.value && ["Backspace", "Escape"].includes(event.key)) {
+    event.preventDefault();
+    extensionChip.click();
+    return;
+  }
   const count = results.length;
   const down = event.key === "ArrowDown" || (event.ctrlKey && event.key === "n");
   const up = event.key === "ArrowUp" || (event.ctrlKey && event.key === "p");
@@ -1519,6 +1599,8 @@ el.query.addEventListener("keydown", (event) => {
     event.preventDefault();
     if (view === "panel") {
       if (event.shiftKey || commandK) back();
+    } else if (event.key === "Tab" && !event.shiftKey && results[selectedIndex]?.kind === "filter") {
+      activate(selectedIndex, event);
     } else if (!event.shiftKey) {
       openPanel(results[selectedIndex]);
     }
@@ -1611,6 +1693,7 @@ function present() {
   panelOrigin = null;
   el.notice.textContent = "";
   setView("results");
+  setExtension(null);
   refreshHotkey();
   loadBindings();
   scheduleSearch("");

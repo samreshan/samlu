@@ -29,13 +29,14 @@ pub struct Vectors {
     scales: Vec<f32>,
     segment: Vec<i64>,
     file: Vec<i64>,
+    image: Vec<bool>,
 }
 
 impl Vectors {
     pub fn load(conn: &Connection) -> Result<Self, String> {
         let mut vectors = Vectors::default();
         let mut statement = conn
-            .prepare("SELECT id, file, vec FROM segments WHERE vec IS NOT NULL ORDER BY id")
+            .prepare("SELECT id, file, vec, kind = 'image' FROM segments WHERE vec IS NOT NULL ORDER BY id")
             .map_err(|error| error.to_string())?;
         let mut rows = statement.query([]).map_err(|error| error.to_string())?;
         while let Some(row) = rows.next().map_err(|error| error.to_string())? {
@@ -51,6 +52,9 @@ impl Vectors {
             }
             vectors.data.extend(bytes.iter().map(|&byte| byte as i8));
             vectors.scales.push(scale);
+            vectors
+                .image
+                .push(row.get(3).map_err(|error| error.to_string())?);
             vectors
                 .segment
                 .push(row.get(0).map_err(|error| error.to_string())?);
@@ -124,17 +128,52 @@ pub fn search(
     query: &str,
     query_vector: Option<&[f32]>,
     prefix_last: bool,
+    extension: Option<&str>,
     limit: usize,
 ) -> Result<Found, String> {
     let sql = |error: rusqlite::Error| error.to_string();
+
+    if let Some(extension) = extension.filter(|_| query.trim().is_empty()) {
+        let mut statement = conn
+            .prepare_cached(
+                "SELECT path, kind FROM files WHERE lower(substr(path, -length(?1)-1)) = '.' || ?1
+             ORDER BY mtime DESC, path LIMIT ?2",
+            )
+            .map_err(sql)?;
+        let hits = statement
+            .query_map(params![extension, limit], |row| {
+                Ok(Hit {
+                    path: row.get(0)?,
+                    kind: row.get(1)?,
+                    score: 1.0,
+                    snippet: None,
+                    loc: None,
+                })
+            })
+            .map_err(sql)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql)?;
+        return Ok(Found {
+            strong: hits.len(),
+            hits,
+        });
+    }
 
     // Meaning: score every vector on this query's scale, keep each file's
     // best passage.
     let mut best: HashMap<i64, (f64, usize)> = HashMap::new();
     if let Some(query_vector) = query_vector.filter(|q| q.len() == vectors.dim && vectors.len() > 0)
     {
-        let z = standardized(&vectors.scores(query_vector));
+        let cosine = vectors.scores(query_vector);
+        let z = standardized(&cosine);
         for (row, &value) in z.iter().enumerate() {
+            // In a small collection even a perfect match cannot reach two
+            // standard deviations. Give confident visual matches a cosine floor.
+            let value = if vectors.image[row] && cosine[row] >= 0.62 {
+                value.max(Z_GATE + f64::from(cosine[row] - 0.62) * 8.0)
+            } else {
+                value
+            };
             let file = vectors.file[row];
             if best.get(&file).is_none_or(|&(top, _)| value > top) {
                 best.insert(file, (value, row));
@@ -162,10 +201,13 @@ pub fn search(
             .prepare_cached(
                 "SELECT s.file, s.id, snippet(fts, 1, '«', '»', '…', 14), s.kind
                  FROM fts JOIN segments s ON s.id = fts.rowid
-                 WHERE fts MATCH ?1 ORDER BY bm25(fts, 3.0, 1.0) LIMIT 1000",
+                 JOIN files f ON f.id = s.file
+                 WHERE fts MATCH ?1 AND (?2 IS NULL OR lower(substr(f.path, -length(?2)-1)) = '.' || ?2) ORDER BY bm25(fts, 3.0, 1.0) LIMIT 1000",
             )
             .map_err(sql)?;
-        let mut rows = statement.query([patterns.join(" OR ")]).map_err(sql)?;
+        let mut rows = statement
+            .query(params![patterns.join(" OR "), extension])
+            .map_err(sql)?;
         let mut seen = HashSet::new();
         while let Some(row) = rows.next().map_err(sql)? {
             let file: i64 = row.get(0).map_err(sql)?;
@@ -234,11 +276,12 @@ pub fn search(
             .join(",");
         let mut statement = conn
             .prepare(&format!(
-                "SELECT id, path, kind FROM files WHERE id IN ({ids})"
+                "SELECT id, path, kind FROM files WHERE id IN ({ids})
+                 AND (?1 IS NULL OR lower(substr(path, -length(?1)-1)) = '.' || ?1)"
             ))
             .map_err(sql)?;
         let rows = statement
-            .query_map([], |row| {
+            .query_map([extension], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get(1)?, row.get(2)?))
             })
             .map_err(sql)?;
@@ -412,6 +455,7 @@ mod tests {
             "animals allowed in the flat",
             Some(&query),
             false,
+            None,
             10,
         )
         .unwrap();
@@ -421,9 +465,55 @@ mod tests {
     }
 
     #[test]
+    fn extension_scopes_browsing_and_ranked_matches() {
+        let (conn, vectors, dir) = fixture();
+        let browse = search(&conn, &vectors, "", None, false, Some("pdf"), 1).unwrap();
+        assert_eq!(browse.hits[0].path, "/d/lease.pdf");
+        let excluded = search(&conn, &vectors, "tenant", None, false, Some("md"), 10).unwrap();
+        assert!(excluded.hits.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn image_is_findable_in_a_single_file_index() {
+        let (conn, _, dir) = fixture();
+        conn.execute("UPDATE segments SET vec = NULL", []).unwrap();
+        let visual = NewSegment {
+            text: String::new(),
+            loc: None,
+            vec: Some(embed::quantize(&[1.0, 0.0])),
+        };
+        store::put_file(
+            &conn,
+            "/d/IMG_001.JPG",
+            "image",
+            1.0,
+            1,
+            "IMG 001",
+            &[visual],
+            None,
+        )
+        .unwrap();
+        let vectors = Vectors::load(&conn).unwrap();
+        let found = search(
+            &conn,
+            &vectors,
+            "mountain lake",
+            Some(&[1.0, 0.0]),
+            false,
+            Some("jpg"),
+            1,
+        )
+        .unwrap();
+        assert_eq!(found.hits[0].path, "/d/IMG_001.JPG");
+        assert!(found.hits[0].snippet.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn exact_codes_are_found_by_words() {
         let (conn, vectors, dir) = fixture();
-        let found = search(&conn, &vectors, "INV-48151", None, false, 10).unwrap();
+        let found = search(&conn, &vectors, "INV-48151", None, false, None, 10).unwrap();
         assert_eq!(found.hits.len(), 1);
         assert_eq!(found.hits[0].path, "/d/invoice.txt");
         assert!(found.hits[0].snippet.as_deref().unwrap().contains('«'));
@@ -433,7 +523,7 @@ mod tests {
     #[test]
     fn last_word_matches_as_a_prefix_while_typing() {
         let (conn, vectors, dir) = fixture();
-        let found = search(&conn, &vectors, "consul", None, true, 10).unwrap();
+        let found = search(&conn, &vectors, "consul", None, true, None, 10).unwrap();
         assert_eq!(found.hits[0].path, "/d/invoice.txt");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -442,7 +532,16 @@ mod tests {
     fn nothing_found_is_honest() {
         let (conn, vectors, dir) = fixture();
         let query = unit(&[0.1, 0.1, 1.0, 0.4]);
-        let found = search(&conn, &vectors, "zebra migration", Some(&query), false, 10).unwrap();
+        let found = search(
+            &conn,
+            &vectors,
+            "zebra migration",
+            Some(&query),
+            false,
+            None,
+            10,
+        )
+        .unwrap();
         assert!(
             found.hits.is_empty(),
             "got {:?}",
@@ -544,7 +643,7 @@ mod real_model {
             let started = Instant::now();
             let vector = engine.embed_query(query).unwrap();
             let embedded = started.elapsed();
-            let found = search(&conn, &vectors, query, Some(&vector), false, 5).unwrap();
+            let found = search(&conn, &vectors, query, Some(&vector), false, None, 5).unwrap();
             let top = found
                 .hits
                 .first()

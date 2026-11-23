@@ -39,9 +39,8 @@ macOS 11 or later. A `.zip` of the raw `.app` is published alongside it.
 3. Launch it. Samlu lives in the menu bar rather than the Dock.
 
 > [!IMPORTANT]
-> Released builds are not signed with an Apple Developer ID yet, so macOS
-> quarantines them on download and refuses to open them. Clear the flag once,
-> after moving the app into Applications:
+> Builds through 0.6.2 use ad-hoc signatures. To open one of these older
+> builds, clear its quarantine flag after moving it into Applications:
 >
 > ```bash
 > xattr -dr com.apple.quarantine /Applications/Samlu.app
@@ -118,7 +117,8 @@ Spotlight's `Command+Space` binding and can be changed in Launcher settings.
 - Return opens the selection, Command-Return shows it in Finder, and the first
   Escape clears the search before the second closes the launcher. On a
   project, every Return key runs the action you choose (below).
-- Type `=` for calculator expressions.
+- Type `(24 + 6) / 5`, `15% of 80`, or `3 ft to cm` and press Return to copy the answer. The `=` prefix still works. Unit conversions cover length, mass, duration, and decimal or binary storage units.
+- Type `pdf`, `.png`, or a query like `invoice pdf`. Choose **Filter by** with Return or Tab to apply the extension chip. Type a name or description to narrow the results. Click the chip or press Backspace in an empty field to remove it.
 - Type `;` for snippets.
 - Type `@` for opt-in local clipboard history.
 - Type `>` for commands, including the macOS screen color picker.
@@ -159,7 +159,7 @@ it in Finder, as before; a key with nothing set opens the project's actions.
 
 #### Descriptive Find (optional add-on)
 
-Descriptive Find searches inside your files by what they say. Turn it on in
+Descriptive Find searches document passages and, with EmbeddingGemma 2, the visual contents of images. Turn it on in
 Launcher settings, choose the folders to search (Documents and Desktop to
 start), then type `?` and describe what you're looking for: `? can I keep a
 pet in the flat` finds the clause in the lease, `? bill from the branding
@@ -179,6 +179,7 @@ passage. Strong matches also join the end of ordinary searches.
     llama.cpp's official `llama-server` build (Metal on macOS, Vulkan or CPU
     on Windows), in a helper process that starts when you search and quits
     after ten minutes unused. A query takes about 20 ms.
+    Try `? mountain reflected in a lake` to find a JPEG, PNG, or WebP in your selected folders. Image indexing runs locally and accepts files up to 64 MiB within decoder limits.
   - **Small: Model2Vec `potion-retrieval-32M`** (about 125 MB). A query embeds
     in microseconds on any CPU.
   - **None**: exact words only, nothing to download.
@@ -191,9 +192,7 @@ passage. Strong matches also join the end of ordinary searches.
 The search design (hybrid scoring, a per-query meaning scale with an honest
 "nothing found", words-then-meaning while typing) follows
 [DigUp](https://github.com/ARahim3/DigUp), an on-device file
-search app built on EmbeddingGemma 2. Samlu uses its own implementation, offers
-EmbeddingGemma 2 or a lighter model, and searches text-bearing files rather
-than photos, audio or video.
+search app built on EmbeddingGemma 2. Samlu uses its own implementation and offers EmbeddingGemma 2 or a lighter text model.
 
 ### On Windows
 
@@ -369,6 +368,14 @@ a release with a universal macOS build and a Windows installer
 (`.github/workflows/release.yml`). The version in `src-tauri/tauri.conf.json`
 ships first; later pushes bump the patch number (0.2.0, 0.2.1, …). Raise that
 version to start a new minor or major series.
+
+The release workflow verifies Developer ID Application signatures on the macOS
+app and disk image before publishing. Set the Actions secrets `APPLE_CERTIFICATE`
+(base64-encoded PKCS#12 with the certificate and private key),
+`APPLE_CERTIFICATE_PASSWORD` (the PKCS#12 password), `APPLE_SIGNING_IDENTITY`
+(the certificate name), and `KEYCHAIN_PASSWORD` (the build keychain password).
+To notarize the release, also set `APPLE_ID`, `APPLE_PASSWORD` (an app-specific
+password), and `APPLE_TEAM_ID`.
 
 Self-update needs the updater signing key in the repository's Actions secrets
 as `TAURI_SIGNING_PRIVATE_KEY` (the contents of the private key file) and, if

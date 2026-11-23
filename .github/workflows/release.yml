@@ -2,11 +2,8 @@ name: Release
 
 # Every push to main publishes downloadable macOS and Windows builds once CI
 # passes.
-# Signing is optional: with no secrets configured this produces an ad-hoc
-# signed universal build that anyone can download and run after clearing
-# quarantine (see the generated release notes). Adding the APPLE_* secrets
-# upgrades the same workflow to a Developer ID signed, notarized, stapled
-# build with no other changes.
+# Releases require Apple Developer ID Application signatures on the macOS app
+# and disk image. Notarization runs when all three credentials are set.
 #
 # Updates: with the TAURI_SIGNING_PRIVATE_KEY secret set (the private half of
 # the key whose public half is in tauri.conf.json), the build also produces a
@@ -175,12 +172,12 @@ jobs:
             /usr/local/share/dotnet "$HOME/.dotnet" "$HOME/.ghcup" || true
           df -h "$PWD"
 
-      # Secrets cannot be tested directly in a job-level `if`, so capability is
-      # resolved once here and every signing step keys off it.
-      - name: Detect signing capability
+      - name: Check release signing credentials
         id: signing
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -193,19 +190,20 @@ jobs:
             echo "updater=false" >> "$GITHUB_OUTPUT"
             echo "::warning::No TAURI_SIGNING_PRIVATE_KEY secret set - this release will not include self-update files."
           fi
-          if [ -n "${APPLE_CERTIFICATE}" ]; then
-            echo "signed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No APPLE_CERTIFICATE secret set - building an ad-hoc signed release."
-          fi
-          # All three notarization values must be present. A partial set would
-          # switch notarization on and then fail validating the missing one.
-          if [ -n "${APPLE_CERTIFICATE}" ] && [ -n "${APPLE_ID}" ] \
-            && [ -n "${APPLE_PASSWORD}" ] && [ -n "${APPLE_TEAM_ID}" ]; then
+          for secret in APPLE_CERTIFICATE APPLE_SIGNING_IDENTITY KEYCHAIN_PASSWORD; do
+            if [ -z "${!secret}" ]; then
+              echo "::error::Set the $secret Actions secret to publish a Developer ID signed release."
+              exit 1
+            fi
+          done
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
             echo "notarize=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$APPLE_ID$APPLE_PASSWORD$APPLE_TEAM_ID" ]; then
+            echo "::error::Set APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID together for notarization."
+            exit 1
           else
             echo "notarize=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Notarization credentials are absent."
           fi
 
       - name: Install Rust
@@ -222,18 +220,17 @@ jobs:
         run: cargo install tauri-cli --version "^2.0.0" --locked
 
       - name: Import Developer ID certificate
-        if: steps.signing.outputs.signed == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
-          test -n "$APPLE_CERTIFICATE_PASSWORD"
           test -n "$KEYCHAIN_PASSWORD"
           printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
+          security list-keychains -d user -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security set-keychain-settings -t 3600 -u build.keychain
           security import certificate.p12 \
@@ -254,23 +251,16 @@ jobs:
         working-directory: src-tauri
         env:
           VERSION: ${{ needs.meta.outputs.version }}
-          SIGNED: ${{ steps.signing.outputs.signed }}
           NOTARIZE: ${{ steps.signing.outputs.notarize }}
           UPDATER: ${{ steps.signing.outputs.updater }}
           UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
           NOTARY_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          if [ "$SIGNED" = "true" ] && [ -n "${SIGNING_IDENTITY:-}" ]; then
-            export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
-          else
-            export APPLE_SIGNING_IDENTITY="-"
-          fi
-
           # The notarization credentials are exported only when they are real.
           # Tauri decides to notarize on whether APPLE_ID is *defined*, not on
           # whether it holds anything, so passing empty values through `env:`
@@ -281,7 +271,7 @@ jobs:
             export APPLE_TEAM_ID="$NOTARY_TEAM_ID"
             echo "Building signed and notarized."
           else
-            echo "Building ad-hoc signed (no notarization credentials)."
+            echo "Building with Developer ID signing."
           fi
 
           # The updater archive is signed with the key from the secret. The
@@ -326,11 +316,15 @@ jobs:
       - name: Package disk image and archive
         id: package
         env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
           app="src-tauri/target/${TARGET}/release/bundle/macos/Samlu.app"
           test -d "$app"
+          developer_id_requirement='anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify -R="$developer_id_requirement" "$app"
 
           # The bundle is Samlu.app but its executable carries the crate name.
           # Fail loudly rather than shipping a release that only runs on one
@@ -366,7 +360,9 @@ jobs:
           echo "App ${app_mb} MB, image ${image_mb} MB"
           hdiutil create -volname Samlu -srcfolder "$staging" -size "${image_mb}m" \
             -ov -format UDZO "$dmg"
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp --identifier com.samlu.desktop.dmg "$dmg"
           hdiutil verify "$dmg"
+          codesign --verify --strict --verbose=2 -R="$developer_id_requirement" "$dmg"
 
           # ditto, not zip: it preserves the bundle's symlinks and metadata.
           ditto -c -k --keepParent "$staging/Samlu.app" "$zip"
@@ -459,7 +455,7 @@ jobs:
       - name: Write release notes
         env:
           VERSION: ${{ needs.meta.outputs.version }}
-          SIGNED: ${{ steps.signing.outputs.notarize }}
+          NOTARIZED: ${{ steps.signing.outputs.notarize }}
           UPDATER: ${{ steps.signing.outputs.updater }}
           WINDOWS_INSTALLER: ${{ steps.windows.outputs.installer }}
         run: |
@@ -487,22 +483,10 @@ jobs:
               echo "> may warn on first run. Choose **More info**, then **Run anyway**."
               echo
             fi
-            if [ "$SIGNED" != "true" ]; then
+            if [ "$NOTARIZED" != "true" ]; then
               echo "> [!IMPORTANT]"
-              echo "> This build is **not signed with an Apple Developer ID**, so macOS"
-              echo "> quarantines it on download and will refuse to open it. Clear the"
-              echo "> quarantine flag once, after moving the app to Applications:"
-              echo
-              echo '> ```bash'
-              echo '> xattr -dr com.apple.quarantine /Applications/Samlu.app'
-              echo '> ```'
-              echo
-              echo "> On macOS 15 and later this is required - the old right-click"
-              echo "> \"Open\" workaround no longer bypasses Gatekeeper."
-              echo
-              echo "> Because each unsigned build carries a different ad-hoc signature,"
-              echo "> macOS treats an update as a new app: you will need to re-grant"
-              echo "> Microphone and Accessibility access after upgrading."
+              echo "> The macOS app and disk image are Developer ID signed. Notarization"
+              echo "> was unavailable, so Gatekeeper may block the app on first launch."
               echo
             fi
             if [ "$UPDATER" = "true" ]; then

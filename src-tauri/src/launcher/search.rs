@@ -20,7 +20,7 @@ const MAX_RECENT: usize = 6;
 const RAW_SCAN_LIMIT: usize = 60;
 const ALLOWED_FILE_EXTENSIONS: &[&str] = &[
     "rs", "swift", "ts", "tsx", "js", "jsx", "py", "go", "md", "json", "toml", "yaml", "yml",
-    "pdf", "fig", "psd", "ai",
+    "pdf", "png", "jpeg", "jpg", "webp", "fig", "psd", "ai",
 ];
 /// Folders whose files are never what someone means to open by name.
 #[cfg(not(windows))]
@@ -134,19 +134,18 @@ pub fn search_fast(
 ) -> Vec<LauncherResult> {
     let query = query.trim();
 
-    if let Some(expression) = query.strip_prefix('=') {
-        return calculator::evaluate(query)
-            .map(|value| {
-                vec![LauncherResult {
-                    id: format!("calculation:{query}"),
-                    kind: "calculation".into(),
-                    title: value.clone(),
-                    subtitle: expression.trim().to_string(),
-                    target: value,
-                    section: None,
-                }]
-            })
-            .unwrap_or_default();
+    if let Some(value) = calculator::evaluate(query) {
+        return vec![LauncherResult {
+            id: format!("calculation:{query}"),
+            kind: "calculation".into(),
+            title: value.clone(),
+            subtitle: query.trim_start_matches('=').trim().into(),
+            target: value,
+            section: None,
+        }];
+    }
+    if query.starts_with('=') {
+        return Vec::new();
     }
 
     if let Some(snippet_query) = query.strip_prefix(';') {
@@ -284,18 +283,28 @@ pub fn search_fast(
     finish(&mut scored, MAX_RESULTS)
 }
 
-pub fn search_slow(query: &str, history: &LauncherHistory) -> Vec<LauncherResult> {
+pub fn search_slow(
+    query: &str,
+    extension: Option<&str>,
+    history: &LauncherHistory,
+) -> Vec<LauncherResult> {
     let query = query.trim();
-    if query.chars().count() < 2
-        || query.starts_with('=')
-        || query.starts_with(';')
-        || query.starts_with('@')
-        || query.starts_with('>')
+    if extension.is_some_and(|ext| {
+        ext.is_empty() || ext.len() > 16 || !ext.bytes().all(|b| b.is_ascii_alphanumeric())
+    }) {
+        return Vec::new();
+    }
+    if extension.is_none()
+        && (query.chars().count() < 2
+            || query.starts_with('=')
+            || query.starts_with(';')
+            || query.starts_with('@')
+            || query.starts_with('>'))
     {
         return Vec::new();
     }
     let scores = history.scores();
-    let mut scored: Vec<(i64, LauncherResult)> = search_files(query)
+    let mut scored: Vec<(i64, LauncherResult)> = search_files(query, extension)
         .into_iter()
         .map(|result| {
             let score = rank::score(query, &result.title).unwrap_or(rank::FUZZY);
@@ -445,11 +454,11 @@ fn finish(scored: &mut Vec<(i64, LauncherResult)>, limit: usize) -> Vec<Launcher
 }
 
 #[cfg(not(windows))]
-fn search_files(query: &str) -> Vec<LauncherResult> {
+fn search_files(query: &str, extension: Option<&str>) -> Vec<LauncherResult> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
-    let predicate = extension_predicate(query);
+    let predicate = extension_predicate(query, extension.as_slice());
     run_mdfind(&[&home.to_string_lossy()], &predicate)
         .into_iter()
         .filter(|path| {
@@ -467,9 +476,14 @@ fn search_files(query: &str) -> Vec<LauncherResult> {
 }
 
 #[cfg(not(windows))]
-fn extension_predicate(query: &str) -> String {
+fn extension_predicate(query: &str, extensions: &[&str]) -> String {
     let query = query.replace(['"', '\\', '*'], "");
-    ALLOWED_FILE_EXTENSIONS
+    let extensions = if extensions.is_empty() {
+        ALLOWED_FILE_EXTENSIONS
+    } else {
+        extensions
+    };
+    extensions
         .iter()
         .map(|extension| format!(r#"kMDItemFSName == "*{query}*.{extension}"cd"#))
         .collect::<Vec<_>>()
@@ -510,14 +524,14 @@ const SKIPPED_FOLDERS: &[&str] = &["AppData", "node_modules", "target", "dist", 
 /// Windows has no Spotlight to ask, so the usual places are walked for
 /// names that match, for a moment at most, the most likely folders first.
 #[cfg(windows)]
-fn search_files(query: &str) -> Vec<LauncherResult> {
+fn search_files(query: &str, extension: Option<&str>) -> Vec<LauncherResult> {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
     let query = query.trim().to_lowercase();
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
-    if query.is_empty() {
+    if query.is_empty() && extension.is_none() {
         return Vec::new();
     }
     let likely: Vec<PathBuf> = [
@@ -555,10 +569,15 @@ fn search_files(query: &str) -> Vec<LauncherResult> {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_lowercase();
-            let Some((stem, extension)) = name.rsplit_once('.') else {
+            let Some((stem, suffix)) = name.rsplit_once('.') else {
                 continue;
             };
-            if stem.contains(&query) && ALLOWED_FILE_EXTENSIONS.contains(&extension) {
+            if stem.contains(&query)
+                && extension.map_or_else(
+                    || ALLOWED_FILE_EXTENSIONS.contains(&suffix),
+                    |ext| ext == suffix,
+                )
+            {
                 found.push(entry.path().to_string_lossy().to_string());
             }
         }
@@ -733,7 +752,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn mdfind_predicate_strips_wildcards_and_quotes() {
-        let predicate = extension_predicate(r#"a"b*c\d"#);
+        let predicate = extension_predicate(r#"a"b*c\d"#, &[]);
         assert!(predicate.contains(r#""*abcd*.rs"cd"#));
     }
 }

@@ -330,19 +330,20 @@ impl DeepFind {
         self: &Arc<Self>,
         query: &str,
         meaning: bool,
+        extension: Option<&str>,
         limit: usize,
     ) -> Result<FindResponse, String> {
         let config = self.config();
         if !config.enabled {
             return Ok(FindResponse::default());
         }
-        if query.trim().is_empty() {
+        if query.trim().is_empty() && extension.is_none() {
             return Ok(FindResponse {
                 enabled: true,
                 ..FindResponse::default()
             });
         }
-        let model = if meaning {
+        let model = if meaning && !query.trim().is_empty() {
             self.model_for_query()
         } else {
             None
@@ -360,6 +361,7 @@ impl DeepFind {
             query,
             query_vector.as_deref(),
             !meaning,
+            extension,
             limit,
         )?;
         let results = found.hits.into_iter().map(result_for).collect();
@@ -546,13 +548,16 @@ pub async fn launcher_find_in_files(
     app: AppHandle,
     query: String,
     meaning: bool,
+    extension: Option<String>,
     limit: Option<usize>,
 ) -> Result<FindResponse, String> {
     let service = app.state::<Arc<DeepFind>>().inner().clone();
     let limit = limit.unwrap_or(24).clamp(1, 60);
-    tauri::async_runtime::spawn_blocking(move || service.search(&query, meaning, limit))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        service.search(&query, meaning, extension.as_deref(), limit)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

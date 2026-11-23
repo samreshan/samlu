@@ -266,6 +266,7 @@ pub fn kind_hints(query: &str) -> HashSet<&'static str> {
         .to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter_map(|word| match word {
+            "photo" | "photos" | "image" | "images" | "picture" | "screenshot" => Some("image"),
             "pdf" | "pdfs" | "paper" | "papers" | "invoice" | "receipt" => Some("pdf"),
             "document" | "documents" | "doc" | "docs" | "note" | "notes" | "letter" | "essay" => {
                 Some("doc")

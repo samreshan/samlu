@@ -131,7 +131,7 @@ pub fn put_file(
         segment
             .execute(params![
                 file,
-                "chunk",
+                if kind == "image" { "image" } else { "chunk" },
                 passage.loc.map(i64::from),
                 passage.vec
             ])
@@ -165,12 +165,16 @@ pub fn remove_file(conn: &Connection, path: &str) -> Result<(), String> {
 
 /// Every indexed file with what it looked like when it was read, so a sync
 /// reads again only what changed.
-pub fn known_files(conn: &Connection) -> Result<Vec<(String, f64, u64)>, String> {
+pub fn known_files(conn: &Connection, visual: bool) -> Result<Vec<(String, f64, u64)>, String> {
     let mut statement = conn
-        .prepare("SELECT path, mtime, size FROM files")
+        .prepare(
+            "SELECT path, CASE WHEN ?1 AND kind = 'image' AND NOT EXISTS
+                  (SELECT 1 FROM segments WHERE file = files.id AND vec IS NOT NULL)
+                  THEN -1 ELSE mtime END, size FROM files",
+        )
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map([visual], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, f64>(1)?,

@@ -1538,7 +1538,7 @@ const DEEP_FIND_MODELS = [
   {
     id: "large",
     title: "Large: EmbeddingGemma 2",
-    about: "Google DeepMind’s model, as in DigUp. Best at descriptions, 100+ languages. Runs on the GPU.",
+    about: "Search documents and describe what’s in a JPEG, PNG, or WebP image. Runs locally.",
   },
   {
     id: "small",
